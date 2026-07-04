@@ -5,6 +5,7 @@
 [![CI](https://github.com/moortekweb-art/agentic-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/moortekweb-art/agentic-harness/actions)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Support](https://img.shields.io/badge/support-Buy%20Me%20a%20Coffee-ffdd00.svg)](https://buymeacoffee.com/moortekweb3)
 
 A small Python harness for running long-lived agent goals without turning your local scripts into a tangled control plane.
 
@@ -16,6 +17,7 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 - [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.6 release checks.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
+- [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
 - [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on push and pull requests.
 
