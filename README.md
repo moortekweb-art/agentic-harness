@@ -20,6 +20,14 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 ```bash
 pipx install git+https://github.com/moortekweb-art/agentic-harness.git
 agentic-harness init
+cat > .agentic-harness/config.yml <<'YAML'
+version: 1
+worker: shell
+shell_command:
+  - python
+  - -c
+  - "import os; print('goal:', os.environ['AGENTIC_HARNESS_OBJECTIVE'])"
+YAML
 agentic-harness start "write a changelog for the last three commits"
 agentic-harness continue && agentic-harness review
 ```
@@ -158,6 +166,15 @@ version: 1
 worker: noop
 ```
 
+`noop` is a safe placeholder. It does not pass review by default because no real
+worker ran. For a demo-only path, opt in explicitly:
+
+```yaml
+version: 1
+worker: noop
+allow_noop_success: true
+```
+
 Shell worker configuration:
 
 ```yaml
@@ -172,6 +189,34 @@ The shell adapter exposes:
 
 - `AGENTIC_HARNESS_GOAL_ID`
 - `AGENTIC_HARNESS_OBJECTIVE`
+
+Configuration is intentionally small and strict: unsupported schema versions,
+unknown keys, unsupported workers, malformed booleans, and shell workers without
+`shell_command` are rejected instead of silently ignored.
+
+## Review Helpers
+
+The core review module includes small deterministic criteria factories:
+
+```python
+from agentic_harness.core import (
+    DeterministicReviewer,
+    artifact_exists,
+    command_passes,
+    file_changed,
+    git_clean,
+)
+
+reviewer = DeterministicReviewer([
+    artifact_exists(".", ".agentic-harness/runs/example/report.md"),
+    command_passes(["python", "-m", "pytest", "tests/", "-q"]),
+    file_changed(".", "CHANGELOG.md"),
+    git_clean("."),
+])
+```
+
+`GitHubActionsAdapter` is dispatch-only: a successful result means GitHub
+accepted the workflow dispatch request, not that the workflow run completed.
 
 ## Public API
 

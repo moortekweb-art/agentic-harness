@@ -34,13 +34,22 @@ Command:
 mkdir -p /tmp/agentic-harness-demo
 cd /tmp/agentic-harness-demo
 agentic-harness init
+cat > .agentic-harness/config.yml <<'YAML'
+version: 1
+worker: shell
+shell_command:
+  - python
+  - -c
+  - "import os; print('demo goal:', os.environ['AGENTIC_HARNESS_OBJECTIVE'])"
+YAML
 ```
 
 Expected output summary:
 
 - Prints the path to the created config file.
 - Creates `.agentic-harness/config.yml`.
-- The default worker is `noop`, which is useful for a deterministic short demo.
+- Replaces the safe default `noop` placeholder with a tiny shell worker so the
+  demo runs real work.
 
 ## 2. Run Doctor
 
@@ -89,7 +98,7 @@ Expected output summary:
 
 - Prints the same goal as JSON.
 - Status moves to `"review"`.
-- Metadata includes a worker success marker because the default worker completed.
+- Metadata includes a worker success marker because the shell worker completed.
 
 ## 5. Run Deterministic Review
 
@@ -122,7 +131,7 @@ Expected output summary:
 
 - Shows `.agentic-harness/config.yml`.
 - Shows a run directory under `.agentic-harness/runs/<goal-id>/`.
-- Shows saved state for the goal. With the default `noop` worker, no extra worker artifact is created.
+- Shows saved state for the goal.
 
 ## Recording Tips
 

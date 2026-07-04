@@ -8,6 +8,7 @@ from pathlib import Path
 
 from agentic_harness.adapters.shell import ShellWorker
 from agentic_harness.core.config import CONFIG_DIR, CONFIG_NAME, load_config, write_default_config
+from agentic_harness.core.errors import ConfigError
 from agentic_harness.core.supervisor import Supervisor
 
 
@@ -42,7 +43,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
-    supervisor = build_supervisor(project_dir)
+    try:
+        supervisor = build_supervisor(project_dir)
+    except ConfigError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
+        return 2
     if args.command == "start":
         goal = supervisor.start(args.objective)
         print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
@@ -71,13 +76,25 @@ def build_supervisor(project_dir: Path) -> Supervisor:
     worker = None
     if config.worker == "shell" and config.shell_command:
         worker = ShellWorker(config.shell_command, cwd=project_dir)
-    return Supervisor(project_dir=project_dir, worker=worker)
+    return Supervisor(
+        project_dir=project_dir,
+        worker=worker,
+        allow_noop_success=config.allow_noop_success,
+    )
 
 
 def doctor(project_dir: str | Path = ".") -> dict[str, object]:
     root = Path(project_dir)
     config_path = root / CONFIG_DIR / CONFIG_NAME
     state_dir = root / CONFIG_DIR
+    config_ok = config_path.exists()
+    config_message = str(config_path) if config_path.exists() else "config not initialized"
+    if config_path.exists():
+        try:
+            load_config(root)
+        except ConfigError as exc:
+            config_ok = False
+            config_message = str(exc)
     checks = [
         {
             "name": "project_dir",
@@ -86,8 +103,8 @@ def doctor(project_dir: str | Path = ".") -> dict[str, object]:
         },
         {
             "name": "config",
-            "ok": config_path.exists(),
-            "message": str(config_path) if config_path.exists() else "config not initialized",
+            "ok": config_ok,
+            "message": config_message,
         },
         {
             "name": "state_dir",

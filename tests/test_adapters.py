@@ -71,6 +71,29 @@ def test_github_actions_adapter_builds_dispatch_payload() -> None:
     assert adapter.run(goal).success is False
 
 
+def test_github_actions_adapter_reports_dispatch_only_success(monkeypatch) -> None:
+    class Response:
+        status = 204
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(request, timeout):
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    adapter = GitHubActionsAdapter("owner", "repo", "workflow.yml", token="token")
+
+    result = adapter.run(Goal("ship"))
+
+    assert result.success is True
+    assert "dispatch accepted" in result.summary
+    assert "workflow completion not verified" in result.summary
+
+
 def test_local_llm_adapter_builds_openai_compatible_payload() -> None:
     goal = Goal("do work")
     adapter = LocalLLMAdapter("http://127.0.0.1:4000/v1/chat/completions", "local-model")

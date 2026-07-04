@@ -108,7 +108,9 @@ SWE-agent is stronger for benchmark-style software engineering tasks. Agentic Ha
 
 1. Real GitHub Actions CI with lint, tests, packaging, and README smoke checks.
 2. Adapter examples for common local coding agents: Codex CLI, OpenCode, Aider, and shell scripts.
-3. A richer deterministic review library: file-exists, command-passes, JSON-schema, git-clean, and artifact-present criteria.
+3. Keep deterministic review helpers small and demand-driven; the current
+   artifact-exists, command-passes, file-changed, and git-clean helpers cover
+   the first credibility gap.
 4. A small web/status UI for active goals and artifacts.
 5. `agentic-harness run` that combines start, continue, review, and final status for simple workflows.
 
@@ -126,7 +128,8 @@ SWE-agent is stronger for benchmark-style software engineering tasks. Agentic Ha
 - Share with 5-10 trusted builders privately.
 - Fix README gaps based on first-user feedback.
 - Add one local LLM end-to-end example.
-- Add review criteria helpers.
+- Use first-user feedback to decide which review helper, if any, deserves the
+  next small addition.
 
 ### Week 3
 
@@ -141,4 +144,3 @@ SWE-agent is stronger for benchmark-style software engineering tasks. Agentic Ha
 - Record a two-minute terminal demo.
 - Share the Twitter/X thread.
 - Decide whether PyPI publishing is warranted based on stars, issues, and actual users.
-

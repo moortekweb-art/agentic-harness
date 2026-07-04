@@ -21,6 +21,7 @@ class Supervisor:
         worker: Worker | None = None,
         reviewer: DeterministicReviewer | None = None,
         loop_guard: LoopGuard | None = None,
+        allow_noop_success: bool = False,
     ) -> None:
         self.project_dir = Path(project_dir)
         self.store = ArtifactStore(self.project_dir / ".agentic-harness")
@@ -29,6 +30,7 @@ class Supervisor:
         self.loop_guard = loop_guard or LoopGuard(
             state_path=self.store.root / "guard.json"
         )
+        self.allow_noop_success = allow_noop_success
 
     def init(self) -> None:
         self.store.init()
@@ -85,5 +87,12 @@ class Supervisor:
 
     def _run_worker(self, goal: Goal) -> WorkerResult:
         if self.worker is None:
-            return WorkerResult(success=True, summary="no worker configured")
+            if self.allow_noop_success:
+                return WorkerResult(success=True, summary="noop success explicitly allowed")
+            return WorkerResult(
+                success=False,
+                summary="no worker configured",
+                stderr="no worker configured; set allow_noop_success: true only for demos",
+                returncode=2,
+            )
         return self.worker.run(goal)

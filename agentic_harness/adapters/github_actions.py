@@ -12,7 +12,11 @@ from agentic_harness.core.worker import WorkerResult
 
 @dataclass
 class GitHubActionsAdapter:
-    """Dispatch a GitHub Actions workflow for a goal."""
+    """Dispatch a GitHub Actions workflow for a goal.
+
+    A successful result means GitHub accepted the dispatch request. It does not
+    mean the workflow run completed successfully.
+    """
 
     owner: str
     repo: str
@@ -61,7 +65,11 @@ class GitHubActionsAdapter:
             return WorkerResult(success=False, summary=str(exc), returncode=1)
         return WorkerResult(
             success=200 <= status < 300,
-            summary=f"GitHub Actions dispatch returned HTTP {status}",
+            summary=(
+                f"GitHub Actions dispatch accepted HTTP {status}; "
+                "workflow completion not verified"
+                if 200 <= status < 300
+                else f"GitHub Actions dispatch returned HTTP {status}"
+            ),
             returncode=0 if 200 <= status < 300 else status,
         )
-

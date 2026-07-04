@@ -2,7 +2,15 @@
 
 from agentic_harness.core.artifacts import ArtifactStore
 from agentic_harness.core.loop_guard import LoopGuard
-from agentic_harness.core.review import DeterministicReviewer, ReviewCriterion, ReviewResult
+from agentic_harness.core.review import (
+    DeterministicReviewer,
+    ReviewCriterion,
+    ReviewResult,
+    artifact_exists,
+    command_passes,
+    file_changed,
+    git_clean,
+)
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.supervisor import Supervisor
 from agentic_harness.core.worker import Worker, WorkerResult
@@ -18,5 +26,8 @@ __all__ = [
     "Supervisor",
     "Worker",
     "WorkerResult",
+    "artifact_exists",
+    "command_passes",
+    "file_changed",
+    "git_clean",
 ]
-
