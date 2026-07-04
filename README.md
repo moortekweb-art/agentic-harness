@@ -1,60 +1,166 @@
 # Agentic Harness
 
-A local-first goal execution harness with a small core state machine, pluggable execution adapters, deterministic review gates, and a project-local CLI.
+[![CI](https://github.com/moortekweb-art/agentic-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/moortekweb-art/agentic-harness/actions)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-This branch is the clean rebuild. The old Node1/Hermes extraction is preserved under `legacy/` as reference material, but the package code is intentionally server-agnostic.
+A small Python harness for running long-lived agent goals without turning your local scripts into a tangled control plane.
 
-## Architecture
+Agentic Harness gives you a project-local goal loop: start a goal, execute it through an adapter, save artifacts, run deterministic review, and stop before auto-continue loops get weird.
 
-### Core Engine
-
-`agentic_harness/core/`
-
-- Versioned goal state: `pending -> planning -> in_progress -> review -> done/failed`
-- Project-local artifact store: `.agentic-harness/runs/<goal-id>/state.json`
-- Deterministic review criteria with typed pass/fail results
-- Auto-continue loop guard
-- Typed harness errors
-
-### Adapters
-
-`agentic_harness/adapters/`
-
-- `ShellWorker` for subprocess execution
-- `TmuxWorker` for detached interactive sessions
-- `GitHubActionsAdapter` for workflow dispatch
-- `LocalLLMAdapter` for OpenAI-compatible local endpoints
-
-Adapters are plugins from the core engine's perspective. The supervisor only depends on the `Worker` protocol.
-
-### CLI
+## Quick Start
 
 ```bash
+pipx install git+https://github.com/moortekweb-art/agentic-harness.git
 agentic-harness init
-agentic-harness start "ship a feature"
-agentic-harness status
-agentic-harness continue
-agentic-harness review
-agentic-harness repair
-agentic-harness doctor
+agentic-harness start "write a changelog for the last three commits"
+agentic-harness continue && agentic-harness review
 ```
 
-Config lives in `.agentic-harness/config.yml` and is intentionally gitignored.
+## Why This Exists
 
-## Install Locally
+Most agent tooling lands in one of two places:
+
+- Frameworks that are flexible but abstract enough that you still need to build the operational loop yourself.
+- Internal scripts that work on one machine, with one naming scheme, one set of paths, and one operator.
+
+Agentic Harness is the middle ground: a small state machine, adapter interface, artifact store, CLI, and deterministic review contract. It is meant for developers who already have useful local tools and want a safer way to run them as repeatable goals.
+
+## How It Works
+
+```text
+goal text
+   |
+   v
+pending -> planning -> in_progress -> review -> done
+                         |             |
+                         v             v
+                       failed <----- failed
+```
+
+```text
+CLI ──> Supervisor ──> Worker adapter ──> local tool / tmux / CI / LLM
+          |
+          ├── state.json
+          ├── markdown reports
+          ├── deterministic review result
+          └── loop guard
+```
+
+The core package has no systemd, Cloudflare, GPU, or server-specific assumptions. Runtime state lives in `.agentic-harness/` inside your project.
+
+## Features
+
+- Deterministic review gates: pass/fail criteria are code, not model vibes.
+- Artifact-first execution: every goal writes structured JSON state and review data.
+- Loop guard: auto-continue has a circuit breaker.
+- Adapter system: shell, tmux, GitHub Actions, and OpenAI-compatible local LLM adapters are included.
+- Project-local config: no hardcoded absolute paths.
+- Small public API: `Goal`, `Supervisor`, and `Worker`.
+
+## Installation
+
+Install as a CLI with pipx:
 
 ```bash
-pipx install .
+pipx install git+https://github.com/moortekweb-art/agentic-harness.git
 ```
 
 For development:
 
 ```bash
+git clone https://github.com/moortekweb-art/agentic-harness.git
+cd agentic-harness
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -e ".[test]"
 python -m pytest tests/ -q
-python -c "from agentic_harness import Goal, Supervisor, Worker"
-python -m agentic_harness.cli init
-python -m agentic_harness.cli doctor
 ```
+
+## Usage Examples
+
+### Shell Worker
+
+`.agentic-harness/config.yml`
+
+```yaml
+version: 1
+worker: shell
+shell_command:
+  - python
+  - -c
+  - "import os; print('goal:', os.environ['AGENTIC_HARNESS_OBJECTIVE'])"
+```
+
+```bash
+agentic-harness start "summarize open TODOs"
+agentic-harness continue
+agentic-harness review
+agentic-harness status
+```
+
+### Local LLM Worker
+
+```python
+from agentic_harness import Supervisor
+from agentic_harness.adapters import LocalLLMAdapter
+
+worker = LocalLLMAdapter(
+    endpoint="http://127.0.0.1:4000/v1/chat/completions",
+    model="local-model",
+)
+
+supervisor = Supervisor(project_dir=".", worker=worker)
+supervisor.start("draft release notes for v0.1.0")
+supervisor.continue_goal()
+supervisor.review()
+```
+
+## Adapters
+
+Adapters implement one method: `run(goal) -> WorkerResult`.
+
+```python
+from agentic_harness.core.worker import WorkerResult
+
+class MyWorker:
+    def run(self, goal):
+        path = f".agentic-harness/runs/{goal.id}/output.txt"
+        # call your tool here
+        return WorkerResult(success=True, summary="done", artifacts=[path])
+```
+
+Then wire it into the supervisor:
+
+```python
+from agentic_harness import Supervisor
+
+supervisor = Supervisor(project_dir=".", worker=MyWorker())
+```
+
+## Configuration
+
+`agentic-harness init` creates `.agentic-harness/config.yml`.
+
+```yaml
+version: 1
+worker: noop
+```
+
+Shell worker configuration:
+
+```yaml
+version: 1
+worker: shell
+shell_command:
+  - make
+  - agent-goal
+```
+
+The shell adapter exposes:
+
+- `AGENTIC_HARNESS_GOAL_ID`
+- `AGENTIC_HARNESS_OBJECTIVE`
 
 ## Public API
 
@@ -62,11 +168,17 @@ python -m agentic_harness.cli doctor
 from agentic_harness import Goal, Supervisor, Worker
 ```
 
-## Legacy Reference
+## Contributing
 
-The original extracted Node1 harness scripts and tests remain under:
+Issues and pull requests are welcome. Good first contributions:
 
-- `legacy/scripts/`
-- `legacy/tests/`
+- Add adapter examples for common local coding agents.
+- Improve the deterministic review helpers.
+- Add a real GitHub Actions workflow for the placeholder CI badge.
+- Write docs for running the harness in a small team.
 
-They are not imported by the clean package.
+Keep the core small. If a feature assumes a particular server, model provider, or operator workflow, it probably belongs in an adapter or example.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
