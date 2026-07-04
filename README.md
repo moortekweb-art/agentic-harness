@@ -14,7 +14,7 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.8 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.9 release checks.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active publish workflow and external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
@@ -166,7 +166,7 @@ worker = LocalLLMAdapter(
 )
 
 supervisor = Supervisor(project_dir=".", worker=worker)
-supervisor.start("draft release notes for v0.6.8")
+supervisor.start("draft release notes for v0.6.9")
 supervisor.continue_goal()
 supervisor.review()
 ```
@@ -351,3 +351,10 @@ Keep the core small. If a feature assumes a particular server, model provider, o
 
 MIT. Copyright (c) 2026 Michael / Moortekweb. See [LICENSE](LICENSE) and
 [AUTHORS.md](AUTHORS.md).
+
+## Support
+
+If Agentic Harness helps your local AI workflow, you can support the project
+here:
+
+https://buymeacoffee.com/moortekweb3

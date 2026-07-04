@@ -34,7 +34,7 @@ After the external PyPI setup exists, publishing a GitHub release runs the
 ```bash
 python -m build --outdir /tmp/agentic-harness-dist
 python -m pip index versions local-agentic-harness
-gh release view v0.6.8 --repo moortekweb-art/agentic-harness
+gh release view v0.6.9 --repo moortekweb-art/agentic-harness
 ```
 
 The publish workflow should not use `PYPI_TOKEN`, `username`, or `password`.
