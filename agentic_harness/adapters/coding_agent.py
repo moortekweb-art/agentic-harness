@@ -108,7 +108,7 @@ class CodingAgentWorker:
         summary = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
         if not summary:
             summary = "coding agent completed" if success else "coding agent failed"
-        artifact = str(transcript.relative_to(self.cwd.resolve()))
+        artifact = transcript.relative_to(self.cwd.resolve()).as_posix()
         return WorkerResult(
             success=success,
             summary=summary,

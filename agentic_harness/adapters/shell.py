@@ -50,9 +50,10 @@ class ShellWorker:
                 returncode=124,
             )
         except OSError as exc:
+            executable = self.command[0]
             return WorkerResult(
                 success=False,
-                summary=f"shell command could not start: {exc}",
+                summary=f"{executable} could not start: {exc}",
                 stderr=str(exc),
                 returncode=127,
             )

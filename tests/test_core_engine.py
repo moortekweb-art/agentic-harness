@@ -114,10 +114,15 @@ def test_supervisor_persists_in_progress_before_worker_runs(tmp_path) -> None:
 def test_supervisor_surfaces_state_lock_contention(monkeypatch, tmp_path) -> None:
     from agentic_harness.core import artifacts
 
-    def fake_flock(*args) -> None:
+    def fake_lock(*args) -> None:
         raise BlockingIOError
 
-    monkeypatch.setattr(artifacts.fcntl, "flock", fake_flock)
+    if artifacts.fcntl is not None:
+        monkeypatch.setattr(artifacts.fcntl, "flock", fake_lock)
+    elif artifacts.msvcrt is not None:
+        monkeypatch.setattr(artifacts.msvcrt, "locking", fake_lock)
+    else:
+        pytest.skip("no state lock backend available on this platform")
     supervisor = Supervisor(project_dir=tmp_path)
 
     with pytest.raises(StateLockError):

@@ -80,7 +80,7 @@ class ArtifactStore:
             raise ValueError("report path is outside goal artifact directory") from exc
         self._write_text(report_path, content)
         project_root = self.root.resolve().parent
-        rel = str(report_path.relative_to(project_root))
+        rel = report_path.relative_to(project_root).as_posix()
         if rel not in goal.artifacts:
             goal.artifacts.append(rel)
         return report_path
