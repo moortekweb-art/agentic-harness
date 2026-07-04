@@ -28,6 +28,12 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -q
 
+      - name: Run lint
+        run: python -m ruff check
+
+      - name: Run typecheck
+        run: python -m mypy agentic_harness
+
       - name: Run compile smoke
         run: python -m compileall agentic_harness
 
