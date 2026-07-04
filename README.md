@@ -8,6 +8,13 @@ A small Python harness for running long-lived agent goals without turning your l
 
 Agentic Harness gives you a project-local goal loop: start a goal, execute it through an adapter, save artifacts, run deterministic review, and stop before auto-continue loops get weird.
 
+## Project Links
+
+- [Examples](examples/) include shell, local LLM, and tmux worker examples.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.1.0 release checks.
+- [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
+- [CI workflow](.github/workflows/ci.yml) runs tests and CLI smoke checks on push and pull requests.
+
 ## Quick Start
 
 ```bash
@@ -78,6 +85,8 @@ python -m pytest tests/ -q
 ```
 
 ## Usage Examples
+
+See [examples/](examples/) for complete project-local examples with READMEs, safety notes, and expected output.
 
 ### Shell Worker
 
@@ -174,7 +183,7 @@ Issues and pull requests are welcome. Good first contributions:
 
 - Add adapter examples for common local coding agents.
 - Improve the deterministic review helpers.
-- Add a real GitHub Actions workflow for the placeholder CI badge.
+- Improve examples for common local workflows.
 - Write docs for running the harness in a small team.
 
 Keep the core small. If a feature assumes a particular server, model provider, or operator workflow, it probably belongs in an adapter or example.

@@ -12,9 +12,13 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
+examples/shell-worker/output/
 
 # State / runtime artifacts
 .agentic-harness/
+!examples/**/.agentic-harness/
+examples/**/.agentic-harness/*
+!examples/**/.agentic-harness/config.yml
 *.json.bak
 complete.json
 session.log
