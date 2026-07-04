@@ -7,6 +7,7 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from agentic_harness.core.state import Goal
 from agentic_harness.core.worker import WorkerResult
@@ -41,8 +42,15 @@ class GitHubActionsAdapter:
             f"/actions/workflows/{self.workflow_id}/dispatches"
         )
 
-    def runs_url(self) -> str:
-        query = urllib.parse.urlencode({"branch": self.ref, "per_page": 10})
+    def runs_url(self, *, created_after: str | None = None) -> str:
+        params = {
+            "branch": self.ref,
+            "event": "workflow_dispatch",
+            "per_page": 10,
+        }
+        if created_after:
+            params["created"] = f">={created_after}"
+        query = urllib.parse.urlencode(params)
         return (
             f"{self.api_base}/repos/{self.owner}/{self.repo}"
             f"/actions/workflows/{self.workflow_id}/runs?{query}"
@@ -55,6 +63,7 @@ class GitHubActionsAdapter:
                 summary="GitHub token is required for workflow dispatch",
                 returncode=2,
             )
+        dispatch_started_at = _utc_timestamp()
         request = urllib.request.Request(
             self.dispatch_url(),
             data=json.dumps(self.dispatch_payload(goal)).encode("utf-8"),
@@ -72,7 +81,7 @@ class GitHubActionsAdapter:
         except Exception as exc:  # network adapter boundary: keep failure structured
             return WorkerResult(success=False, summary=str(exc), returncode=1)
         if 200 <= status < 300 and self.wait_for_completion:
-            return self._wait_for_completion()
+            return self._wait_for_completion(created_after=dispatch_started_at)
         return WorkerResult(
             success=200 <= status < 300,
             summary=(
@@ -84,11 +93,11 @@ class GitHubActionsAdapter:
             returncode=0 if 200 <= status < 300 else status,
         )
 
-    def _wait_for_completion(self) -> WorkerResult:
+    def _wait_for_completion(self, *, created_after: str | None = None) -> WorkerResult:
         deadline = time.monotonic() + self.timeout
         while time.monotonic() <= deadline:
             request = urllib.request.Request(
-                self.runs_url(),
+                self.runs_url(created_after=created_after),
                 method="GET",
                 headers={
                     "Accept": "application/vnd.github+json",
@@ -120,3 +129,7 @@ class GitHubActionsAdapter:
             summary="timed out waiting for GitHub Actions workflow completion",
             returncode=124,
         )
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")

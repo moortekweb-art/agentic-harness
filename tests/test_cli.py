@@ -97,6 +97,35 @@ def test_config_parses_cli_wired_adapters_and_review_command(tmp_path) -> None:
     assert config.review_git_clean is True
 
 
+def test_config_parses_nested_yaml_sections_and_inline_lists(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker:",
+                "  type: shell",
+                "  shell_command: [python, -c, \"print('value: with colon')\"]",
+                "review:",
+                "  command: [python, -c, \"print('review: ok')\"]",
+                "  command_timeout: 7",
+                "  git_clean: false",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(tmp_path)
+
+    assert config.worker == "shell"
+    assert config.shell_command == ["python", "-c", "print('value: with colon')"]
+    assert config.review_command == ["python", "-c", "print('review: ok')"]
+    assert config.review_command_timeout == 7
+    assert config.review_git_clean is False
+
+
 def test_build_supervisor_wires_tmux_worker_from_config(tmp_path) -> None:
     config_dir = tmp_path / ".agentic-harness"
     config_dir.mkdir()

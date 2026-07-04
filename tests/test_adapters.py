@@ -146,6 +146,9 @@ def test_github_actions_adapter_can_wait_for_completed_workflow(monkeypatch) -> 
     assert result.summary == "GitHub Actions workflow completed: success"
     assert result.artifacts == ["https://github.com/owner/repo/actions/runs/123"]
     assert any("/runs" in url for url in calls)
+    runs_url = next(url for url in calls if "/runs" in url)
+    assert "event=workflow_dispatch" in runs_url
+    assert "created=%3E%3D" in runs_url
 
 
 def test_github_actions_wait_does_not_report_older_completed_run(monkeypatch) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, cast
 
 from agentic_harness.core.state import Goal
 
@@ -74,7 +74,7 @@ class ArtifactStore:
         self._write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
     def _read_json(self, path: Path) -> dict[str, Any]:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
     def _write_text(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,4 +84,3 @@ class ArtifactStore:
             handle.write(content)
             tmp = Path(handle.name)
         tmp.replace(path)
-

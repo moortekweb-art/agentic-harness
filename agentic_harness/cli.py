@@ -10,7 +10,13 @@ from agentic_harness.adapters.github_actions import GitHubActionsAdapter
 from agentic_harness.adapters.local_llm import LocalLLMAdapter
 from agentic_harness.adapters.shell import ShellWorker
 from agentic_harness.adapters.tmux import TmuxWorker
-from agentic_harness.core.config import CONFIG_DIR, CONFIG_NAME, load_config, write_default_config
+from agentic_harness.core.config import (
+    CONFIG_DIR,
+    CONFIG_NAME,
+    HarnessConfig,
+    load_config,
+    write_default_config,
+)
 from agentic_harness.core.errors import ConfigError
 from agentic_harness.core.review import (
     DeterministicReviewer,
@@ -22,6 +28,7 @@ from agentic_harness.core.review import (
 )
 from agentic_harness.core.state import GoalStatus
 from agentic_harness.core.supervisor import Supervisor
+from agentic_harness.core.worker import Worker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -74,8 +81,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
         return 0 if goal.status is GoalStatus.DONE else 1
     if args.command == "status":
-        goal = supervisor.status()
-        print(json.dumps(goal.to_dict() if goal else {"active": False}, indent=2, sort_keys=True))
+        active_goal = supervisor.status()
+        print(
+            json.dumps(
+                active_goal.to_dict() if active_goal else {"active": False},
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     if args.command == "continue":
         goal = supervisor.continue_goal()
@@ -86,15 +99,21 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
         return 0
     if args.command == "repair":
-        goal = supervisor.repair()
-        print(json.dumps(goal.to_dict() if goal else {"repaired": False}, indent=2, sort_keys=True))
+        repaired_goal = supervisor.repair()
+        print(
+            json.dumps(
+                repaired_goal.to_dict() if repaired_goal else {"repaired": False},
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     return 2
 
 
 def build_supervisor(project_dir: Path) -> Supervisor:
     config = load_config(project_dir)
-    worker = None
+    worker: Worker | None = None
     if config.worker == "shell" and config.shell_command:
         worker = ShellWorker(config.shell_command, cwd=project_dir)
     elif config.worker == "tmux":
@@ -130,7 +149,7 @@ def build_supervisor(project_dir: Path) -> Supervisor:
     )
 
 
-def review_criteria_from_config(config, project_dir: Path) -> list[ReviewCriterion]:
+def review_criteria_from_config(config: HarnessConfig, project_dir: Path) -> list[ReviewCriterion]:
     criteria: list[ReviewCriterion] = []
     if config.review_command:
         criteria.append(

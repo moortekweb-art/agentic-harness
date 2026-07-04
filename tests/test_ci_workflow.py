@@ -10,3 +10,10 @@ def test_ci_runs_package_build_and_compile_smoke() -> None:
     assert "python -m pip install build" in workflow
     assert "python -m build" in workflow
     assert "dist/*.whl" in workflow
+
+
+def test_ci_runs_lint_and_typecheck() -> None:
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "python -m ruff check" in workflow
+    assert "python -m mypy agentic_harness" in workflow

@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for a v0.3.0 release.
+Use this checklist for a v0.4.0 release.
 
 ## Before Tagging
 
@@ -13,9 +13,11 @@ Use this checklist for a v0.3.0 release.
 - Run local tests:
 
   ```bash
+  python -m pip install -e ".[test]"
   python -m pytest tests/ -q
+  python -m ruff check
+  python -m mypy agentic_harness
   python -m compileall agentic_harness
-  python -m pip install build
   python -m build --outdir /tmp/agentic-harness-dist
   ```
 
@@ -44,14 +46,14 @@ Use this checklist for a v0.3.0 release.
 Create and push the tag:
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 Create the GitHub release:
 
 ```bash
-gh release create v0.3.0 --title "v0.3.0" --notes-file docs/RELEASE_CHECKLIST.md
+gh release create v0.4.0 --title "v0.4.0" --notes-file docs/RELEASE_NOTES_0.4.0.md
 ```
 
 ## Future Manual Publishing

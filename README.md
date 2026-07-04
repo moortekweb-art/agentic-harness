@@ -10,10 +10,10 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 
 ## Project Links
 
-- [Examples](examples/) include shell, local LLM, and tmux worker examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.3.0 release checks.
+- [Examples](examples/) include shell, local LLM, tmux, GitHub Actions, and real-world recipe examples.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.4.0 release checks.
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
-- [CI workflow](.github/workflows/ci.yml) runs tests, compile smoke checks, package builds, wheel installs, and CLI smoke checks on push and pull requests.
+- [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on push and pull requests.
 
 ## Quick Start
 
@@ -136,7 +136,7 @@ worker = LocalLLMAdapter(
 )
 
 supervisor = Supervisor(project_dir=".", worker=worker)
-supervisor.start("draft release notes for v0.3.0")
+supervisor.start("draft release notes for v0.4.0")
 supervisor.continue_goal()
 supervisor.review()
 ```
@@ -185,10 +185,11 @@ Shell worker configuration:
 
 ```yaml
 version: 1
-worker: shell
-shell_command:
-  - make
-  - agent-goal
+worker:
+  type: shell
+  shell_command:
+    - make
+    - agent-goal
 ```
 
 The shell adapter exposes:
@@ -228,7 +229,8 @@ github_wait: true
 
 Configuration is intentionally small and strict: unsupported schema versions,
 unknown keys, unsupported workers, malformed values, and workers without their
-required settings are rejected instead of silently ignored.
+required settings are rejected instead of silently ignored. Config files are
+parsed with PyYAML, so flat keys and grouped sections are both supported.
 
 ## Review Helpers
 
@@ -255,22 +257,24 @@ You can also configure common review gates in `.agentic-harness/config.yml`:
 
 ```yaml
 version: 1
-worker: shell
-shell_command:
-  - make
-  - agent-goal
-review_command:
-  - python
-  - -m
-  - pytest
-  - tests/
-  - -q
-review_git_clean: true
+worker:
+  type: shell
+  shell_command:
+    - make
+    - agent-goal
+review:
+  command:
+    - python
+    - -m
+    - pytest
+    - tests/
+    - -q
+  git_clean: true
 ```
 
 `GitHubActionsAdapter` dispatches workflows by default. Set `github_wait: true`
-or `wait_for_completion=True` to poll the workflow runs API and return the
-completed run conclusion and URL.
+or `wait_for_completion=True` to poll workflow_dispatch runs created after the
+dispatch request and return the completed run conclusion and URL.
 
 ## Public API
 

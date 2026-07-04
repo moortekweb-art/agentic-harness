@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from agentic_harness.core.errors import ConfigError
 
@@ -104,36 +107,32 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
     config = HarnessConfig(project_dir=root)
     if not path.exists():
         return config
-    lines = path.read_text(encoding="utf-8").splitlines()
-    key = ""
-    lists: dict[str, list[str]] = {"shell_command": [], "review_command": []}
-    version = ""
-    for raw in lines:
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("- ") and key in LIST_KEYS:
-            lists[key].append(_unquote(stripped[2:].strip()))
-            continue
-        if ":" not in stripped:
-            raise ConfigError(f"invalid config line: {raw}")
-        key, value = stripped.split(":", 1)
-        key = key.strip()
-        value = value.strip()
-        if key not in ALLOWED_KEYS:
-            raise ConfigError(f"unknown config key: {key}")
-        if key == "version":
-            version = _unquote(value)
-            if version != SUPPORTED_VERSION:
-                raise ConfigError(f"unsupported config version: {version}")
-        if key == "worker" and value:
-            config.worker = _unquote(value)
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"invalid YAML config: {exc}") from exc
+    if payload is None:
+        raise ConfigError("missing required config key: version")
+    if not isinstance(payload, dict):
+        raise ConfigError("config root must be a mapping")
+    values = _flatten_config(payload)
+    version = str(values.pop("version", ""))
+    if not version:
+        raise ConfigError("missing required config key: version")
+    if version != SUPPORTED_VERSION:
+        raise ConfigError(f"unsupported config version: {version}")
+    unknown = sorted(set(values) - ALLOWED_KEYS)
+    if unknown:
+        raise ConfigError(f"unknown config key: {unknown[0]}")
+    for key, value in values.items():
+        if key == "worker":
+            config.worker = _parse_str(value, key)
             if config.worker not in ALLOWED_WORKERS:
                 raise ConfigError(f"unsupported worker: {config.worker}")
         elif key == "allow_noop_success":
             config.allow_noop_success = _parse_bool(value, key)
         elif key in LIST_KEYS:
-            lists[key] = []
+            setattr(config, key, _parse_list(value, key))
         elif key in {"github_wait", "review_git_clean"}:
             setattr(config, key, _parse_bool(value, key))
         elif key in {"llm_timeout", "github_timeout", "review_command_timeout"}:
@@ -141,13 +140,9 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
         elif key == "github_poll_interval":
             config.github_poll_interval = _parse_float(value, key)
         elif key == "github_token":
-            config.github_token = _unquote(value) or None
-        elif key in ALLOWED_KEYS:
-            setattr(config, key, _unquote(value))
-    if not version:
-        raise ConfigError("missing required config key: version")
-    config.shell_command = lists["shell_command"]
-    config.review_command = lists["review_command"]
+            config.github_token = _parse_str(value, key) or None
+        else:
+            setattr(config, key, _parse_str(value, key))
     if config.worker == "shell" and not config.shell_command:
         raise ConfigError("shell worker requires shell_command")
     if config.worker == "tmux" and not config.tmux_command:
@@ -165,14 +160,62 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
     return config
 
 
+def _flatten_config(payload: dict[str, Any]) -> dict[str, Any]:
+    values = dict(payload)
+    worker = values.get("worker")
+    if isinstance(worker, dict):
+        values["worker"] = worker.get("type", "")
+        for key, value in worker.items():
+            if key != "type":
+                values[key] = value
+    review = values.pop("review", None)
+    if isinstance(review, dict):
+        aliases = {
+            "command": "review_command",
+            "command_timeout": "review_command_timeout",
+            "artifact": "review_artifact",
+            "file_changed": "review_file_changed",
+            "git_clean": "review_git_clean",
+        }
+        for key, value in review.items():
+            values[aliases.get(key, f"review_{key}")] = value
+    github = values.pop("github", None)
+    if isinstance(github, dict):
+        for key, value in github.items():
+            values[f"github_{key}"] = value
+    llm = values.pop("llm", None)
+    if isinstance(llm, dict):
+        for key, value in llm.items():
+            values[f"llm_{key}"] = value
+    return values
+
+
 def _unquote(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
     return value
 
 
-def _parse_bool(value: str, key: str) -> bool:
-    normalized = _unquote(value).lower()
+def _parse_str(value: object, key: str) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value).lower() if isinstance(value, bool) else str(value)
+    if value is None:
+        return ""
+    raise ConfigError(f"{key} must be a scalar")
+
+
+def _parse_list(value: object, key: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ConfigError(f"{key} must be a list")
+    return [_parse_str(item, key) for item in value]
+
+
+def _parse_bool(value: object, key: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = _parse_str(value, key).lower()
     if normalized in {"true", "yes", "1"}:
         return True
     if normalized in {"false", "no", "0"}:
@@ -180,15 +223,19 @@ def _parse_bool(value: str, key: str) -> bool:
     raise ConfigError(f"{key} must be true or false")
 
 
-def _parse_int(value: str, key: str) -> int:
+def _parse_int(value: object, key: str) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
     try:
-        return int(_unquote(value))
+        return int(_parse_str(value, key))
     except ValueError as exc:
         raise ConfigError(f"{key} must be an integer") from exc
 
 
-def _parse_float(value: str, key: str) -> float:
+def _parse_float(value: object, key: str) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
     try:
-        return float(_unquote(value))
+        return float(_parse_str(value, key))
     except ValueError as exc:
         raise ConfigError(f"{key} must be a number") from exc
