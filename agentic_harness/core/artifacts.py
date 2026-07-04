@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import fcntl
 import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, cast
+from typing import Any, Iterator, cast
 
+from agentic_harness.core.errors import StateLockError
 from agentic_harness.core.state import Goal
 
 
@@ -17,9 +20,26 @@ class ArtifactStore:
         self.root = Path(root)
         self.runs_dir = self.root / "runs"
         self.current_path = self.root / "current.json"
+        self.lock_path = self.root / "state.lock"
 
     def init(self) -> None:
         self.runs_dir.mkdir(parents=True, exist_ok=True)
+
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """Acquire a non-blocking project-local state lock."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        with self.lock_path.open("a+", encoding="utf-8") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise StateLockError(
+                    f"harness state is locked by another process: {self.lock_path}"
+                ) from exc
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def goal_dir(self, goal: Goal | str) -> Path:
         goal_id = goal.id if isinstance(goal, Goal) else goal

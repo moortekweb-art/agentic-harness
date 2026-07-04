@@ -23,6 +23,19 @@ def test_init_creates_valid_project_config(tmp_path, capsys) -> None:
     assert "created" in capsys.readouterr().out
 
 
+def test_start_reports_active_goal_conflict_as_json(tmp_path, capsys) -> None:
+    main(["--project-dir", str(tmp_path), "init"])
+    assert main(["--project-dir", str(tmp_path), "start", "first"]) == 0
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "start", "second"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["ok"] is False
+    assert "active goal" in payload["error"]
+
+
 def test_config_parses_explicit_noop_success(tmp_path) -> None:
     config_dir = tmp_path / ".agentic-harness"
     config_dir.mkdir()

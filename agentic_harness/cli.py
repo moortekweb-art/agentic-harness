@@ -18,7 +18,7 @@ from agentic_harness.core.config import (
     load_config,
     write_default_config,
 )
-from agentic_harness.core.errors import ConfigError
+from agentic_harness.core.errors import ConfigError, HarnessError
 from agentic_harness.core.review import (
     DeterministicReviewer,
     ReviewCriterion,
@@ -70,45 +70,49 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
         return 2
-    if args.command == "start":
-        goal = supervisor.start(args.objective)
-        print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
-        return 0
-    if args.command == "run":
-        goal = supervisor.start(args.objective)
-        goal = supervisor.continue_goal()
-        if goal.status is GoalStatus.REVIEW:
+    try:
+        if args.command == "start":
+            goal = supervisor.start(args.objective)
+            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            return 0
+        if args.command == "run":
+            goal = supervisor.start(args.objective)
+            goal = supervisor.continue_goal()
+            if goal.status is GoalStatus.REVIEW:
+                goal = supervisor.review()
+            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            return 0 if goal.status is GoalStatus.DONE else 1
+        if args.command == "status":
+            active_goal = supervisor.status()
+            print(
+                json.dumps(
+                    active_goal.to_dict() if active_goal else {"active": False},
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.command == "continue":
+            goal = supervisor.continue_goal()
+            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            return 0
+        if args.command == "review":
             goal = supervisor.review()
-        print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
-        return 0 if goal.status is GoalStatus.DONE else 1
-    if args.command == "status":
-        active_goal = supervisor.status()
-        print(
-            json.dumps(
-                active_goal.to_dict() if active_goal else {"active": False},
-                indent=2,
-                sort_keys=True,
+            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            return 0
+        if args.command == "repair":
+            repaired_goal = supervisor.repair()
+            print(
+                json.dumps(
+                    repaired_goal.to_dict() if repaired_goal else {"repaired": False},
+                    indent=2,
+                    sort_keys=True,
+                )
             )
-        )
-        return 0
-    if args.command == "continue":
-        goal = supervisor.continue_goal()
-        print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
-        return 0
-    if args.command == "review":
-        goal = supervisor.review()
-        print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
-        return 0
-    if args.command == "repair":
-        repaired_goal = supervisor.repair()
-        print(
-            json.dumps(
-                repaired_goal.to_dict() if repaired_goal else {"repaired": False},
-                indent=2,
-                sort_keys=True,
-            )
-        )
-        return 0
+            return 0
+    except HarnessError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
+        return 2
     return 2
 
 

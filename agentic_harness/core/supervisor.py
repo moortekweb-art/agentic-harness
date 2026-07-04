@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agentic_harness.core.artifacts import ArtifactStore
+from agentic_harness.core.errors import GoalConflictError
 from agentic_harness.core.loop_guard import LoopGuard
 from agentic_harness.core.review import DeterministicReviewer
 from agentic_harness.core.state import Goal, GoalStatus
@@ -36,48 +37,61 @@ class Supervisor:
         self.store.init()
 
     def start(self, objective: str) -> Goal:
-        self.init()
-        goal = Goal(objective=objective)
-        goal.transition(GoalStatus.PLANNING, reason="goal started")
-        self.store.write_goal(goal)
-        return goal
+        with self.store.locked():
+            self.init()
+            active = self.status()
+            if active is not None and active.status not in {
+                GoalStatus.DONE,
+                GoalStatus.FAILED,
+            }:
+                raise GoalConflictError(
+                    f"active goal {active.id} is {active.status}; finish or fail it before starting another"
+                )
+            goal = Goal(objective=objective)
+            goal.transition(GoalStatus.PLANNING, reason="goal started")
+            self.store.write_goal(goal)
+            return goal
 
     def status(self) -> Goal | None:
         return self.store.read_current_goal()
 
     def continue_goal(self) -> Goal:
-        self.loop_guard.record_continue()
-        goal = self._require_goal()
-        if goal.status is GoalStatus.PLANNING:
-            goal.transition(GoalStatus.IN_PROGRESS, reason="planning complete")
-        if goal.status is not GoalStatus.IN_PROGRESS:
+        with self.store.locked():
+            self.loop_guard.record_continue()
+            goal = self._require_goal()
+            if goal.status is GoalStatus.PLANNING:
+                goal.transition(GoalStatus.IN_PROGRESS, reason="planning complete")
+                self.store.write_goal(goal)
+            if goal.status is not GoalStatus.IN_PROGRESS:
+                return goal
+            result = self._run_worker(goal)
+            goal.metadata["worker_success"] = result.success
+            goal.metadata["worker_summary"] = result.summary
+            goal.metadata["worker_returncode"] = result.returncode
+            goal.artifacts.extend(path for path in result.artifacts if path not in goal.artifacts)
+            goal.error = None if result.success else result.stderr or result.summary
+            goal.transition(
+                GoalStatus.REVIEW if result.success else GoalStatus.FAILED,
+                reason="worker completed" if result.success else "worker failed",
+            )
+            self.store.write_goal(goal)
             return goal
-        result = self._run_worker(goal)
-        goal.metadata["worker_success"] = result.success
-        goal.metadata["worker_summary"] = result.summary
-        goal.metadata["worker_returncode"] = result.returncode
-        goal.artifacts.extend(path for path in result.artifacts if path not in goal.artifacts)
-        goal.error = None if result.success else result.stderr or result.summary
-        goal.transition(
-            GoalStatus.REVIEW if result.success else GoalStatus.FAILED,
-            reason="worker completed" if result.success else "worker failed",
-        )
-        self.store.write_goal(goal)
-        return goal
 
     def review(self) -> Goal:
-        goal = self._require_goal()
-        result = self.reviewer.review(goal)
-        goal.review = result.to_dict()
-        goal.transition(
-            GoalStatus.DONE if result.passed else GoalStatus.FAILED,
-            reason="review passed" if result.passed else "review failed",
-        )
-        self.store.write_goal(goal)
-        return goal
+        with self.store.locked():
+            goal = self._require_goal()
+            result = self.reviewer.review(goal)
+            goal.review = result.to_dict()
+            goal.transition(
+                GoalStatus.DONE if result.passed else GoalStatus.FAILED,
+                reason="review passed" if result.passed else "review failed",
+            )
+            self.store.write_goal(goal)
+            return goal
 
     def repair(self) -> Goal | None:
-        return self.store.repair_current_marker()
+        with self.store.locked():
+            return self.store.repair_current_marker()
 
     def _require_goal(self) -> Goal:
         goal = self.status()

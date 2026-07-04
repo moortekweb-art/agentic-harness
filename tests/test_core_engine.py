@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import json
 import subprocess
 
 import pytest
 
 from agentic_harness import Goal, GoalStatus, Supervisor
 from agentic_harness.core.artifacts import ArtifactStore
-from agentic_harness.core.errors import InvalidTransitionError, LoopGuardTripped
+from agentic_harness.core.errors import (
+    GoalConflictError,
+    InvalidTransitionError,
+    LoopGuardTripped,
+    StateLockError,
+)
 from agentic_harness.core.loop_guard import LoopGuard
 from agentic_harness.core.review import (
     DeterministicReviewer,
@@ -27,6 +33,19 @@ class RecordingWorker:
     def run(self, goal: Goal) -> WorkerResult:
         self.calls += 1
         return self.result
+
+
+class InspectingWorker:
+    def __init__(self, project_dir) -> None:
+        self.project_dir = project_dir
+        self.seen_status = ""
+
+    def run(self, goal: Goal) -> WorkerResult:
+        state_path = (
+            self.project_dir / ".agentic-harness" / "runs" / goal.id / "state.json"
+        )
+        self.seen_status = json.loads(state_path.read_text(encoding="utf-8"))["status"]
+        return WorkerResult(success=True, summary="implemented")
 
 
 def test_goal_state_machine_allows_expected_path() -> None:
@@ -67,6 +86,40 @@ def test_supervisor_writes_project_local_state_and_reviews(tmp_path) -> None:
     assert worker.calls == 1
     assert (tmp_path / ".agentic-harness" / "current.json").exists()
     assert (tmp_path / ".agentic-harness" / "runs" / started.id / "state.json").exists()
+
+
+def test_supervisor_refuses_to_overwrite_active_goal(tmp_path) -> None:
+    supervisor = Supervisor(project_dir=tmp_path)
+    first = supervisor.start("first goal")
+
+    with pytest.raises(GoalConflictError) as exc:
+        supervisor.start("second goal")
+
+    assert first.id in str(exc.value)
+    assert supervisor.status().id == first.id
+
+
+def test_supervisor_persists_in_progress_before_worker_runs(tmp_path) -> None:
+    worker = InspectingWorker(tmp_path)
+    supervisor = Supervisor(project_dir=tmp_path, worker=worker)
+
+    supervisor.start("long work")
+    supervisor.continue_goal()
+
+    assert worker.seen_status == "in_progress"
+
+
+def test_supervisor_surfaces_state_lock_contention(monkeypatch, tmp_path) -> None:
+    import fcntl
+
+    def fake_flock(*args) -> None:
+        raise BlockingIOError
+
+    monkeypatch.setattr(fcntl, "flock", fake_flock)
+    supervisor = Supervisor(project_dir=tmp_path)
+
+    with pytest.raises(StateLockError):
+        supervisor.start("locked goal")
 
 
 def test_supervisor_default_noop_fails_instead_of_passing_review(tmp_path) -> None:
