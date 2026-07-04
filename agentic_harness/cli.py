@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from agentic_harness.adapters.coding_agent import CodingAgentWorker
 from agentic_harness.adapters.github_actions import GitHubActionsAdapter
 from agentic_harness.adapters.local_llm import LocalLLMAdapter
 from agentic_harness.adapters.shell import ShellWorker
@@ -116,6 +117,13 @@ def build_supervisor(project_dir: Path) -> Supervisor:
     worker: Worker | None = None
     if config.worker == "shell" and config.shell_command:
         worker = ShellWorker(config.shell_command, cwd=project_dir)
+    elif config.worker == "coding_agent":
+        worker = CodingAgentWorker(
+            config.coding_agent_command,
+            cwd=project_dir,
+            timeout=config.coding_agent_timeout,
+            transcript_path=config.coding_agent_transcript,
+        )
     elif config.worker == "tmux":
         worker = TmuxWorker(
             config.tmux_command,

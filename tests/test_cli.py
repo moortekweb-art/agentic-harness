@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 
+from agentic_harness.adapters.coding_agent import CodingAgentWorker
 from agentic_harness.adapters.github_actions import GitHubActionsAdapter
 from agentic_harness.adapters.local_llm import LocalLLMAdapter
 from agentic_harness.adapters.tmux import TmuxWorker
@@ -185,6 +186,34 @@ def test_build_supervisor_wires_github_actions_worker_from_config(tmp_path) -> N
     assert isinstance(supervisor.worker, GitHubActionsAdapter)
     assert supervisor.worker.wait_for_completion is True
     assert supervisor.worker.api_version == "2026-03-10"
+
+
+def test_build_supervisor_wires_coding_agent_worker_from_config(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker:",
+                "  type: coding_agent",
+                "  coding_agent_command:",
+                "    - codex",
+                "    - exec",
+                "    - --full-auto",
+                "    - \"{objective}\"",
+                "  coding_agent_timeout: 120",
+                "  coding_agent_transcript: .agentic-harness/runs/{goal_id}/agent.log",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    supervisor = build_supervisor(tmp_path)
+
+    assert isinstance(supervisor.worker, CodingAgentWorker)
+    assert supervisor.worker.timeout == 120
 
 
 def test_build_supervisor_wires_review_command_from_config(tmp_path) -> None:

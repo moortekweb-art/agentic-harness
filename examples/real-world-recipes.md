@@ -54,6 +54,46 @@ tmux attach -t agentic-harness-<goal-prefix>
 agentic-harness review
 ```
 
+## Coding Agent Worker
+
+Use this when Codex, Aider, OpenCode, or another coding-agent CLI should make
+the code changes while Agentic Harness owns state, transcript capture, loop
+limits, and deterministic review.
+
+```yaml
+version: 1
+worker:
+  type: coding_agent
+  coding_agent_command:
+    - codex
+    - exec
+    - --full-auto
+    - "{objective}"
+  coding_agent_timeout: 1800
+  coding_agent_transcript: .agentic-harness/runs/{goal_id}/coding-agent.log
+review:
+  command:
+    - python
+    - -m
+    - pytest
+    - tests/
+    - -q
+```
+
+```bash
+agentic-harness run "fix failing tests"
+```
+
+Swap the command list for another tool when needed:
+
+```yaml
+coding_agent_command: [aider, --message, "{objective}"]
+```
+
+```yaml
+coding_agent_command: [opencode, run, "{objective}"]
+```
+
 ## Local LLM Endpoint
 
 Use this when an OpenAI-compatible local endpoint can produce a bounded result.

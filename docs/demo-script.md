@@ -141,3 +141,41 @@ Expected output summary:
 - Keep the terminal width around 100-120 columns.
 - Pause briefly after `doctor`, `continue`, and `review` so viewers can see the state transitions.
 - Do not paste sample output. Let the real command output appear on screen.
+
+## Coding Agent Demo Variant
+
+Use this variant when recording the critique-driven demo: a real coding agent
+does the work, and Agentic Harness supplies the audit trail and deterministic
+completion gate.
+
+Command:
+
+```bash
+cat > .agentic-harness/config.yml <<'YAML'
+version: 1
+worker:
+  type: coding_agent
+  coding_agent_command:
+    - codex
+    - exec
+    - --full-auto
+    - "{objective}"
+  coding_agent_transcript: .agentic-harness/runs/{goal_id}/coding-agent.log
+review:
+  command:
+    - python
+    - -m
+    - pytest
+    - tests/
+    - -q
+YAML
+agentic-harness run "fix failing tests"
+```
+
+Expected output summary:
+
+- The goal reaches `done` only if the coding agent exits successfully and the
+  pytest review command passes.
+- The transcript is written under `.agentic-harness/runs/<goal-id>/`.
+- If tests fail, the goal status is `failed` with the review failure recorded
+  in state.

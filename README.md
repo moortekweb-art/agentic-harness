@@ -10,8 +10,8 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 
 ## Project Links
 
-- [Examples](examples/) include shell, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.5.0 release checks.
+- [Examples](examples/) include shell, coding-agent, local LLM, tmux, GitHub Actions, and real-world recipe examples.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.0 release checks.
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
 - [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on push and pull requests.
 
@@ -77,7 +77,7 @@ The core package has no systemd, Cloudflare, GPU, or server-specific assumptions
 - Loop guard: auto-continue has a project-local circuit breaker persisted at
   `.agentic-harness/guard.json`, so repeated CLI invocations share the same
   safety window.
-- Adapter system: shell, tmux, GitHub Actions, and OpenAI-compatible local LLM adapters are included.
+- Adapter system: shell, coding-agent CLI, tmux, GitHub Actions, and OpenAI-compatible local LLM adapters are included.
 - Project-local config: no hardcoded absolute paths.
 - Small public API: `Goal`, `Supervisor`, and `Worker`.
 
@@ -196,6 +196,27 @@ The shell adapter exposes:
 
 - `AGENTIC_HARNESS_GOAL_ID`
 - `AGENTIC_HARNESS_OBJECTIVE`
+
+Coding-agent worker configuration:
+
+```yaml
+version: 1
+worker:
+  type: coding_agent
+  coding_agent_command:
+    - codex
+    - exec
+    - --full-auto
+    - "{objective}"
+  coding_agent_transcript: .agentic-harness/runs/{goal_id}/coding-agent.log
+review:
+  command:
+    - python
+    - -m
+    - pytest
+    - tests/
+    - -q
+```
 
 Tmux worker configuration:
 

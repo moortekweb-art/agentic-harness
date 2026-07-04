@@ -18,6 +18,9 @@ ALLOWED_KEYS = {
     "version",
     "worker",
     "shell_command",
+    "coding_agent_command",
+    "coding_agent_timeout",
+    "coding_agent_transcript",
     "allow_noop_success",
     "tmux_command",
     "tmux_session_prefix",
@@ -40,8 +43,8 @@ ALLOWED_KEYS = {
     "review_file_changed",
     "review_git_clean",
 }
-ALLOWED_WORKERS = {"noop", "shell", "tmux", "local_llm", "github_actions"}
-LIST_KEYS = {"shell_command", "review_command"}
+ALLOWED_WORKERS = {"noop", "shell", "coding_agent", "tmux", "local_llm", "github_actions"}
+LIST_KEYS = {"shell_command", "coding_agent_command", "review_command"}
 
 
 @dataclass
@@ -49,6 +52,9 @@ class HarnessConfig:
     project_dir: Path
     worker: str = "noop"
     shell_command: list[str] = field(default_factory=list)
+    coding_agent_command: list[str] = field(default_factory=list)
+    coding_agent_timeout: int = 1800
+    coding_agent_transcript: str = ".agentic-harness/runs/{goal_id}/coding-agent.log"
     allow_noop_success: bool = False
     tmux_command: str = ""
     tmux_session_prefix: str = "agentic-harness"
@@ -138,7 +144,12 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
             setattr(config, key, _parse_list(value, key))
         elif key in {"github_wait", "review_git_clean"}:
             setattr(config, key, _parse_bool(value, key))
-        elif key in {"llm_timeout", "github_timeout", "review_command_timeout"}:
+        elif key in {
+            "coding_agent_timeout",
+            "llm_timeout",
+            "github_timeout",
+            "review_command_timeout",
+        }:
             setattr(config, key, _parse_int(value, key))
         elif key == "github_poll_interval":
             config.github_poll_interval = _parse_float(value, key)
@@ -148,6 +159,8 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
             setattr(config, key, _parse_str(value, key))
     if config.worker == "shell" and not config.shell_command:
         raise ConfigError("shell worker requires shell_command")
+    if config.worker == "coding_agent" and not config.coding_agent_command:
+        raise ConfigError("coding_agent worker requires coding_agent_command")
     if config.worker == "tmux" and not config.tmux_command:
         raise ConfigError("tmux worker requires tmux_command")
     if config.worker == "local_llm" and not config.llm_endpoint:

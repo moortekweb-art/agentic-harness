@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 
+from agentic_harness.adapters.coding_agent import CodingAgentWorker
 from agentic_harness.adapters.github_actions import GitHubActionsAdapter
 from agentic_harness.adapters.local_llm import LocalLLMAdapter
 from agentic_harness.adapters.shell import ShellWorker
@@ -31,6 +32,61 @@ def test_shell_worker_reports_failure(tmp_path) -> None:
     assert result.success is False
     assert result.summary == "bad"
     assert result.returncode == 3
+
+
+def test_coding_agent_worker_formats_command_and_writes_transcript(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0, "fixed tests\n", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    worker = CodingAgentWorker(
+        ["codex", "exec", "--full-auto", "{objective}", "--id", "{goal_id}"],
+        cwd=tmp_path,
+        transcript_path=".agentic-harness/runs/{goal_id}/coding-agent.log",
+    )
+    goal = Goal("fix failing tests", id="goal-123")
+
+    result = worker.run(goal)
+
+    transcript = tmp_path / ".agentic-harness" / "runs" / "goal-123" / "coding-agent.log"
+    assert result.success is True
+    assert result.summary == "fixed tests"
+    assert result.artifacts == [".agentic-harness/runs/goal-123/coding-agent.log"]
+    assert transcript.read_text(encoding="utf-8") == (
+        "$ codex exec --full-auto fix failing tests --id goal-123\n"
+        "\n"
+        "[stdout]\n"
+        "fixed tests\n"
+        "\n"
+        "[stderr]\n"
+    )
+    assert calls[0][0] == [
+        "codex",
+        "exec",
+        "--full-auto",
+        "fix failing tests",
+        "--id",
+        "goal-123",
+    ]
+    assert calls[0][1]["cwd"] == str(tmp_path)
+
+
+def test_coding_agent_worker_rejects_transcript_path_escape(tmp_path) -> None:
+    worker = CodingAgentWorker(
+        ["python", "-c", "print('ok')"],
+        cwd=tmp_path,
+        transcript_path="../outside.log",
+    )
+
+    try:
+        worker.transcript_for(Goal("escape"))
+    except ValueError as exc:
+        assert "outside project directory" in str(exc)
+    else:
+        raise AssertionError("expected transcript path escape to fail")
 
 
 def test_tmux_worker_builds_project_local_session_command(monkeypatch, tmp_path) -> None:
