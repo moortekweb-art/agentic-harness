@@ -29,7 +29,7 @@ def test_publish_workflow_template_uses_pypi_trusted_publishing() -> None:
     assert workflow["on"]["release"]["types"] == ["published"]
     publish = workflow["jobs"]["publish"]
     assert publish["environment"]["name"] == "pypi"
-    assert publish["environment"]["url"] == "https://pypi.org/project/moortek-agentic-harness/"
+    assert publish["environment"]["url"] == "https://pypi.org/project/local-agentic-harness/"
     assert publish["permissions"]["id-token"] == "write"
     steps = publish["steps"]
     assert any(step.get("uses") == "pypa/gh-action-pypi-publish@release/v1" for step in steps)
@@ -39,5 +39,5 @@ def test_publish_workflow_template_uses_pypi_trusted_publishing() -> None:
 def test_distribution_name_avoids_occupied_pypi_project() -> None:
     metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-    assert metadata["project"]["name"] == "moortek-agentic-harness"
+    assert metadata["project"]["name"] == "local-agentic-harness"
     assert metadata["project"]["scripts"]["agentic-harness"] == "agentic_harness.cli:main"

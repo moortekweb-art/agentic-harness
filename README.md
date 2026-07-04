@@ -14,7 +14,7 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.7 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.8 release checks.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
@@ -101,7 +101,7 @@ Install as a CLI with pipx:
 pipx install git+https://github.com/moortekweb-art/agentic-harness.git
 ```
 
-The Python distribution name is `moortek-agentic-harness` so it can be reserved
+The Python distribution name is `local-agentic-harness` so it can be reserved
 on PyPI without colliding with the unrelated existing `agentic-harness` package.
 The installed CLI command remains `agentic-harness`.
 
@@ -160,7 +160,7 @@ worker = LocalLLMAdapter(
 )
 
 supervisor = Supervisor(project_dir=".", worker=worker)
-supervisor.start("draft release notes for v0.6.7")
+supervisor.start("draft release notes for v0.6.8")
 supervisor.continue_goal()
 supervisor.review()
 ```

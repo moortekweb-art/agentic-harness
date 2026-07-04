@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "moortek-agentic-harness"
-version = "0.6.7"
+name = "local-agentic-harness"
+version = "0.6.8"
 description = "A local-first goal execution harness with deterministic review gates."
 readme = "README.md"
 requires-python = ">=3.11"
