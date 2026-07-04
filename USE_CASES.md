@@ -1,118 +1,110 @@
 # Agentic Harness Use Cases
 
-Agentic Harness is useful when an AI-assisted task needs a repeatable lifecycle: start a goal, run a worker, preserve artifacts, review the output, and stop when the review contract is satisfied.
+Agentic Harness is best for bounded AI or automation work where the operator needs project-local state, inspectable artifacts, and deterministic review before declaring the work done.
 
-## 1. CI Reviewer
+## 1. Documentation and Release Note Automation
 
-What it does: runs an automated review pass on a pull request or local branch, collects command output, and records whether the branch meets explicit criteria such as tests passing, lint passing, and required files changing.
+**Description:** Generate changelogs, release notes, migration notes, or README updates from recent commits, issue summaries, and existing docs.
 
-How the harness enables it: the GitHub Actions or shell adapter can run the review commands, the artifact store records reports, and deterministic review gates decide whether the goal is complete instead of relying on a model summary.
+**How the harness enables it:** A shell or local LLM worker can draft the document, save it as an artifact, and run review gates such as `file_changed`, `command_passes`, and `git_clean`. The loop guard keeps rewrite cycles bounded.
 
-Target audience: maintainers, solo developers, small engineering teams, and consultants who want consistent pre-merge checks without building a custom control loop.
+**Target audience:** Maintainers of small open source projects, internal platform teams, and solo developers who want repeatable documentation updates without handing full repo control to an agent.
 
-## 2. Documentation Generator
+## 2. CI-Backed Code Maintenance Tasks
 
-What it does: drafts or refreshes docs from a bounded source such as recent commits, a module, a CLI help surface, or a release checklist.
+**Description:** Run narrowly scoped code maintenance goals such as formatting cleanup, dependency compatibility checks, small test fixes, or generated file refreshes.
 
-How the harness enables it: a shell, tmux, or local LLM worker can generate the draft, then review criteria can require the expected Markdown file to exist and optional commands to pass before the run is treated as complete.
+**How the harness enables it:** The GitHub Actions adapter can dispatch work to CI and wait on the exact workflow run, while deterministic review verifies tests, lint, type checks, or generated artifacts before the task is marked complete.
 
-Target audience: open-source maintainers, developer tooling teams, API owners, and technical consultants.
+**Target audience:** Engineering teams that want agent-assisted maintenance to happen inside existing CI controls instead of on an unreviewed workstation.
 
-## 3. Release Notes Assistant
+## 3. Local Knowledge Base Curation
 
-What it does: turns commits, changelog fragments, and test results into a release note draft with links to artifacts proving the package was tested.
+**Description:** Summarize notes, normalize markdown files, extract action items, or keep a project-local knowledge base current.
 
-How the harness enables it: project-local state keeps each release run separate, adapters can run build and test commands, and review gates can check for a generated release note plus a clean test command.
+**How the harness enables it:** A shell worker can call existing scripts against local files, record the changed documents as artifacts, and use review commands to validate links, front matter, or formatting.
 
-Target audience: Python package maintainers, internal platform teams, and small product teams shipping frequent releases.
+**Target audience:** Consultants, researchers, technical writers, and operations teams with private local notes that should not be uploaded to hosted agent platforms.
 
-## 4. Data Cleanup Runner
+## 4. Long-Running Operational Checklists
 
-What it does: executes a bounded cleanup task, such as normalizing CSV rows, validating JSON files, or preparing migration reports, while keeping the generated diff and logs inspectable.
+**Description:** Execute multi-step operational runbooks such as pre-release checks, deployment readiness audits, migration rehearsals, or service health reviews.
 
-How the harness enables it: the shell adapter can call existing cleanup scripts, artifacts can include before/after reports, and review criteria can require validation commands to pass.
+**How the harness enables it:** A tmux worker can run an inspectable long-running command while the harness preserves goal state, reports, and review outcomes in `.agentic-harness/`. Operators can attach to the session when manual inspection is needed.
 
-Target audience: operations teams, data analysts, automation consultants, and teams that need auditable batch work.
+**Target audience:** DevOps engineers, SREs, and technical founders who need automation support while preserving human review points.
 
-## 5. Local LLM Task Harness
+## 5. Local LLM Evaluation and Prompt Iteration
 
-What it does: runs local or OpenAI-compatible LLM tasks in a controlled project directory, such as drafting summaries, classifying tickets, or proposing code changes for human review.
+**Description:** Run prompt experiments or local-model smoke tests and capture the request, response, and pass/fail criteria for each goal.
 
-How the harness enables it: the local LLM adapter provides a consistent worker interface, project-local state keeps runs isolated, and the loop guard prevents unattended continuation from repeating indefinitely.
+**How the harness enables it:** The local LLM adapter calls an OpenAI-compatible endpoint only when configured, stores run state locally, and can pair model output with deterministic review commands such as schema validation or compile checks.
 
-Target audience: AI infrastructure operators, privacy-sensitive teams, researchers, and developers testing local model workflows.
+**Target audience:** AI engineers, privacy-sensitive teams, and developers evaluating self-hosted LLMs before wiring them into production workflows.
 
-## Getting Started: CI Reviewer
+## Getting Started
 
-1. Install the package:
+### Documentation and Release Notes
 
-   ```bash
-   pipx install git+https://github.com/moortekweb-art/agentic-harness.git
-   ```
+1. Install the CLI:
 
-2. Initialize a project-local harness:
+```bash
+pipx install git+https://github.com/moortekweb-art/agentic-harness.git
+```
 
-   ```bash
-   agentic-harness init
-   ```
+2. Initialize the project and configure a shell worker:
 
-3. Configure a shell worker that runs the same checks you expect before review:
+```bash
+agentic-harness init
+cat > .agentic-harness/config.yml <<'YAML'
+version: 1
+worker:
+  type: shell
+  shell_command:
+    - python
+    - scripts/write_release_notes.py
+review_command:
+  - python
+  - -m
+  - pytest
+  - tests/
+  - -q
+YAML
+```
 
-   ```yaml
-   version: 1
-   worker:
-     type: shell
-     shell_command:
-       - bash
-       - -lc
-       - "python -m pytest tests/ -q && python -m ruff check ."
-   review:
-     criteria:
-       - type: command_passes
-         command: "python -m pytest tests/ -q"
-       - type: command_passes
-         command: "python -m ruff check ."
-   ```
+3. Run a bounded documentation goal:
 
-4. Run the review goal:
+```bash
+agentic-harness run "draft release notes for the last three commits"
+```
 
-   ```bash
-   agentic-harness run "review this branch before merge"
-   agentic-harness status
-   ```
+### CI-Backed Code Maintenance
 
-## Getting Started: Documentation Generator
+1. Create a workflow that accepts `goal_id` and `objective` inputs.
 
-1. Initialize the harness in the repository that needs docs:
+2. Configure the GitHub Actions worker with a token from your secret store:
 
-   ```bash
-   agentic-harness init
-   ```
+```yaml
+version: 1
+worker: github_actions
+github_owner: your-org
+github_repo: your-repo
+github_workflow_id: maintenance.yml
+github_token: token-from-your-secret-store
+github_wait: true
+github_timeout: 600
+review_command:
+  - python
+  - -m
+  - pytest
+  - tests/
+  - -q
+```
 
-2. Configure a worker script that writes the target document:
+3. Start with a small maintenance objective:
 
-   ```yaml
-   version: 1
-   worker:
-     type: shell
-     shell_command:
-       - bash
-       - -lc
-       - "python scripts/generate_docs.py > docs/generated.md"
-   review:
-     criteria:
-       - type: artifact_exists
-         path: docs/generated.md
-       - type: command_passes
-         command: "test -s docs/generated.md"
-   ```
-
-3. Start with a bounded objective:
-
-   ```bash
-   agentic-harness start "generate docs for the CLI commands changed this week"
-   agentic-harness continue
-   agentic-harness review
-   ```
-
-4. Inspect `.agentic-harness/` for the recorded goal state, review result, and artifacts before committing the generated documentation.
+```bash
+agentic-harness start "refresh generated docs and verify tests"
+agentic-harness continue
+agentic-harness review
+```
