@@ -6,11 +6,12 @@ on:
 
 jobs:
   test:
-    name: Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.11", "3.12"]
 
     steps:
@@ -43,13 +44,39 @@ jobs:
           python -m build
 
       - name: Install built wheel
+        shell: python
         run: |
-          python -m venv /tmp/agentic-harness-wheel
-          /tmp/agentic-harness-wheel/bin/python -m pip install dist/*.whl
-          /tmp/agentic-harness-wheel/bin/python -m agentic_harness.cli --help
+          import glob
+          import os
+          import subprocess
+          import tempfile
+          import venv
+
+          venv_dir = os.path.join(tempfile.gettempdir(), "agentic-harness-wheel")
+          venv.EnvBuilder(with_pip=True, clear=True).create(venv_dir)
+          python_bin = os.path.join(
+              venv_dir,
+              "Scripts" if os.name == "nt" else "bin",
+              "python.exe" if os.name == "nt" else "python",
+          )
+          wheels = glob.glob("dist/*.whl")
+          if len(wheels) != 1:
+              raise SystemExit(f"expected one built wheel, found {wheels!r}")
+          subprocess.check_call([python_bin, "-m", "pip", "install", wheels[0]])
+          subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "--help"])
 
       - name: Run CLI smoke checks
+        shell: python
         run: |
-          python -m agentic_harness.cli --help
-          python -m agentic_harness.cli --project-dir /tmp/agentic-harness-ci-smoke init
-          python -m agentic_harness.cli --project-dir /tmp/agentic-harness-ci-smoke doctor
+          import subprocess
+          import sys
+          import tempfile
+
+          project_dir = tempfile.mkdtemp(prefix="agentic-harness-ci-smoke-")
+          subprocess.check_call([sys.executable, "-m", "agentic_harness.cli", "--help"])
+          subprocess.check_call(
+              [sys.executable, "-m", "agentic_harness.cli", "--project-dir", project_dir, "init"]
+          )
+          subprocess.check_call(
+              [sys.executable, "-m", "agentic_harness.cli", "--project-dir", project_dir, "doctor"]
+          )

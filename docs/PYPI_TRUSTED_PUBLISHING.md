@@ -4,10 +4,9 @@ Agentic Harness is buildable locally and GitHub releases attach verified wheel
 and source distributions. PyPI publishing should use GitHub Actions trusted
 publishing, which avoids storing a PyPI token in repository secrets.
 
-The publish workflow is currently checked in as a template at
-`docs/templates/publish.yml`. Copy it to `.github/workflows/publish.yml` from a
-credential that has GitHub `workflow` permission, then configure the PyPI
-trusted publisher below.
+The publish workflow is checked in at `.github/workflows/publish.yml`.
+`docs/templates/publish.yml` is retained only as a reference copy. Configure the
+PyPI trusted publisher below before expecting release publishes to succeed.
 
 ## Name Availability Blocker
 
@@ -27,9 +26,8 @@ Configure a PyPI trusted publisher for:
 - Workflow: `.github/workflows/publish.yml`
 - Environment: `pypi`
 
-After the workflow is installed and the external PyPI setup exists, publishing a
-GitHub release runs the `Publish` workflow and uploads the distributions built
-from that release.
+After the external PyPI setup exists, publishing a GitHub release runs the
+`Publish` workflow and uploads the distributions built from that release.
 
 ## Manual Verification
 

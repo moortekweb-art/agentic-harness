@@ -15,11 +15,11 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
 - [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.8 release checks.
-- [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the external PyPI setup required for tokenless publishing.
+- [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active publish workflow and external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
-- [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on push and pull requests.
+- [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on Linux, Windows, and macOS.
 
 ## Quick Start
 
@@ -99,6 +99,12 @@ Install as a CLI with pipx:
 
 ```bash
 pipx install git+https://github.com/moortekweb-art/agentic-harness.git
+```
+
+After the first PyPI publish, install the released distribution with:
+
+```bash
+pipx install local-agentic-harness
 ```
 
 The Python distribution name is `local-agentic-harness` so it can be reserved

@@ -56,10 +56,9 @@ Create the GitHub release:
 gh release create v0.6.8 --title "v0.6.8" --notes-file docs/RELEASE_NOTES_0.6.8.md
 ```
 
-## Future Manual Publishing
+## PyPI Publishing
 
-PyPI publishing has a workflow template at `docs/templates/publish.yml` for the
-`local-agentic-harness` distribution. To make it active, copy it to
-`.github/workflows/publish.yml` using a credential with GitHub `workflow`
-permission, then complete the external trusted publisher setup documented in
-`docs/PYPI_TRUSTED_PUBLISHING.md`.
+PyPI publishing has an active trusted-publishing workflow at
+`.github/workflows/publish.yml` for the `local-agentic-harness` distribution.
+Complete the external trusted publisher setup documented in
+`docs/PYPI_TRUSTED_PUBLISHING.md` before relying on release-triggered uploads.
