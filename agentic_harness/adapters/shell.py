@@ -51,10 +51,11 @@ class ShellWorker:
             )
         except OSError as exc:
             executable = self.command[0]
+            message = f"{executable} could not start: {exc}"
             return WorkerResult(
                 success=False,
-                summary=f"{executable} could not start: {exc}",
-                stderr=str(exc),
+                summary=message,
+                stderr=message,
                 returncode=127,
             )
         success = proc.returncode == 0
