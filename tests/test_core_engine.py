@@ -11,6 +11,7 @@ from agentic_harness.core.errors import (
     GoalConflictError,
     InvalidTransitionError,
     LoopGuardTripped,
+    NoActiveGoalError,
     StateLockError,
 )
 from agentic_harness.core.loop_guard import LoopGuard
@@ -201,6 +202,21 @@ def test_command_passes_criterion_runs_bounded_command(tmp_path) -> None:
     assert result.passed is True
 
 
+def test_command_passes_criterion_reports_missing_executable(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("missing-review-tool")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    goal = Goal("command check")
+
+    result = DeterministicReviewer(
+        [command_passes(["missing-review-tool"], cwd=tmp_path)]
+    ).review(goal)
+
+    assert result.passed is False
+    assert "missing-review-tool" in result.criteria[0]["message"]
+
+
 def test_file_changed_and_git_clean_criteria_use_git_status(tmp_path) -> None:
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
     path = tmp_path / "tracked.txt"
@@ -229,6 +245,22 @@ def test_file_changed_and_git_clean_criteria_use_git_status(tmp_path) -> None:
 
     assert dirty.passed is True
     assert clean.passed is False
+
+
+def test_git_criteria_report_missing_git(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    goal = Goal("git criteria")
+
+    changed = DeterministicReviewer([file_changed(tmp_path, "tracked.txt")]).review(goal)
+    clean = DeterministicReviewer([git_clean(tmp_path)]).review(goal)
+
+    assert changed.passed is False
+    assert clean.passed is False
+    assert "git" in changed.criteria[0]["message"]
+    assert "git" in clean.criteria[0]["message"]
 
 
 def test_loop_guard_trips_after_configured_continue_count() -> None:
@@ -284,6 +316,16 @@ def test_supervisor_uses_project_local_loop_guard_state(tmp_path) -> None:
     supervisor.continue_goal()
 
     assert (tmp_path / ".agentic-harness" / "guard.json").exists()
+
+
+def test_supervisor_does_not_record_loop_guard_without_active_goal(tmp_path) -> None:
+    supervisor = Supervisor(project_dir=tmp_path)
+    supervisor.init()
+
+    with pytest.raises(NoActiveGoalError):
+        supervisor.continue_goal()
+
+    assert not (tmp_path / ".agentic-harness" / "guard.json").exists()
 
 
 def test_repair_restores_missing_current_marker(tmp_path) -> None:

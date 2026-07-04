@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agentic_harness.core.artifacts import ArtifactStore
-from agentic_harness.core.errors import GoalConflictError
+from agentic_harness.core.errors import GoalConflictError, NoActiveGoalError
 from agentic_harness.core.loop_guard import LoopGuard
 from agentic_harness.core.review import DeterministicReviewer
 from agentic_harness.core.state import Goal, GoalStatus
@@ -57,8 +57,8 @@ class Supervisor:
 
     def continue_goal(self) -> Goal:
         with self.store.locked():
-            self.loop_guard.record_continue()
             goal = self._require_goal()
+            self.loop_guard.record_continue()
             if goal.status is GoalStatus.PLANNING:
                 goal.transition(GoalStatus.IN_PROGRESS, reason="planning complete")
                 self.store.write_goal(goal)
@@ -96,7 +96,7 @@ class Supervisor:
     def _require_goal(self) -> Goal:
         goal = self.status()
         if goal is None:
-            raise RuntimeError("no active goal")
+            raise NoActiveGoalError("no active goal")
         return goal
 
     def _run_worker(self, goal: Goal) -> WorkerResult:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -24,7 +25,10 @@ class TmuxWorker:
         self.cwd = Path(cwd)
 
     def command_for(self, goal: Goal) -> str:
-        return self.command_template.format(goal_id=goal.id, objective=goal.objective)
+        return self.command_template.format(
+            goal_id=shlex.quote(goal.id),
+            objective=shlex.quote(goal.objective),
+        )
 
     def session_name_for(self, goal: Goal) -> str:
         return f"{self.session_prefix}-{goal.id[:12]}"
@@ -50,4 +54,3 @@ class TmuxWorker:
             stderr=proc.stderr,
             returncode=proc.returncode,
         )
-

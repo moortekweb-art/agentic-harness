@@ -1,6 +1,10 @@
 # Local LLM Adapter Example
 
 This example demonstrates `LocalLLMAdapter`, which calls an OpenAI-compatible local chat completions endpoint.
+That shape keeps the harness model-agnostic: it can sit around local model
+experiments such as Ornith 35B when they are served through an
+OpenAI-compatible endpoint, and it will still work when a better model replaces
+today's favorite.
 
 ## How to Run
 
@@ -23,4 +27,3 @@ Dry-run mode prints the request payload that would be sent. With `--run`, the ha
 ## Safety and Assumptions
 
 The script does not call a live endpoint unless `--run` is provided. It assumes the endpoint implements the OpenAI chat completions shape and that any required API key is supplied with `--api-key`.
-

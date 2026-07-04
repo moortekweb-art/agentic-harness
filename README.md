@@ -11,7 +11,7 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.1 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.2 release checks.
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
 - [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on push and pull requests.
 
@@ -81,6 +81,9 @@ The core package has no systemd, Cloudflare, GPU, or server-specific assumptions
   `.agentic-harness/state.lock`, and `start` refuses to overwrite an unfinished
   active goal.
 - Adapter system: shell, coding-agent CLI, tmux, GitHub Actions, and OpenAI-compatible local LLM adapters are included.
+- Local-model friendly: any model served through an OpenAI-compatible chat
+  endpoint can be wrapped with deterministic review, including current
+  30B-40B local-model experiments such as Ornith 35B.
 - Project-local config: no hardcoded absolute paths.
 - Small public API: `Goal`, `Supervisor`, and `Worker`.
 

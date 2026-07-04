@@ -11,7 +11,7 @@ from agentic_harness.adapters import TmuxWorker
 from agentic_harness.core.state import Goal
 
 
-COMMAND_TEMPLATE = "printf 'goal: {objective}\\n' > tmux-worker-output-{goal_id}.txt"
+COMMAND_TEMPLATE = "printf 'goal_id: {goal_id}\\n' > tmux-worker-output-{goal_id}.txt"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,4 +42,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

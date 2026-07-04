@@ -37,7 +37,7 @@ session to inspect manually.
 ```yaml
 version: 1
 worker: tmux
-tmux_command: "python scripts/agent_task.py --goal {goal_id} --objective '{objective}'"
+tmux_command: "python scripts/agent_task.py --goal {goal_id}"
 tmux_session_prefix: agentic-harness
 review_command:
   - python
@@ -53,6 +53,11 @@ agentic-harness continue
 tmux attach -t agentic-harness-<goal-prefix>
 agentic-harness review
 ```
+
+The tmux adapter shell-quotes placeholders, but the safest tmux pattern is to
+pass only `{goal_id}`. A long-running worker can read the objective from
+`.agentic-harness/runs/<goal-id>/state.json`, which avoids putting user goal
+text into a shell command at all.
 
 ## Coding Agent Worker
 

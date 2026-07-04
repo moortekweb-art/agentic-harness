@@ -36,6 +36,107 @@ def test_start_reports_active_goal_conflict_as_json(tmp_path, capsys) -> None:
     assert "active goal" in payload["error"]
 
 
+def test_continue_without_active_goal_returns_json_and_does_not_poison_guard(
+    tmp_path, capsys
+) -> None:
+    assert main(["--project-dir", str(tmp_path), "init"]) == 0
+    config_path = tmp_path / ".agentic-harness" / "config.yml"
+    config_path.write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    for _ in range(3):
+        rc = main(["--project-dir", str(tmp_path), "continue"])
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 2
+        assert payload["ok"] is False
+        assert "no active goal" in payload["error"]
+
+    assert not (tmp_path / ".agentic-harness" / "guard.json").exists()
+    assert main(["--project-dir", str(tmp_path), "run", "real goal"]) == 0
+
+
+def test_continue_reports_loop_guard_trip_as_json(tmp_path, capsys) -> None:
+    assert main(["--project-dir", str(tmp_path), "init"]) == 0
+    config_path = tmp_path / ".agentic-harness" / "config.yml"
+    config_path.write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    guard_path = tmp_path / ".agentic-harness" / "guard.json"
+    guard_path.write_text(
+        json.dumps(
+            {
+                "events": [
+                    9999999999,
+                    9999999999,
+                    9999999999,
+                    9999999999,
+                    9999999999,
+                    9999999999,
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["--project-dir", str(tmp_path), "start", "guarded"]) == 0
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "continue"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["ok"] is False
+    assert "circuit breaker tripped" in payload["error"]
+
+
+def test_review_reports_invalid_transition_as_json(tmp_path, capsys) -> None:
+    assert main(["--project-dir", str(tmp_path), "init"]) == 0
+    config_path = tmp_path / ".agentic-harness" / "config.yml"
+    config_path.write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+    assert main(["--project-dir", str(tmp_path), "run", "done goal"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "done"
+
+    rc = main(["--project-dir", str(tmp_path), "review"])
+
+    error_payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert error_payload["ok"] is False
+    assert "cannot transition" in error_payload["error"]
+
+
+def test_run_reports_missing_shell_executable_as_failed_goal(tmp_path, capsys) -> None:
+    assert main(["--project-dir", str(tmp_path), "init"]) == 0
+    config_path = tmp_path / ".agentic-harness" / "config.yml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: shell",
+                "shell_command:",
+                "  - definitely-missing-agentic-harness-tool",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "run", "missing executable"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert payload["status"] == "failed"
+    assert "definitely-missing-agentic-harness-tool" in payload["error"]
+
+
 def test_config_parses_explicit_noop_success(tmp_path) -> None:
     config_dir = tmp_path / ".agentic-harness"
     config_dir.mkdir()

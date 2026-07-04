@@ -17,6 +17,10 @@ class GoalConflictError(HarnessError):
     """Raised when an operation would clobber an active goal."""
 
 
+class NoActiveGoalError(HarnessError):
+    """Raised when an operation requires an active goal but none exists."""
+
+
 class StateLockError(HarnessError):
     """Raised when project-local harness state is locked by another process."""
 

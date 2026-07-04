@@ -29,13 +29,16 @@ class GitHubActionsAdapter:
     api_version: str = "2026-03-10"
 
     def dispatch_payload(self, goal: Goal) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "ref": self.ref,
             "inputs": {
                 "goal_id": goal.id,
                 "objective": goal.objective,
             },
         }
+        if self.wait_for_completion:
+            payload["return_run_details"] = True
+        return payload
 
     def dispatch_url(self) -> str:
         return (

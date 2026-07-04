@@ -34,6 +34,34 @@ def test_shell_worker_reports_failure(tmp_path) -> None:
     assert result.returncode == 3
 
 
+def test_shell_worker_reports_timeout(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["slow"], timeout=5)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    worker = ShellWorker(["slow"], cwd=tmp_path, timeout=5)
+
+    result = worker.run(Goal("run too long"))
+
+    assert result.success is False
+    assert result.returncode == 124
+    assert "timed out after 5s" in result.summary
+
+
+def test_shell_worker_reports_missing_executable(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("missing-tool")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    worker = ShellWorker(["missing-tool"], cwd=tmp_path)
+
+    result = worker.run(Goal("run missing tool"))
+
+    assert result.success is False
+    assert result.returncode == 127
+    assert "missing-tool" in result.summary
+
+
 def test_coding_agent_worker_formats_command_and_writes_transcript(monkeypatch, tmp_path) -> None:
     calls = []
 
@@ -109,9 +137,21 @@ def test_tmux_worker_builds_project_local_session_command(monkeypatch, tmp_path)
         "-d",
         "-s",
         "agentic-harness-abcdef123456",
-        "echo abcdef1234567890: implement feature",
+        "echo abcdef1234567890: 'implement feature'",
     ]
     assert calls[0][1]["cwd"] == str(tmp_path)
+
+
+def test_tmux_worker_shell_quotes_objective() -> None:
+    goal = Goal("bad'; touch owned #", id="abcdef1234567890")
+    worker = TmuxWorker("python worker.py --goal {goal_id} --objective {objective}")
+
+    command = worker.command_for(goal)
+
+    assert command == (
+        "python worker.py --goal abcdef1234567890 "
+        "--objective 'bad'\"'\"'; touch owned #'"
+    )
 
 
 def test_github_actions_adapter_builds_dispatch_payload() -> None:
@@ -126,6 +166,23 @@ def test_github_actions_adapter_builds_dispatch_payload() -> None:
         "inputs": {"goal_id": "goal-1", "objective": "ship"},
     }
     assert adapter.run(goal).success is False
+
+
+def test_github_actions_adapter_requests_run_details_when_waiting() -> None:
+    goal = Goal("ship", id="goal-1")
+    adapter = GitHubActionsAdapter(
+        "owner",
+        "repo",
+        "workflow.yml",
+        ref="dev",
+        wait_for_completion=True,
+    )
+
+    assert adapter.dispatch_payload(goal) == {
+        "ref": "dev",
+        "inputs": {"goal_id": "goal-1", "objective": "ship"},
+        "return_run_details": True,
+    }
 
 
 def test_github_actions_adapter_reports_dispatch_only_success(monkeypatch) -> None:
@@ -144,7 +201,7 @@ def test_github_actions_adapter_reports_dispatch_only_success(monkeypatch) -> No
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     adapter = GitHubActionsAdapter("owner", "repo", "workflow.yml", token="token")
 
-    result = adapter.run(Goal("ship"))
+    result = adapter.run(Goal("ship", id="goal-456"))
 
     assert result.success is True
     assert "dispatch accepted" in result.summary
@@ -196,7 +253,7 @@ def test_github_actions_adapter_can_wait_for_completed_workflow(monkeypatch) -> 
         poll_interval=0,
     )
 
-    result = adapter.run(Goal("ship"))
+    result = adapter.run(Goal("ship", id="goal-456"))
 
     assert result.success is True
     assert result.summary == "GitHub Actions workflow completed: success"
@@ -227,6 +284,8 @@ def test_github_actions_adapter_waits_on_returned_run_url(monkeypatch) -> None:
     def fake_urlopen(request, timeout):
         calls.append((request.get_method(), request.full_url, dict(request.headers)))
         if request.get_method() == "POST":
+            payloads.append(json.loads(request.data.decode("utf-8")))
+        if request.get_method() == "POST":
             return Response(
                 200,
                 {
@@ -246,6 +305,7 @@ def test_github_actions_adapter_waits_on_returned_run_url(monkeypatch) -> None:
         )
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    payloads = []
     ticks = iter([0.0, 0.0, 1.0])
     monkeypatch.setattr("time.monotonic", lambda: next(ticks))
     adapter = GitHubActionsAdapter(
@@ -258,11 +318,18 @@ def test_github_actions_adapter_waits_on_returned_run_url(monkeypatch) -> None:
         timeout=0,
     )
 
-    result = adapter.run(Goal("ship"))
+    result = adapter.run(Goal("ship", id="goal-456"))
 
     assert result.success is True
     assert result.summary == "GitHub Actions workflow completed: success"
     assert result.artifacts == ["https://github.com/owner/repo/actions/runs/456"]
+    assert payloads == [
+        {
+            "ref": "main",
+            "inputs": {"goal_id": "goal-456", "objective": "ship"},
+            "return_run_details": True,
+        }
+    ]
     assert ("GET", "https://api.github.com/repos/owner/repo/actions/runs/456") == calls[1][:2]
     assert all("/workflows/workflow.yml/runs" not in url for _, url, _ in calls)
     assert calls[0][2]["X-github-api-version"] == "2026-03-10"

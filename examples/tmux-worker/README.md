@@ -22,5 +22,4 @@ Dry-run mode prints JSON containing the tmux session name and command. With `--r
 
 ## Safety and Assumptions
 
-The default mode does not start tmux. The `--run` mode requires `tmux` to be installed and starts a detached session that runs a small shell command.
-
+The default mode does not start tmux. The `--run` mode requires `tmux` to be installed and starts a detached session that runs a small shell command. Prefer tmux commands that pass `{goal_id}` only; workers can read the objective from `.agentic-harness/runs/<goal-id>/state.json` instead of embedding user goal text in shell commands.

@@ -97,6 +97,8 @@ def command_passes(
             )
         except subprocess.TimeoutExpired:
             return False, f"command timed out after {timeout}s: {' '.join(command)}"
+        except OSError as exc:
+            return False, f"command could not start: {exc}"
         if proc.returncode == 0:
             return True, f"command passed: {' '.join(command)}"
         detail = proc.stderr.strip() or proc.stdout.strip() or "no output"
@@ -113,13 +115,16 @@ def file_changed(project_dir: str | Path, path: str) -> ReviewCriterion:
     """Require git to report a path as changed."""
 
     def check(goal: Goal) -> tuple[bool, str]:
-        proc = subprocess.run(
-            ["git", "status", "--porcelain", "--", path],
-            cwd=str(project_dir),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                ["git", "status", "--porcelain", "--", path],
+                cwd=str(project_dir),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as exc:
+            return False, f"git status could not start: {exc}"
         if proc.returncode != 0:
             detail = proc.stderr.strip() or "git status failed"
             return False, detail
@@ -133,13 +138,16 @@ def git_clean(project_dir: str | Path = ".") -> ReviewCriterion:
     """Require the git worktree to be clean."""
 
     def check(goal: Goal) -> tuple[bool, str]:
-        proc = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=str(project_dir),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(project_dir),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as exc:
+            return False, f"git status could not start: {exc}"
         if proc.returncode != 0:
             detail = proc.stderr.strip() or "git status failed"
             return False, detail
