@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for a v0.2.0 release.
+Use this checklist for a v0.3.0 release.
 
 ## Before Tagging
 
@@ -14,6 +14,9 @@ Use this checklist for a v0.2.0 release.
 
   ```bash
   python -m pytest tests/ -q
+  python -m compileall agentic_harness
+  python -m pip install build
+  python -m build --outdir /tmp/agentic-harness-dist
   ```
 
 - Run CLI smoke checks:
@@ -22,6 +25,8 @@ Use this checklist for a v0.2.0 release.
   python -m agentic_harness.cli --help
   python -m agentic_harness.cli --project-dir /tmp/agentic-harness-smoke init
   python -m agentic_harness.cli --project-dir /tmp/agentic-harness-smoke doctor
+  printf 'version: 1\nworker: noop\nallow_noop_success: true\n' > /tmp/agentic-harness-smoke/.agentic-harness/config.yml
+  python -m agentic_harness.cli --project-dir /tmp/agentic-harness-smoke run "smoke goal"
   ```
 
 - Smoke-check safe examples:
@@ -39,17 +44,16 @@ Use this checklist for a v0.2.0 release.
 Create and push the tag:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 Create the GitHub release:
 
 ```bash
-gh release create v0.2.0 --title "v0.2.0" --notes-file docs/RELEASE_CHECKLIST.md
+gh release create v0.3.0 --title "v0.3.0" --notes-file docs/RELEASE_CHECKLIST.md
 ```
 
 ## Future Manual Publishing
 
 PyPI publishing is intentionally not part of this release checklist execution. Treat packaging and publishing to PyPI as a separate future/manual step after credentials, ownership, and release process are confirmed.
-

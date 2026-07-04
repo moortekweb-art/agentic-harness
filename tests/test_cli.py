@@ -4,8 +4,11 @@ import json
 import subprocess
 import sys
 
+from agentic_harness.adapters.github_actions import GitHubActionsAdapter
+from agentic_harness.adapters.local_llm import LocalLLMAdapter
+from agentic_harness.adapters.tmux import TmuxWorker
 from agentic_harness import Goal, Supervisor, Worker
-from agentic_harness.cli import main
+from agentic_harness.cli import build_supervisor, main
 from agentic_harness.core.config import load_config
 from agentic_harness.core.errors import ConfigError
 
@@ -62,6 +65,125 @@ def test_config_rejects_unsupported_version(tmp_path) -> None:
         raise AssertionError("expected ConfigError")
 
 
+def test_config_parses_cli_wired_adapters_and_review_command(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: tmux",
+                "tmux_command: echo {goal_id}",
+                "tmux_session_prefix: ah",
+                "review_command:",
+                "  - python",
+                "  - -c",
+                "  - \"print('review')\"",
+                "review_command_timeout: 12",
+                "review_git_clean: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(tmp_path)
+
+    assert config.worker == "tmux"
+    assert config.tmux_command == "echo {goal_id}"
+    assert config.tmux_session_prefix == "ah"
+    assert config.review_command == ["python", "-c", "print('review')"]
+    assert config.review_command_timeout == 12
+    assert config.review_git_clean is True
+
+
+def test_build_supervisor_wires_tmux_worker_from_config(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "version: 1\nworker: tmux\ntmux_command: echo {objective}\n",
+        encoding="utf-8",
+    )
+
+    supervisor = build_supervisor(tmp_path)
+
+    assert isinstance(supervisor.worker, TmuxWorker)
+
+
+def test_build_supervisor_wires_local_llm_worker_from_config(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: local_llm",
+                "llm_endpoint: http://127.0.0.1:4000/v1/chat/completions",
+                "llm_model: local-model",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    supervisor = build_supervisor(tmp_path)
+
+    assert isinstance(supervisor.worker, LocalLLMAdapter)
+
+
+def test_build_supervisor_wires_github_actions_worker_from_config(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: github_actions",
+                "github_owner: owner",
+                "github_repo: repo",
+                "github_workflow_id: workflow.yml",
+                "github_token: token",
+                "github_wait: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    supervisor = build_supervisor(tmp_path)
+
+    assert isinstance(supervisor.worker, GitHubActionsAdapter)
+    assert supervisor.worker.wait_for_completion is True
+
+
+def test_build_supervisor_wires_review_command_from_config(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: noop",
+                "allow_noop_success: true",
+                "review_command:",
+                "  - python",
+                "  - -c",
+                "  - \"print('ok')\"",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    supervisor = build_supervisor(tmp_path)
+    supervisor.start("review configured command")
+    supervisor.continue_goal()
+
+    reviewed = supervisor.review()
+
+    assert reviewed.status == "done"
+    assert [item["name"] for item in reviewed.review["criteria"]] == ["command_passes"]
+
+
 def test_doctor_runs_without_crashing_on_empty_config(tmp_path, capsys) -> None:
     rc = main(["--project-dir", str(tmp_path), "doctor"])
 
@@ -95,6 +217,22 @@ def test_cli_start_status_continue_review_round_trip(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "status"]) == 0
     status = json.loads(capsys.readouterr().out)
     assert status["id"] == started["id"]
+
+
+def test_cli_run_executes_start_continue_review_round_trip(tmp_path, capsys) -> None:
+    assert main(["--project-dir", str(tmp_path), "init"]) == 0
+    config_path = tmp_path / ".agentic-harness" / "config.yml"
+    config_path.write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    assert main(["--project-dir", str(tmp_path), "run", "ship in one command"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "done"
+    assert payload["review"]["passed"] is True
 
 
 def test_module_cli_init_works_in_temp_dir(tmp_path) -> None:

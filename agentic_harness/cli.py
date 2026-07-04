@@ -6,9 +6,21 @@ import argparse
 import json
 from pathlib import Path
 
+from agentic_harness.adapters.github_actions import GitHubActionsAdapter
+from agentic_harness.adapters.local_llm import LocalLLMAdapter
 from agentic_harness.adapters.shell import ShellWorker
+from agentic_harness.adapters.tmux import TmuxWorker
 from agentic_harness.core.config import CONFIG_DIR, CONFIG_NAME, load_config, write_default_config
 from agentic_harness.core.errors import ConfigError
+from agentic_harness.core.review import (
+    DeterministicReviewer,
+    ReviewCriterion,
+    artifact_exists,
+    command_passes,
+    file_changed,
+    git_clean,
+)
+from agentic_harness.core.state import GoalStatus
 from agentic_harness.core.supervisor import Supervisor
 
 
@@ -23,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init", help="Generate .agentic-harness/config.yml")
     start = sub.add_parser("start", help="Start a goal")
     start.add_argument("objective")
+    run = sub.add_parser("run", help="Start, continue, and review a goal")
+    run.add_argument("objective")
     sub.add_parser("status", help="Show current goal state")
     sub.add_parser("continue", help="Advance the active goal")
     sub.add_parser("review", help="Run deterministic review")
@@ -52,6 +66,13 @@ def main(argv: list[str] | None = None) -> int:
         goal = supervisor.start(args.objective)
         print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
         return 0
+    if args.command == "run":
+        goal = supervisor.start(args.objective)
+        goal = supervisor.continue_goal()
+        if goal.status is GoalStatus.REVIEW:
+            goal = supervisor.review()
+        print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+        return 0 if goal.status is GoalStatus.DONE else 1
     if args.command == "status":
         goal = supervisor.status()
         print(json.dumps(goal.to_dict() if goal else {"active": False}, indent=2, sort_keys=True))
@@ -76,11 +97,56 @@ def build_supervisor(project_dir: Path) -> Supervisor:
     worker = None
     if config.worker == "shell" and config.shell_command:
         worker = ShellWorker(config.shell_command, cwd=project_dir)
+    elif config.worker == "tmux":
+        worker = TmuxWorker(
+            config.tmux_command,
+            session_prefix=config.tmux_session_prefix,
+            cwd=project_dir,
+        )
+    elif config.worker == "local_llm":
+        worker = LocalLLMAdapter(
+            endpoint=config.llm_endpoint,
+            model=config.llm_model,
+            api_key=config.llm_api_key,
+            timeout=config.llm_timeout,
+        )
+    elif config.worker == "github_actions":
+        worker = GitHubActionsAdapter(
+            owner=config.github_owner,
+            repo=config.github_repo,
+            workflow_id=config.github_workflow_id,
+            token=config.github_token,
+            ref=config.github_ref,
+            wait_for_completion=config.github_wait,
+            poll_interval=config.github_poll_interval,
+            timeout=config.github_timeout,
+        )
+    criteria = review_criteria_from_config(config, project_dir)
     return Supervisor(
         project_dir=project_dir,
         worker=worker,
+        reviewer=DeterministicReviewer(criteria) if criteria else None,
         allow_noop_success=config.allow_noop_success,
     )
+
+
+def review_criteria_from_config(config, project_dir: Path) -> list[ReviewCriterion]:
+    criteria: list[ReviewCriterion] = []
+    if config.review_command:
+        criteria.append(
+            command_passes(
+                config.review_command,
+                cwd=project_dir,
+                timeout=config.review_command_timeout,
+            )
+        )
+    if config.review_artifact:
+        criteria.append(artifact_exists(project_dir, config.review_artifact))
+    if config.review_file_changed:
+        criteria.append(file_changed(project_dir, config.review_file_changed))
+    if config.review_git_clean:
+        criteria.append(git_clean(project_dir))
+    return criteria
 
 
 def doctor(project_dir: str | Path = ".") -> dict[str, object]:

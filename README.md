@@ -11,9 +11,9 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 ## Project Links
 
 - [Examples](examples/) include shell, local LLM, and tmux worker examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.2.0 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.3.0 release checks.
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
-- [CI workflow](.github/workflows/ci.yml) runs tests and CLI smoke checks on push and pull requests.
+- [CI workflow](.github/workflows/ci.yml) runs tests, compile smoke checks, package builds, wheel installs, and CLI smoke checks on push and pull requests.
 
 ## Quick Start
 
@@ -30,6 +30,12 @@ shell_command:
 YAML
 agentic-harness start "write a changelog for the last three commits"
 agentic-harness continue && agentic-harness review
+```
+
+For one-shot local runs:
+
+```bash
+agentic-harness run "write a changelog for the last three commits"
 ```
 
 ## Why This Exists
@@ -130,7 +136,7 @@ worker = LocalLLMAdapter(
 )
 
 supervisor = Supervisor(project_dir=".", worker=worker)
-supervisor.start("draft release notes for v0.2.0")
+supervisor.start("draft release notes for v0.3.0")
 supervisor.continue_goal()
 supervisor.review()
 ```
@@ -190,9 +196,39 @@ The shell adapter exposes:
 - `AGENTIC_HARNESS_GOAL_ID`
 - `AGENTIC_HARNESS_OBJECTIVE`
 
+Tmux worker configuration:
+
+```yaml
+version: 1
+worker: tmux
+tmux_command: "python worker.py --goal {goal_id}"
+tmux_session_prefix: agentic-harness
+```
+
+Local LLM worker configuration:
+
+```yaml
+version: 1
+worker: local_llm
+llm_endpoint: http://127.0.0.1:4000/v1/chat/completions
+llm_model: local-model
+```
+
+GitHub Actions worker configuration:
+
+```yaml
+version: 1
+worker: github_actions
+github_owner: moortekweb-art
+github_repo: agentic-harness
+github_workflow_id: ci.yml
+github_token: token-from-your-secret-store
+github_wait: true
+```
+
 Configuration is intentionally small and strict: unsupported schema versions,
-unknown keys, unsupported workers, malformed booleans, and shell workers without
-`shell_command` are rejected instead of silently ignored.
+unknown keys, unsupported workers, malformed values, and workers without their
+required settings are rejected instead of silently ignored.
 
 ## Review Helpers
 
@@ -215,8 +251,26 @@ reviewer = DeterministicReviewer([
 ])
 ```
 
-`GitHubActionsAdapter` is dispatch-only: a successful result means GitHub
-accepted the workflow dispatch request, not that the workflow run completed.
+You can also configure common review gates in `.agentic-harness/config.yml`:
+
+```yaml
+version: 1
+worker: shell
+shell_command:
+  - make
+  - agent-goal
+review_command:
+  - python
+  - -m
+  - pytest
+  - tests/
+  - -q
+review_git_clean: true
+```
+
+`GitHubActionsAdapter` dispatches workflows by default. Set `github_wait: true`
+or `wait_for_completion=True` to poll the workflow runs API and return the
+completed run conclusion and URL.
 
 ## Public API
 

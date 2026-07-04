@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 
 from agentic_harness.adapters.github_actions import GitHubActionsAdapter
@@ -92,6 +93,104 @@ def test_github_actions_adapter_reports_dispatch_only_success(monkeypatch) -> No
     assert result.success is True
     assert "dispatch accepted" in result.summary
     assert "workflow completion not verified" in result.summary
+
+
+def test_github_actions_adapter_can_wait_for_completed_workflow(monkeypatch) -> None:
+    calls = []
+
+    class Response:
+        def __init__(self, status: int, payload: dict[str, object] | None = None) -> None:
+            self.status = status
+            self._payload = payload or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(self._payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        if request.get_method() == "POST":
+            return Response(204)
+        return Response(
+            200,
+            {
+                "workflow_runs": [
+                    {
+                        "id": 123,
+                        "status": "completed",
+                        "conclusion": "success",
+                        "html_url": "https://github.com/owner/repo/actions/runs/123",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    adapter = GitHubActionsAdapter(
+        "owner",
+        "repo",
+        "workflow.yml",
+        token="token",
+        wait_for_completion=True,
+        poll_interval=0,
+    )
+
+    result = adapter.run(Goal("ship"))
+
+    assert result.success is True
+    assert result.summary == "GitHub Actions workflow completed: success"
+    assert result.artifacts == ["https://github.com/owner/repo/actions/runs/123"]
+    assert any("/runs" in url for url in calls)
+
+
+def test_github_actions_wait_does_not_report_older_completed_run(monkeypatch) -> None:
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "workflow_runs": [
+                        {"id": 124, "status": "in_progress", "conclusion": None},
+                        {
+                            "id": 123,
+                            "status": "completed",
+                            "conclusion": "success",
+                            "html_url": "https://github.com/owner/repo/actions/runs/123",
+                        },
+                    ]
+                }
+            ).encode("utf-8")
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: Response())
+    ticks = iter([0.0, 0.0, 1.0])
+    monkeypatch.setattr("time.monotonic", lambda: next(ticks))
+    adapter = GitHubActionsAdapter(
+        "owner",
+        "repo",
+        "workflow.yml",
+        token="token",
+        wait_for_completion=True,
+        poll_interval=0,
+        timeout=0,
+    )
+
+    result = adapter._wait_for_completion()
+
+    assert result.success is False
+    assert result.returncode == 124
+    assert result.artifacts == []
 
 
 def test_local_llm_adapter_builds_openai_compatible_payload() -> None:
