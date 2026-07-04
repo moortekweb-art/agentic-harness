@@ -10,6 +10,14 @@ from agentic_harness.core.state import Goal
 from agentic_harness.core.worker import WorkerResult
 
 
+def _as_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 class CodingAgentWorker:
     """Run a Codex/Aider/OpenCode-style CLI command and save a transcript."""
 
@@ -51,25 +59,51 @@ class CodingAgentWorker:
         env = os.environ.copy()
         env["AGENTIC_HARNESS_GOAL_ID"] = goal.id
         env["AGENTIC_HARNESS_OBJECTIVE"] = goal.objective
-        proc = subprocess.run(
-            command,
-            cwd=str(self.cwd),
-            text=True,
-            capture_output=True,
-            timeout=self.timeout,
-            check=False,
-            env=env,
-        )
-        transcript = self.transcript_for(goal)
-        transcript.parent.mkdir(parents=True, exist_ok=True)
-        transcript.write_text(
-            "$ " + " ".join(command) + "\n\n"
-            "[stdout]\n"
-            f"{proc.stdout}\n"
-            "[stderr]\n"
-            f"{proc.stderr}",
-            encoding="utf-8",
-        )
+        try:
+            proc = subprocess.run(
+                command,
+                cwd=str(self.cwd),
+                text=True,
+                capture_output=True,
+                timeout=self.timeout,
+                check=False,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return WorkerResult(
+                success=False,
+                summary=f"coding agent timed out after {self.timeout}s",
+                stdout=_as_text(exc.stdout),
+                stderr=_as_text(exc.stderr),
+                returncode=124,
+            )
+        except OSError as exc:
+            executable = command[0] if command else "coding agent"
+            return WorkerResult(
+                success=False,
+                summary=f"{executable} could not start: {exc}",
+                stderr=str(exc),
+                returncode=127,
+            )
+        try:
+            transcript = self.transcript_for(goal)
+            transcript.parent.mkdir(parents=True, exist_ok=True)
+            transcript.write_text(
+                "$ " + " ".join(command) + "\n\n"
+                "[stdout]\n"
+                f"{proc.stdout}\n"
+                "[stderr]\n"
+                f"{proc.stderr}",
+                encoding="utf-8",
+            )
+        except (OSError, ValueError) as exc:
+            return WorkerResult(
+                success=False,
+                summary=f"could not write transcript: {exc}",
+                stdout=proc.stdout,
+                stderr=str(exc),
+                returncode=1,
+            )
         success = proc.returncode == 0
         summary = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
         if not summary:

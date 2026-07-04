@@ -117,6 +117,53 @@ def test_coding_agent_worker_rejects_transcript_path_escape(tmp_path) -> None:
         raise AssertionError("expected transcript path escape to fail")
 
 
+def test_coding_agent_worker_reports_timeout(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["codex"], timeout=9)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    worker = CodingAgentWorker(["codex", "exec"], cwd=tmp_path, timeout=9)
+
+    result = worker.run(Goal("slow coding agent"))
+
+    assert result.success is False
+    assert result.returncode == 124
+    assert "timed out after 9s" in result.summary
+
+
+def test_coding_agent_worker_reports_missing_executable(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("codex")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    worker = CodingAgentWorker(["codex", "exec"], cwd=tmp_path)
+
+    result = worker.run(Goal("missing coding agent"))
+
+    assert result.success is False
+    assert result.returncode == 127
+    assert "codex could not start" in result.summary
+
+
+def test_coding_agent_worker_reports_transcript_write_error(monkeypatch, tmp_path) -> None:
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, "fixed\n", "")
+
+    def fake_write_text(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("pathlib.Path.write_text", fake_write_text)
+    worker = CodingAgentWorker(["codex", "exec"], cwd=tmp_path)
+
+    result = worker.run(Goal("write transcript"))
+
+    assert result.success is False
+    assert result.returncode == 1
+    assert "could not write transcript" in result.summary
+    assert "disk full" in result.stderr
+
+
 def test_tmux_worker_builds_project_local_session_command(monkeypatch, tmp_path) -> None:
     calls = []
 
@@ -152,6 +199,20 @@ def test_tmux_worker_shell_quotes_objective() -> None:
         "python worker.py --goal abcdef1234567890 "
         "--objective 'bad'\"'\"'; touch owned #'"
     )
+
+
+def test_tmux_worker_reports_missing_tmux(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("tmux")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    worker = TmuxWorker("echo {objective}", cwd=tmp_path)
+
+    result = worker.run(Goal("start tmux"))
+
+    assert result.success is False
+    assert result.returncode == 127
+    assert "tmux could not start" in result.summary
 
 
 def test_github_actions_adapter_builds_dispatch_payload() -> None:
@@ -439,3 +500,24 @@ def test_local_llm_adapter_builds_openai_compatible_payload() -> None:
     assert payload["model"] == "local-model"
     assert payload["messages"][1] == {"role": "user", "content": "do work"}
     assert payload["stream"] is False
+
+
+def test_local_llm_adapter_returns_structured_failure_for_malformed_payload(monkeypatch) -> None:
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": ["not-a-dict"]}).encode("utf-8")
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: Response())
+    adapter = LocalLLMAdapter("http://127.0.0.1:4000/v1/chat/completions", "local-model")
+
+    result = adapter.run(Goal("do work"))
+
+    assert result.success is False
+    assert result.summary == "local LLM returned no content"
+    assert result.returncode == 1

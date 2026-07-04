@@ -13,7 +13,7 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.4 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.5 release checks.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
@@ -154,7 +154,7 @@ worker = LocalLLMAdapter(
 )
 
 supervisor = Supervisor(project_dir=".", worker=worker)
-supervisor.start("draft release notes for v0.5.0")
+supervisor.start("draft release notes for v0.6.5")
 supervisor.continue_goal()
 supervisor.review()
 ```

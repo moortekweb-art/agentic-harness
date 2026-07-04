@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 
 import pytest
@@ -111,16 +112,22 @@ def test_supervisor_persists_in_progress_before_worker_runs(tmp_path) -> None:
 
 
 def test_supervisor_surfaces_state_lock_contention(monkeypatch, tmp_path) -> None:
-    import fcntl
+    from agentic_harness.core import artifacts
 
     def fake_flock(*args) -> None:
         raise BlockingIOError
 
-    monkeypatch.setattr(fcntl, "flock", fake_flock)
+    monkeypatch.setattr(artifacts.fcntl, "flock", fake_flock)
     supervisor = Supervisor(project_dir=tmp_path)
 
     with pytest.raises(StateLockError):
         supervisor.start("locked goal")
+
+
+def test_artifact_store_does_not_import_fcntl_at_module_import_time() -> None:
+    source = Path("agentic_harness/core/artifacts.py").read_text(encoding="utf-8")
+
+    assert "\nimport fcntl\n" not in source
 
 
 def test_supervisor_default_noop_fails_instead_of_passing_review(tmp_path) -> None:
@@ -349,3 +356,13 @@ def test_artifact_store_writes_markdown_report_under_project_state(tmp_path) -> 
     assert report_path == tmp_path / ".agentic-harness" / "runs" / goal.id / "report.md"
     assert report_path.read_text(encoding="utf-8") == "# Report\n"
     assert goal.artifacts == [f".agentic-harness/runs/{goal.id}/report.md"]
+
+
+def test_artifact_store_rejects_report_name_path_escape(tmp_path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    goal = Goal("write report")
+
+    with pytest.raises(ValueError, match="outside goal artifact directory"):
+        store.write_report(goal, "# Escape\n", name="../escape.md")
+
+    assert not (tmp_path / ".agentic-harness" / "runs" / "escape.md").exists()

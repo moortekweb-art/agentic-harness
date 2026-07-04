@@ -36,13 +36,21 @@ class TmuxWorker:
     def run(self, goal: Goal) -> WorkerResult:
         session = self.session_name_for(goal)
         command = self.command_for(goal)
-        proc = subprocess.run(
-            ["tmux", "new-session", "-d", "-s", session, command],
-            cwd=str(self.cwd),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                ["tmux", "new-session", "-d", "-s", session, command],
+                cwd=str(self.cwd),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as exc:
+            return WorkerResult(
+                success=False,
+                summary=f"tmux could not start: {exc}",
+                stderr=str(exc),
+                returncode=127,
+            )
         return WorkerResult(
             success=proc.returncode == 0,
             summary=(

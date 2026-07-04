@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import urllib.request
 from dataclasses import dataclass
+from typing import Any
 
 from agentic_harness.core.state import Goal
 from agentic_harness.core.worker import WorkerResult
@@ -30,6 +31,21 @@ class LocalLLMAdapter:
             "stream": False,
         }
 
+    def _extract_message_content(self, payload: Any) -> str | None:
+        if not isinstance(payload, dict):
+            return None
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return None
+        first = choices[0]
+        if not isinstance(first, dict):
+            return None
+        message = first.get("message")
+        if not isinstance(message, dict):
+            return None
+        content = message.get("content")
+        return content if isinstance(content, str) and content else None
+
     def run(self, goal: Goal) -> WorkerResult:
         request = urllib.request.Request(
             self.endpoint,
@@ -46,14 +62,10 @@ class LocalLLMAdapter:
         except Exception as exc:  # network adapter boundary: keep failure structured
             return WorkerResult(success=False, summary=str(exc), returncode=1)
 
-        content = (
-            ((payload.get("choices") or [{}])[0].get("message") or {}).get("content")
-            if isinstance(payload, dict)
-            else None
-        )
+        content = self._extract_message_content(payload)
         return WorkerResult(
             success=bool(content),
             summary=str(content or "local LLM returned no content"),
             stdout=json.dumps(payload, sort_keys=True),
+            returncode=0 if content else 1,
         )
-
