@@ -173,6 +173,7 @@ def test_build_supervisor_wires_github_actions_worker_from_config(tmp_path) -> N
                 "github_workflow_id: workflow.yml",
                 "github_token: token",
                 "github_wait: true",
+                "github_api_version: 2026-03-10",
                 "",
             ]
         ),
@@ -183,6 +184,7 @@ def test_build_supervisor_wires_github_actions_worker_from_config(tmp_path) -> N
 
     assert isinstance(supervisor.worker, GitHubActionsAdapter)
     assert supervisor.worker.wait_for_completion is True
+    assert supervisor.worker.api_version == "2026-03-10"
 
 
 def test_build_supervisor_wires_review_command_from_config(tmp_path) -> None:

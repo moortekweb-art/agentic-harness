@@ -11,7 +11,7 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 ## Project Links
 
 - [Examples](examples/) include shell, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.4.0 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.5.0 release checks.
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
 - [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on push and pull requests.
 
@@ -136,7 +136,7 @@ worker = LocalLLMAdapter(
 )
 
 supervisor = Supervisor(project_dir=".", worker=worker)
-supervisor.start("draft release notes for v0.4.0")
+supervisor.start("draft release notes for v0.5.0")
 supervisor.continue_goal()
 supervisor.review()
 ```
@@ -225,6 +225,7 @@ github_repo: agentic-harness
 github_workflow_id: ci.yml
 github_token: token-from-your-secret-store
 github_wait: true
+github_api_version: 2026-03-10
 ```
 
 Configuration is intentionally small and strict: unsupported schema versions,
@@ -273,8 +274,10 @@ review:
 ```
 
 `GitHubActionsAdapter` dispatches workflows by default. Set `github_wait: true`
-or `wait_for_completion=True` to poll workflow_dispatch runs created after the
-dispatch request and return the completed run conclusion and URL.
+or `wait_for_completion=True` to wait for the exact workflow run returned by
+GitHub's modern workflow dispatch API. Older GitHub API responses that do not
+return a run URL fall back to polling workflow_dispatch runs created after the
+dispatch request.
 
 ## Public API
 

@@ -151,6 +151,117 @@ def test_github_actions_adapter_can_wait_for_completed_workflow(monkeypatch) -> 
     assert "created=%3E%3D" in runs_url
 
 
+def test_github_actions_adapter_waits_on_returned_run_url(monkeypatch) -> None:
+    calls = []
+
+    class Response:
+        def __init__(self, status: int, payload: dict[str, object] | None = None) -> None:
+            self.status = status
+            self._payload = payload or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(self._payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.get_method(), request.full_url, dict(request.headers)))
+        if request.get_method() == "POST":
+            return Response(
+                200,
+                {
+                    "workflow_run_id": 456,
+                    "run_url": "https://api.github.com/repos/owner/repo/actions/runs/456",
+                    "html_url": "https://github.com/owner/repo/actions/runs/456",
+                },
+            )
+        return Response(
+            200,
+            {
+                "id": 456,
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://github.com/owner/repo/actions/runs/456",
+            },
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    ticks = iter([0.0, 0.0, 1.0])
+    monkeypatch.setattr("time.monotonic", lambda: next(ticks))
+    adapter = GitHubActionsAdapter(
+        "owner",
+        "repo",
+        "workflow.yml",
+        token="token",
+        wait_for_completion=True,
+        poll_interval=0,
+        timeout=0,
+    )
+
+    result = adapter.run(Goal("ship"))
+
+    assert result.success is True
+    assert result.summary == "GitHub Actions workflow completed: success"
+    assert result.artifacts == ["https://github.com/owner/repo/actions/runs/456"]
+    assert ("GET", "https://api.github.com/repos/owner/repo/actions/runs/456") == calls[1][:2]
+    assert all("/workflows/workflow.yml/runs" not in url for _, url, _ in calls)
+    assert calls[0][2]["X-github-api-version"] == "2026-03-10"
+
+
+def test_github_actions_adapter_builds_run_url_from_returned_run_id(monkeypatch) -> None:
+    calls = []
+
+    class Response:
+        def __init__(self, status: int, payload: dict[str, object]) -> None:
+            self.status = status
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(self._payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        if request.get_method() == "POST":
+            return Response(200, {"workflow_run_id": 789})
+        return Response(
+            200,
+            {
+                "id": 789,
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://github.com/owner/repo/actions/runs/789",
+            },
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    ticks = iter([0.0, 0.0, 1.0])
+    monkeypatch.setattr("time.monotonic", lambda: next(ticks))
+    adapter = GitHubActionsAdapter(
+        "owner",
+        "repo",
+        "workflow.yml",
+        token="token",
+        wait_for_completion=True,
+        poll_interval=0,
+        timeout=0,
+    )
+
+    result = adapter.run(Goal("ship"))
+
+    assert result.success is True
+    assert calls[1] == "https://api.github.com/repos/owner/repo/actions/runs/789"
+
+
 def test_github_actions_wait_does_not_report_older_completed_run(monkeypatch) -> None:
     class Response:
         status = 200

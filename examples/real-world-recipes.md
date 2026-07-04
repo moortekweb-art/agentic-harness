@@ -73,8 +73,9 @@ review_command:
 ## GitHub Actions Worker
 
 Use GitHub Actions when execution should happen in CI instead of on the local
-machine. `github_wait: true` polls workflow runs created after dispatch and
-reports the final conclusion for the newest matching workflow_dispatch run.
+machine. `github_wait: true` waits on the exact workflow run URL returned by
+GitHub's modern workflow dispatch API. Older API responses without a run URL
+fall back to polling workflow_dispatch runs created after dispatch.
 
 ```yaml
 version: 1
@@ -84,6 +85,7 @@ github_repo: agentic-harness
 github_workflow_id: ci.yml
 github_token: token-from-your-secret-store
 github_wait: true
+github_api_version: 2026-03-10
 github_timeout: 600
 review_command:
   - python

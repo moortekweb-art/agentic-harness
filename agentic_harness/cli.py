@@ -139,6 +139,7 @@ def build_supervisor(project_dir: Path) -> Supervisor:
             wait_for_completion=config.github_wait,
             poll_interval=config.github_poll_interval,
             timeout=config.github_timeout,
+            api_version=config.github_api_version,
         )
     criteria = review_criteria_from_config(config, project_dir)
     return Supervisor(

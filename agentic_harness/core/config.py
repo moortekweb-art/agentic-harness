@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ ALLOWED_KEYS = {
     "github_wait",
     "github_poll_interval",
     "github_timeout",
+    "github_api_version",
     "review_command",
     "review_command_timeout",
     "review_artifact",
@@ -62,6 +64,7 @@ class HarnessConfig:
     github_wait: bool = False
     github_poll_interval: float = 5.0
     github_timeout: int = 300
+    github_api_version: str = "2026-03-10"
     review_command: list[str] = field(default_factory=list)
     review_command_timeout: int = 60
     review_artifact: str = ""
@@ -201,6 +204,8 @@ def _parse_str(value: object, key: str) -> str:
         return value
     if isinstance(value, (int, float, bool)):
         return str(value).lower() if isinstance(value, bool) else str(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
     if value is None:
         return ""
     raise ConfigError(f"{key} must be a scalar")
