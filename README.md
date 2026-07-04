@@ -1,63 +1,72 @@
 # Agentic Harness
 
-Multi-model goal execution pipeline running on local GPU infrastructure.
+A local-first goal execution harness with a small core state machine, pluggable execution adapters, deterministic review gates, and a project-local CLI.
+
+This branch is the clean rebuild. The old Node1/Hermes extraction is preserved under `legacy/` as reference material, but the package code is intentionally server-agnostic.
 
 ## Architecture
 
-```
-┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
-│  Planner │───▶│ Executor │───▶│ Reviewer │───▶│  Done /  │
-│ (design) │    │ (build)  │    │ (verify) │    │  Iterate │
-└──────────┘    └──────────┘    └──────────┘    └──────────┘
-```
+### Core Engine
 
-**Planner:** Analyzes goal, writes structured spec, decomposes into tasks
-**Executor:** Implements the plan using code agents (Codex, GLM, Kimi, OpenCode, pi-zai)
-**Reviewer:** Validates output against done criteria, checks for regressions
+`agentic_harness/core/`
 
-## Available Models
+- Versioned goal state: `pending -> planning -> in_progress -> review -> done/failed`
+- Project-local artifact store: `.agentic-harness/runs/<goal-id>/state.json`
+- Deterministic review criteria with typed pass/fail results
+- Auto-continue loop guard
+- Typed harness errors
 
-| Role | Models |
-|------|--------|
-| Planner | Codex/GPT-5.5, GLM-5.2, Kimi, DeepSeek-v4-Pro, thinkmax, none |
-| Reviewer | Same set (cross-review capable) |
-| Executor | OpenCode, Qwen, Aider, mini-swe |
-| Worker | Codex, GLM-5.2-direct, Kimi, OpenCode-build, pi-zai variants |
+### Adapters
 
-## Hardware
+`agentic_harness/adapters/`
 
-- **node1:** 2× RTX 5090 (64GB VRAM)
-- **node2:** 2× RTX 4090 (48GB VRAM)
-- **Total pool:** 112GB across 2 nodes
-- **Production model:** Ornith 1.0 35B FP8, 196K context, served via vLLM with tensor parallel=2
+- `ShellWorker` for subprocess execution
+- `TmuxWorker` for detached interactive sessions
+- `GitHubActionsAdapter` for workflow dispatch
+- `LocalLLMAdapter` for OpenAI-compatible local endpoints
 
-## Files
+Adapters are plugins from the core engine's perspective. The supervisor only depends on the `Worker` protocol.
 
-```
-scripts/
-  local-node1-goal-manager.py      — goal lifecycle manager (CLI)
-  local-node1-goal-supervisor.py   — GLM-5.2 supervisor, orchestrates planner→executor→reviewer
-  local-node1-goal-command.py      — thin command shim (entry point)
-  local_node1_goal_command_impl.py — full command implementation
-  local-node1-goal-worker.py       — worker execution wrapper
-  local-node1-goal-current-truth.py — runtime state probe
-  local_node1_goal_phases.py       — typed phase state machine + GoalState model
+### CLI
 
-tests/
-  8 test files, 219 tests total, all passing
-
-docs/
-  reports/   — coverage analysis, security audit, dedup audit
-  agentic-harness-future-ideas.md — 10 use case ideas for later review
+```bash
+agentic-harness init
+agentic-harness start "ship a feature"
+agentic-harness status
+agentic-harness continue
+agentic-harness review
+agentic-harness repair
+agentic-harness doctor
 ```
 
-## Status
+Config lives in `.agentic-harness/config.yml` and is intentionally gitignored.
 
-Working and tested. Used in production for AI infrastructure automation.
+## Install Locally
 
-## Security
+```bash
+pipx install .
+```
 
-- Path traversal protection on all worker output paths
-- Chat-safe output suppression (no artifact dumps in Telegram)
-- Shell metacharacter sanitization
-- Typed phase state machine prevents invalid transitions
+For development:
+
+```bash
+python -m pytest tests/ -q
+python -c "from agentic_harness import Goal, Supervisor, Worker"
+python -m agentic_harness.cli init
+python -m agentic_harness.cli doctor
+```
+
+## Public API
+
+```python
+from agentic_harness import Goal, Supervisor, Worker
+```
+
+## Legacy Reference
+
+The original extracted Node1 harness scripts and tests remain under:
+
+- `legacy/scripts/`
+- `legacy/tests/`
+
+They are not imported by the clean package.

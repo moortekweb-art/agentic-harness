@@ -14,6 +14,7 @@ build/
 htmlcov/
 
 # State / runtime artifacts
+.agentic-harness/
 *.json.bak
 complete.json
 session.log
