@@ -94,6 +94,53 @@ def test_loop_guard_trips_after_configured_continue_count() -> None:
         guard.record_continue()
 
 
+def test_loop_guard_persists_events_across_instances(tmp_path) -> None:
+    path = tmp_path / "guard.json"
+
+    LoopGuard(
+        max_continues=1,
+        window_seconds=60,
+        state_path=path,
+        clock=lambda: 100.0,
+    ).record_continue()
+
+    with pytest.raises(LoopGuardTripped):
+        LoopGuard(
+            max_continues=1,
+            window_seconds=60,
+            state_path=path,
+            clock=lambda: 101.0,
+        ).record_continue()
+
+
+def test_loop_guard_prunes_expired_persisted_events(tmp_path) -> None:
+    path = tmp_path / "guard.json"
+
+    LoopGuard(
+        max_continues=1,
+        window_seconds=60,
+        state_path=path,
+        clock=lambda: 100.0,
+    ).record_continue()
+
+    LoopGuard(
+        max_continues=1,
+        window_seconds=60,
+        state_path=path,
+        clock=lambda: 161.0,
+    ).record_continue()
+
+
+def test_supervisor_uses_project_local_loop_guard_state(tmp_path) -> None:
+    worker = RecordingWorker(WorkerResult(success=True, summary="implemented"))
+    supervisor = Supervisor(project_dir=tmp_path, worker=worker)
+
+    supervisor.start("persist guard")
+    supervisor.continue_goal()
+
+    assert (tmp_path / ".agentic-harness" / "guard.json").exists()
+
+
 def test_repair_restores_missing_current_marker(tmp_path) -> None:
     supervisor = Supervisor(project_dir=tmp_path)
     goal = supervisor.start("repair marker")

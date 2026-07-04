@@ -26,7 +26,9 @@ class Supervisor:
         self.store = ArtifactStore(self.project_dir / ".agentic-harness")
         self.worker = worker
         self.reviewer = reviewer or DeterministicReviewer()
-        self.loop_guard = loop_guard or LoopGuard()
+        self.loop_guard = loop_guard or LoopGuard(
+            state_path=self.store.root / "guard.json"
+        )
 
     def init(self) -> None:
         self.store.init()
@@ -85,4 +87,3 @@ class Supervisor:
         if self.worker is None:
             return WorkerResult(success=True, summary="no worker configured")
         return self.worker.run(goal)
-

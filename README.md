@@ -60,7 +60,9 @@ The core package has no systemd, Cloudflare, GPU, or server-specific assumptions
 
 - Deterministic review gates: pass/fail criteria are code, not model vibes.
 - Artifact-first execution: every goal writes structured JSON state and review data.
-- Loop guard: auto-continue has a circuit breaker.
+- Loop guard: auto-continue has a project-local circuit breaker persisted at
+  `.agentic-harness/guard.json`, so repeated CLI invocations share the same
+  safety window.
 - Adapter system: shell, tmux, GitHub Actions, and OpenAI-compatible local LLM adapters are included.
 - Project-local config: no hardcoded absolute paths.
 - Small public API: `Goal`, `Supervisor`, and `Worker`.
