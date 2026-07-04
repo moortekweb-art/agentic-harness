@@ -11,7 +11,7 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 ## Project Links
 
 - [Examples](examples/) include shell, local LLM, and tmux worker examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.1.0 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.2.0 release checks.
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
 - [CI workflow](.github/workflows/ci.yml) runs tests and CLI smoke checks on push and pull requests.
 
@@ -130,7 +130,7 @@ worker = LocalLLMAdapter(
 )
 
 supervisor = Supervisor(project_dir=".", worker=worker)
-supervisor.start("draft release notes for v0.1.0")
+supervisor.start("draft release notes for v0.2.0")
 supervisor.continue_goal()
 supervisor.review()
 ```

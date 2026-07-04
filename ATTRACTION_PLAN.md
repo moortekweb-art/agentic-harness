@@ -140,7 +140,7 @@ SWE-agent is stronger for benchmark-style software engineering tasks. Agentic Ha
 
 ### Week 4
 
-- Cut a tagged `v0.1.0` release.
+- Cut a tagged `v0.2.0` release.
 - Record a two-minute terminal demo.
 - Share the Twitter/X thread.
 - Decide whether PyPI publishing is warranted based on stars, issues, and actual users.
