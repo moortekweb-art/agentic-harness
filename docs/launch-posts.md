@@ -27,7 +27,7 @@ The motivation was practical: I wanted a minimal control plane for local coding 
 
 Current status:
 
-- 63 current-package tests
+- 65 current-package tests
 - CI green with tests, ruff, mypy, package build, and wheel install
 - MIT licensed
 - Python 3.11+
@@ -65,7 +65,7 @@ It is meant for people who already have local tools, local GPUs, tmux sessions, 
 
 It does not require a hosted agent service. The core package is intentionally small and the provider-specific pieces belong in adapters.
 
-Verified status right now: 63 current-package tests, CI green with ruff/mypy/build smoke, MIT licensed, Python 3.11+, pipx-installable from GitHub.
+Verified status right now: 65 current-package tests, CI green with ruff/mypy/build smoke, MIT licensed, Python 3.11+, pipx-installable from GitHub.
 
 Repo: [link to repo]
 Case study: [link to case study]
@@ -96,7 +96,7 @@ The focus is not on a new model or prompting technique. It is a control loop aro
 
 The reason for building it was that long-running agent workflows need an auditable state machine and explicit pass/fail review gates, especially when the worker might be a local LLM endpoint, a tmux process, or a shell command.
 
-Current verified state: 63 current-package tests, CI green with ruff/mypy/build smoke, MIT license, Python 3.11+, pipx-installable from GitHub.
+Current verified state: 65 current-package tests, CI green with ruff/mypy/build smoke, MIT license, Python 3.11+, pipx-installable from GitHub.
 
 Repo: [link to repo]
 Case study: [link to case study]
@@ -131,7 +131,7 @@ Runtime state lives in .agentic-harness/ inside the project, so a run can be ins
 ```text
 4/ Current verified status:
 
-- 63 current-package tests
+- 65 current-package tests
 - CI green with ruff/mypy/build smoke
 - MIT licensed
 - Python 3.11+

@@ -393,6 +393,38 @@ def test_cli_start_status_continue_review_round_trip(tmp_path, capsys) -> None:
     assert status["id"] == started["id"]
 
 
+def test_cli_status_text_reports_no_active_goal(tmp_path, capsys) -> None:
+    assert main(["--project-dir", str(tmp_path), "init"]) == 0
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "status", "--format", "text"])
+
+    assert rc == 0
+    assert capsys.readouterr().out == "No active goal.\n"
+
+
+def test_cli_status_text_summarizes_active_goal(tmp_path, capsys) -> None:
+    assert main(["--project-dir", str(tmp_path), "init"]) == 0
+    config_path = tmp_path / ".agentic-harness" / "config.yml"
+    config_path.write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    assert main(["--project-dir", str(tmp_path), "run", "ship text status"]) == 0
+    capsys.readouterr()
+    rc = main(["--project-dir", str(tmp_path), "status", "--format", "text"])
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "Goal:" in output
+    assert "Objective: ship text status" in output
+    assert "Status: done" in output
+    assert "Worker: success" in output
+    assert "Review: passed" in output
+
+
 def test_cli_run_executes_start_continue_review_round_trip(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"

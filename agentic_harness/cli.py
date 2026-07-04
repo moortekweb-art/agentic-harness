@@ -27,7 +27,7 @@ from agentic_harness.core.review import (
     file_changed,
     git_clean,
 )
-from agentic_harness.core.state import GoalStatus
+from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.supervisor import Supervisor
 from agentic_harness.core.worker import Worker
 
@@ -45,7 +45,13 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("objective")
     run = sub.add_parser("run", help="Start, continue, and review a goal")
     run.add_argument("objective")
-    sub.add_parser("status", help="Show current goal state")
+    status = sub.add_parser("status", help="Show current goal state")
+    status.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="json",
+        help="Output format.",
+    )
     sub.add_parser("continue", help="Advance the active goal")
     sub.add_parser("review", help="Run deterministic review")
     sub.add_parser("repair", help="Repair marker-only failures")
@@ -84,13 +90,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if goal.status is GoalStatus.DONE else 1
         if args.command == "status":
             active_goal = supervisor.status()
-            print(
-                json.dumps(
-                    active_goal.to_dict() if active_goal else {"active": False},
-                    indent=2,
-                    sort_keys=True,
+            if args.format == "text":
+                print(format_status_text(active_goal))
+            else:
+                print(
+                    json.dumps(
+                        active_goal.to_dict() if active_goal else {"active": False},
+                        indent=2,
+                        sort_keys=True,
+                    )
                 )
-            )
             return 0
         if args.command == "continue":
             goal = supervisor.continue_goal()
@@ -179,6 +188,33 @@ def review_criteria_from_config(config: HarnessConfig, project_dir: Path) -> lis
     if config.review_git_clean:
         criteria.append(git_clean(project_dir))
     return criteria
+
+
+def format_status_text(goal: Goal | None) -> str:
+    if goal is None:
+        return "No active goal."
+    worker_success = goal.metadata.get("worker_success")
+    worker = "not run"
+    if worker_success is True:
+        worker = "success"
+    elif worker_success is False:
+        worker = "failed"
+    review = "not run"
+    if isinstance(goal.review, dict):
+        review = "passed" if goal.review.get("passed") is True else "failed"
+    lines = [
+        f"Goal: {goal.id}",
+        f"Objective: {goal.objective}",
+        f"Status: {goal.status.value}",
+        f"Worker: {worker}",
+        f"Review: {review}",
+    ]
+    if goal.error:
+        lines.append(f"Error: {goal.error}")
+    if goal.artifacts:
+        lines.append("Artifacts:")
+        lines.extend(f"- {artifact}" for artifact in goal.artifacts)
+    return "\n".join(lines)
 
 
 def doctor(project_dir: str | Path = ".") -> dict[str, object]:

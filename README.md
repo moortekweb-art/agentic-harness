@@ -11,7 +11,7 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.2 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.3 release checks.
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
 - [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on push and pull requests.
 
@@ -128,6 +128,12 @@ agentic-harness start "summarize open TODOs"
 agentic-harness continue
 agentic-harness review
 agentic-harness status
+```
+
+For a compact operator view instead of JSON:
+
+```bash
+agentic-harness status --format text
 ```
 
 ### Local LLM Worker
