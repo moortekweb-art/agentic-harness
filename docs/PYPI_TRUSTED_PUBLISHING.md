@@ -26,8 +26,28 @@ Configure a PyPI trusted publisher for:
 - Workflow: `.github/workflows/publish.yml`
 - Environment: `pypi`
 
+The observed GitHub/PyPI trusted-publishing claims from the first `v0.6.9`
+release attempt were:
+
+- `sub`: `repo:moortekweb-art/agentic-harness:environment:pypi`
+- `repository`: `moortekweb-art/agentic-harness`
+- `repository_owner`: `moortekweb-art`
+- `workflow_ref`: `moortekweb-art/agentic-harness/.github/workflows/publish.yml@refs/tags/v0.6.9`
+- `ref`: `refs/tags/v0.6.9`
+- `environment`: `pypi`
+
 After the external PyPI setup exists, publishing a GitHub release runs the
 `Publish` workflow and uploads the distributions built from that release.
+
+## Current Publish Status
+
+The active workflow ran on `v0.6.9` and reached the PyPI trusted-publishing
+exchange. PyPI rejected it with `invalid-publisher`, meaning the GitHub workflow
+is active but PyPI does not yet have a matching trusted publisher configured for
+this project.
+
+After configuring the PyPI trusted publisher, rerun the failed `Publish`
+workflow or publish a new release tag.
 
 ## Manual Verification
 
@@ -35,6 +55,7 @@ After the external PyPI setup exists, publishing a GitHub release runs the
 python -m build --outdir /tmp/agentic-harness-dist
 python -m pip index versions local-agentic-harness
 gh release view v0.6.9 --repo moortekweb-art/agentic-harness
+gh run view 28703761225 --repo moortekweb-art/agentic-harness --log-failed
 ```
 
 The publish workflow should not use `PYPI_TOKEN`, `username`, or `password`.
