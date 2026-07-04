@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for a v0.6.6 release.
+Use this checklist for a v0.6.7 release.
 
 ## Before Tagging
 
@@ -46,14 +46,14 @@ Use this checklist for a v0.6.6 release.
 Create and push the tag:
 
 ```bash
-git tag v0.6.6
-git push origin v0.6.6
+git tag v0.6.7
+git push origin v0.6.7
 ```
 
 Create the GitHub release:
 
 ```bash
-gh release create v0.6.6 --title "v0.6.6" --notes-file docs/RELEASE_NOTES_0.6.6.md
+gh release create v0.6.7 --title "v0.6.7" --notes-file docs/RELEASE_NOTES_0.6.7.md
 ```
 
 ## Future Manual Publishing

@@ -366,3 +366,14 @@ def test_artifact_store_rejects_report_name_path_escape(tmp_path) -> None:
         store.write_report(goal, "# Escape\n", name="../escape.md")
 
     assert not (tmp_path / ".agentic-harness" / "runs" / "escape.md").exists()
+
+
+def test_artifact_store_relative_root_records_project_local_report(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    store = ArtifactStore(".agentic-harness")
+    goal = Goal("write relative report")
+
+    report_path = store.write_report(goal, "# Report\n")
+
+    assert report_path == tmp_path / ".agentic-harness" / "runs" / goal.id / "report.md"
+    assert goal.artifacts == [f".agentic-harness/runs/{goal.id}/report.md"]
