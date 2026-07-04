@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for a v0.6.3 release.
+Use this checklist for a v0.6.4 release.
 
 ## Before Tagging
 
@@ -46,16 +46,19 @@ Use this checklist for a v0.6.3 release.
 Create and push the tag:
 
 ```bash
-git tag v0.6.3
-git push origin v0.6.3
+git tag v0.6.4
+git push origin v0.6.4
 ```
 
 Create the GitHub release:
 
 ```bash
-gh release create v0.6.3 --title "v0.6.3" --notes-file docs/RELEASE_NOTES_0.6.3.md
+gh release create v0.6.4 --title "v0.6.4" --notes-file docs/RELEASE_NOTES_0.6.4.md
 ```
 
 ## Future Manual Publishing
 
-PyPI publishing is intentionally not part of this release checklist execution. Treat packaging and publishing to PyPI as a separate future/manual step after credentials, ownership, and release process are confirmed.
+PyPI publishing has a workflow template at `docs/templates/publish.yml`. To make
+it active, copy it to `.github/workflows/publish.yml` using a credential with
+GitHub `workflow` permission, then complete the external trusted publisher setup
+documented in `docs/PYPI_TRUSTED_PUBLISHING.md`.

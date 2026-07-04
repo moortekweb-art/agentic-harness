@@ -43,3 +43,38 @@ def test_documented_harness_yaml_snippets_parse_as_config(tmp_path) -> None:
         config = load_config(project)
 
         assert config.worker, f"{doc} snippet {index} did not set worker"
+
+
+def test_killer_demo_contains_runnable_fix_failing_tests_loop() -> None:
+    root = Path("examples/fix-failing-tests-demo")
+
+    assert (root / "README.md").exists()
+    assert (root / ".agentic-harness" / "config.yml").exists()
+    assert (root / "mock_coding_agent.py").exists()
+    assert (root / "tests" / "test_calculator.py").exists()
+
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    config = (root / ".agentic-harness" / "config.yml").read_text(encoding="utf-8")
+
+    assert 'agentic-harness run "fix failing tests"' in readme
+    assert "type: coding_agent" in config
+    assert "mock_coding_agent.py" in config
+    assert "pytest" in config
+
+
+def test_repo_artwork_assets_exist() -> None:
+    social = Path("docs/assets/agentic-harness-social-preview.png")
+    icon = Path("docs/assets/agentic-harness-icon.png")
+
+    assert social.exists()
+    assert icon.exists()
+    assert social.stat().st_size > 100_000
+    assert icon.stat().st_size > 100_000
+
+
+def test_license_and_authors_credit_michael_moortekweb() -> None:
+    license_text = Path("LICENSE").read_text(encoding="utf-8")
+    authors = Path("AUTHORS.md").read_text(encoding="utf-8")
+
+    assert "Copyright (c) 2026 Michael / Moortekweb" in license_text
+    assert "Agentic Harness was created by Michael / Moortekweb." in authors

@@ -1,5 +1,7 @@
 # Agentic Harness
 
+![Agentic Harness social preview](docs/assets/agentic-harness-social-preview.png)
+
 [![CI](https://github.com/moortekweb-art/agentic-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/moortekweb-art/agentic-harness/actions)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -10,8 +12,10 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 
 ## Project Links
 
-- [Examples](examples/) include shell, coding-agent, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.3 release checks.
+- [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.4 release checks.
+- [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the external PyPI setup required for tokenless publishing.
+- [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
 - [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on push and pull requests.
 
@@ -109,6 +113,8 @@ python -m pytest tests/ -q
 ## Usage Examples
 
 See [examples/](examples/) for complete project-local examples with READMEs, safety notes, and expected output.
+For the critique-driven demo, see
+[examples/fix-failing-tests-demo](examples/fix-failing-tests-demo/).
 
 ### Shell Worker
 
@@ -331,4 +337,5 @@ Keep the core small. If a feature assumes a particular server, model provider, o
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. Copyright (c) 2026 Michael / Moortekweb. See [LICENSE](LICENSE) and
+[AUTHORS.md](AUTHORS.md).
