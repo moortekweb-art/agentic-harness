@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for a v0.6.5 release.
+Use this checklist for a v0.6.6 release.
 
 ## Before Tagging
 
@@ -46,19 +46,20 @@ Use this checklist for a v0.6.5 release.
 Create and push the tag:
 
 ```bash
-git tag v0.6.5
-git push origin v0.6.5
+git tag v0.6.6
+git push origin v0.6.6
 ```
 
 Create the GitHub release:
 
 ```bash
-gh release create v0.6.5 --title "v0.6.5" --notes-file docs/RELEASE_NOTES_0.6.5.md
+gh release create v0.6.6 --title "v0.6.6" --notes-file docs/RELEASE_NOTES_0.6.6.md
 ```
 
 ## Future Manual Publishing
 
-PyPI publishing has a workflow template at `docs/templates/publish.yml`. To make
-it active, copy it to `.github/workflows/publish.yml` using a credential with
-GitHub `workflow` permission, then complete the external trusted publisher setup
-documented in `docs/PYPI_TRUSTED_PUBLISHING.md`.
+PyPI publishing has a workflow template at `docs/templates/publish.yml` for the
+`moortek-agentic-harness` distribution. To make it active, copy it to
+`.github/workflows/publish.yml` using a credential with GitHub `workflow`
+permission, then complete the external trusted publisher setup documented in
+`docs/PYPI_TRUSTED_PUBLISHING.md`.
