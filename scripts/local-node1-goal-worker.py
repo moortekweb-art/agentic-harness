@@ -12,25 +12,25 @@ import argparse
 import json
 import os
 import subprocess
-from datetime import datetime, timezone
+import sys
 from pathlib import Path
 
 
-MANAGER = Path("/mnt/raid0/documentation/scripts/local-node1-goal-manager.py")
-PROFILE = Path("/mnt/raid0/home-ai-inference/.hermes-control/profiles/controller")
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from local_node1_goal_phases import (
+    DOC_ROOT,
+    MANAGER,
+    PROFILE,
+    now_iso as now,
+    parse_error_record,
+    write_secure_file,
+)
+
 ALLOWED_OUTPUT_ROOTS = (PROFILE / "reports", PROFILE / "worker-runs")
 STATE_ROOT = Path("/mnt/raid0/documentation/reports/local-node1-goal-harness")
 PROMPT_DIR = STATE_ROOT / "prompts"
-DOC_ROOT = Path("/mnt/raid0/documentation")
-
-
-def now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def run(
@@ -56,12 +56,15 @@ def manager_status() -> dict:
     proc = run(["python3", str(MANAGER), "status", "--json"], timeout=90)
     try:
         return json.loads(proc.stdout)
-    except Exception:
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
         return {
             "error": "manager status unreadable",
             "returncode": proc.returncode,
             "stdout_tail": proc.stdout[-2000:],
             "stderr_tail": proc.stderr[-2000:],
+            "_parse_errors": [
+                parse_error_record(exc, "manager status stdout", proc.stdout)
+            ],
         }
 
 
@@ -141,7 +144,7 @@ def write_artifacts(
             "",
         ]
     )
-    report_path.write_text(report, encoding="utf-8")
+    write_secure_file(report_path, report, 0o640)
 
     payload = {
         "contract": "terminal_worker_result.v1",
@@ -165,9 +168,7 @@ def write_artifacts(
         "next_recommended_action": next_action,
         "generated_at": now(),
     }
-    status_path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    write_secure_file(status_path, json.dumps(payload, indent=2, sort_keys=True) + "\n", 0o600)
     return 0 if status == "completed" else 1
 
 
@@ -197,7 +198,7 @@ def main() -> int:
     PROMPT_DIR.mkdir(parents=True, exist_ok=True)
     prompt_copy = PROMPT_DIR / f"{args.task_id}.md"
     prompt_text = prompt_source.read_text(encoding="utf-8")
-    prompt_copy.write_text(prompt_text, encoding="utf-8")
+    write_secure_file(prompt_copy, prompt_text, 0o600)
 
     if tmux_running(session):
         return write_artifacts(

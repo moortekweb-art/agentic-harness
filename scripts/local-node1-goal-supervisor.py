@@ -27,13 +27,15 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 from local_node1_goal_phases import migrate_legacy_goal_state
-
-DOC_ROOT = (
-    Path(os.environ.get("DOC_ROOT", "/mnt/raid0/documentation")).expanduser().resolve()
+from local_node1_goal_phases import (
+    DOC_ROOT,
+    HERMES_ROOT,
+    LOCAL_GOAL_WRAPPER,
+    MANAGER,
+    now_iso as now,
+    parse_error_record,
+    write_secure_file,
 )
-MANAGER = DOC_ROOT / "scripts/local-node1-goal-manager.py"
-LOCAL_GOAL_WRAPPER = DOC_ROOT / "scripts/local-goal"
-HERMES_ROOT = Path("/mnt/raid0/home-ai-inference/.hermes-control/profiles/controller")
 COMMAND_SHIM = HERMES_ROOT / "scripts/local-node1-goal-command.py"
 CURRENT_TRUTH = HERMES_ROOT / "scripts/local-node1-goal-current-truth.py"
 HERMES_AGENT_ROOT = Path("/mnt/raid0/home-ai-inference/hermes-agent")
@@ -137,15 +139,6 @@ NO_PROGRESS_REVIEW_CHECKS = {
 }
 
 
-def now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
-
-
 def queue_item_id(existing_items: list[dict[str, Any]] | None = None) -> str:
     """Return a queue id that stays unique for same-second parallel enqueues."""
     existing = {
@@ -195,14 +188,15 @@ def run(
 
 def set_monitor_phase(phase: str, detail: str = "") -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    SUPERVISOR_PHASE_JSON.write_text(
+    write_secure_file(
+        SUPERVISOR_PHASE_JSON,
         json.dumps(
             {"detail": detail, "phase": phase, "updated_at": now()},
             indent=2,
             sort_keys=True,
         )
         + "\n",
-        encoding="utf-8",
+        0o600,
     )
 
 
@@ -414,7 +408,8 @@ def maybe_notify_operator(
             )
     except Exception as exc:
         error = str(exc)
-    SUPERVISOR_NOTIFY_STATE.write_text(
+    write_secure_file(
+        SUPERVISOR_NOTIFY_STATE,
         json.dumps(
             {
                 "generated_at": now(),
@@ -428,7 +423,7 @@ def maybe_notify_operator(
             sort_keys=True,
         )
         + "\n",
-        encoding="utf-8",
+        0o600,
     )
     return {
         "attempted": True,
@@ -437,21 +432,6 @@ def maybe_notify_operator(
         "reason": "sent" if sent else "not_sent",
         "state_path": str(SUPERVISOR_NOTIFY_STATE),
     }
-
-
-def _read_last_supervisor_event() -> dict[str, Any] | None:
-    """Return the latest supervisor event without loading the full file."""
-    if not SUPERVISOR_EVENTS_JSONL.exists():
-        return None
-    try:
-        lines = SUPERVISOR_EVENTS_JSONL.read_text(encoding="utf-8").splitlines()
-        for line in reversed(lines):
-            if not line.strip():
-                continue
-            return json.loads(line)
-    except Exception:
-        return None
-    return None
 
 
 def _read_supervisor_events(*, limit: int = 10) -> list[dict[str, Any]]:
@@ -488,7 +468,7 @@ def _append_supervisor_event(event: dict[str, Any]) -> None:
             # If the event log is corrupt or unparseable, rotate cleanly.
             events.clear()
     events.append(json.dumps(event, sort_keys=True, ensure_ascii=True))
-    SUPERVISOR_EVENTS_JSONL.write_text("\n".join(events) + "\n", encoding="utf-8")
+    write_secure_file(SUPERVISOR_EVENTS_JSONL, "\n".join(events) + "\n", 0o600)
 
 
 def manager_json() -> dict[str, Any]:
@@ -637,11 +617,24 @@ def auto_continue_after_disposition_failure(
 
 def load_queue() -> dict[str, Any]:
     try:
-        data = json.loads(QUEUE_JSON.read_text(encoding="utf-8"))
+        text = QUEUE_JSON.read_text(encoding="utf-8")
+        data = json.loads(text)
         if isinstance(data, dict):
             data.setdefault("items", [])
             return data
-    except Exception:
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        return {
+            "contract": "local_node1_goal_queue.v1",
+            "items": [],
+            "_parse_errors": [
+                parse_error_record(
+                    exc,
+                    str(QUEUE_JSON),
+                    text if "text" in locals() else "",
+                )
+            ],
+        }
+    except FileNotFoundError:
         pass
     return {"contract": "local_node1_goal_queue.v1", "items": []}
 
@@ -649,9 +642,7 @@ def load_queue() -> dict[str, Any]:
 def write_queue(queue: dict[str, Any]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     queue["updated_at"] = now()
-    QUEUE_JSON.write_text(
-        json.dumps(queue, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    write_secure_file(QUEUE_JSON, json.dumps(queue, indent=2, sort_keys=True) + "\n", 0o600)
 
 
 def normalize_queue_item_ids(queue: dict[str, Any]) -> list[dict[str, Any]]:
@@ -4715,9 +4706,9 @@ def hermes_integration_audit(status: dict[str, Any] | None = None) -> dict[str, 
     """
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = STATE_DIR / "local-node1-goal-integration-audit.lock"
-    lock_path.touch(exist_ok=True)
-
-    with open(lock_path, "w") as lock_fh:
+    lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+    os.chmod(lock_path, 0o600)
+    with os.fdopen(lock_fd, "w", encoding="utf-8") as lock_fh:
         try:
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -5964,9 +5955,10 @@ def write_integration_audit_artifacts(payload: dict[str, Any]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     json_tmp = INTEGRATION_AUDIT_JSON.with_suffix(".json.tmp")
-    json_tmp.write_text(
+    write_secure_file(
+        json_tmp,
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+        0o600,
     )
     json_tmp.replace(INTEGRATION_AUDIT_JSON)
     lines = [
@@ -6013,7 +6005,7 @@ def write_integration_audit_artifacts(payload: dict[str, Any]) -> None:
         ]
     )
     md_tmp = INTEGRATION_AUDIT_MD.with_suffix(".md.tmp")
-    md_tmp.write_text("\n".join(lines), encoding="utf-8")
+    write_secure_file(md_tmp, "\n".join(lines), 0o640)
     md_tmp.replace(INTEGRATION_AUDIT_MD)
 
 
@@ -6074,9 +6066,7 @@ def write_mission(mission: dict[str, Any]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     mission["updated_at"] = now()
     tmp = MISSION_JSON.with_suffix(".tmp")
-    tmp.write_text(
-        json.dumps(mission, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    write_secure_file(tmp, json.dumps(mission, indent=2, sort_keys=True) + "\n", 0o600)
     tmp.replace(MISSION_JSON)  # atomic rename on POSIX
 
 
@@ -6120,7 +6110,7 @@ def read_json_file(path: Path) -> dict[str, Any]:
 def write_json_file(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_secure_file(tmp, json.dumps(data, indent=2, sort_keys=True) + "\n", 0o600)
     tmp.replace(path)
 
 
@@ -7418,9 +7408,8 @@ def synthesize_cloud_completion_marker(
             }
         new_owned = [path for path in files_changed if path not in existing_owned]
         if new_owned:
-            with owned_file.open("a", encoding="utf-8") as handle:
-                for path in new_owned:
-                    handle.write(f"{path}\n")
+            owned_lines = [*sorted(existing_owned), *new_owned]
+            write_secure_file(owned_file, "\n".join(owned_lines) + "\n", 0o600)
         write_json_file(run_dir / "complete.json", marker)
         write_json_file(
             run_dir / "loop-state.json",
@@ -8219,9 +8208,10 @@ def _auto_continue_loop_state() -> dict[str, Any]:
 
 def _write_auto_continue_loop_state(data: dict[str, Any]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    AUTO_CONTINUE_LOOP_STATE.write_text(
+    write_secure_file(
+        AUTO_CONTINUE_LOOP_STATE,
         json.dumps(data, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+        0o600,
     )
 
 
@@ -9168,8 +9158,10 @@ def write_supervisor_state(
         payload, quiet_stdout=quiet_notify_stdout
     )
 
-    SUPERVISOR_JSON.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    write_secure_file(
+        SUPERVISOR_JSON,
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        0o600,
     )
 
     lines = [
@@ -9255,7 +9247,7 @@ def write_supervisor_state(
             )
 
     lines.append("")
-    SUPERVISOR_MD.write_text("\n".join(lines), encoding="utf-8")
+    write_secure_file(SUPERVISOR_MD, "\n".join(lines), 0o640)
     return payload
 
 
@@ -9575,8 +9567,7 @@ def cmd_handoff_current(args: argparse.Namespace) -> int:
     handoff_text = "\n".join(lines)
     if args.output:
         out_path = Path(args.output)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(handoff_text, encoding="utf-8")
+        write_secure_file(out_path, handoff_text, 0o640)
         print(f"handoff_written={out_path}")
     else:
         print(handoff_text)
@@ -10105,7 +10096,7 @@ def monitor(args: argparse.Namespace) -> int:
             # Generate the recovery prompt and write it
             recovery_prompt = _generate_targeted_recovery_prompt(status)
             recovery_path = STATE_DIR / "recovery-prompt.md"
-            recovery_path.write_text(recovery_prompt, encoding="utf-8")
+            write_secure_file(recovery_path, recovery_prompt, 0o600)
             if review is None:
                 review = {}
             trigger = (

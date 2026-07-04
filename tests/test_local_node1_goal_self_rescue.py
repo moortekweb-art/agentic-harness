@@ -402,7 +402,7 @@ class TestTargetedRecoveryPrompt:
                                     return_value={},
                                 ):
                                     with mock.patch.object(
-                                        Path, "write_text"
+                                        supervisor, "write_secure_file"
                                     ) as mock_write:
                                         args = mock.Mock(
                                             auto_accept=False,
@@ -411,29 +411,13 @@ class TestTargetedRecoveryPrompt:
                                             json=False,
                                         )
                                         supervisor.monitor(args)
-                                        # write_text is a method, so the path is `self`
-                                        # on the mock instance.  Check that at least
-                                        # one call was made on a path containing
-                                        # "recovery-prompt".
-                                        write_called = False
-                                        for call in mock_write.call_args_list:
-                                            # call[0] is positional args; the first
-                                            # positional arg after self is the text.
-                                            # The self (the path instance) is not in
-                                            # call_args_list positional args for a
-                                            # bound method mock.  Instead, check that
-                                            # write_text was called and that the
-                                            # supervisor code path ran (which we can
-                                            # verify by checking the call count).
-                                            write_called = True
-                                        # Fallback: if write_text was called at all
-                                        # during the monitor pass with the stuck
-                                        # classification, the recovery prompt was
-                                        # generated.  Also verify the targeted_recovery
-                                        # key exists in the supervisor state.
-                                        assert write_called, (
-                                            "Path.write_text was not called during "
-                                            "monitor — recovery prompt was not written"
+                                        assert any(
+                                            "recovery-prompt.md" in str(call.args[0])
+                                            and call.args[2] == 0o600
+                                            for call in mock_write.call_args_list
+                                        ), (
+                                            "write_secure_file was not called for "
+                                            "recovery-prompt.md during monitor"
                                         )
 
     def test_prompt_tells_worker_to_fix_or_write_honest_incomplete(self):

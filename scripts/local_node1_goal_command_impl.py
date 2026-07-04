@@ -13,30 +13,24 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
-from local_node1_goal_phases import Phase, goal_state_from_payload
-
-SUPERVISOR = Path(
-    "/mnt/raid0/home-ai-inference/.hermes-control/profiles/controller/scripts/"
-    "local-node1-goal-supervisor.py"
+from local_node1_goal_phases import (
+    COMMAND_REPORT_PATH as REPORT_PATH,
+    COMMAND_STATE_PATH as STATE_PATH,
+    DOC_ROOT,
+    LOCAL_GOAL_WRAPPER as WRAPPER,
+    MANAGER,
+    SUPERVISOR,
+    Phase,
+    goal_state_from_payload,
+    now_iso as now,
+    write_secure_file,
 )
-MANAGER = Path("/mnt/raid0/documentation/scripts/local-node1-goal-manager.py")
-WRAPPER = Path("/mnt/raid0/documentation/scripts/local-goal")
-STATE_PATH = Path(
-    "/mnt/raid0/home-ai-inference/.hermes-control/profiles/controller/state/"
-    "local-node1-goal-command-latest.json"
-)
-REPORT_PATH = Path(
-    "/mnt/raid0/home-ai-inference/.hermes-control/profiles/controller/reports/"
-    "local-node1-goal-command-latest.md"
-)
-DOC_ROOT = Path("/mnt/raid0/documentation")
 NO_FOOTER_INTENTS = {
     "brief",
     "doctor",
@@ -68,15 +62,6 @@ NO_FOOTER_INTENTS = {
     "ready-review",
     "can-accept",
 }
-
-
-def now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def normalize(text: str) -> str:
@@ -7862,10 +7847,9 @@ def write_artifacts(
     ):
         envelope = doctor_envelope_status(supervisor_payload.get("doctor_state"))
         payload.update(envelope)
-    STATE_PATH.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    REPORT_PATH.write_text(
+    write_secure_file(STATE_PATH, json.dumps(payload, indent=2, sort_keys=True) + "\n", 0o600)
+    write_secure_file(
+        REPORT_PATH,
         "\n".join(
             [
                 "# Local Node1 Goal Command",
@@ -7884,7 +7868,7 @@ def write_artifacts(
                 "",
             ]
         ),
-        encoding="utf-8",
+        0o640,
     )
 
 

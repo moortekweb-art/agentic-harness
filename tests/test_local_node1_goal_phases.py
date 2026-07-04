@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import sys
 from pathlib import Path
 
@@ -19,7 +20,9 @@ from local_node1_goal_phases import (  # noqa: E402
     detect_phase_from_supervisor_output,
     goal_state_from_payload,
     migrate_legacy_goal_state,
+    redact_secrets,
     validate_phase_transition,
+    write_secure_file,
 )
 
 
@@ -190,3 +193,52 @@ def test_goal_state_from_typed_payload() -> None:
     assert state.review_status is ReviewStatus.FAILED
     assert state.block_reason == "needs operator"
     assert state.to_dict()["phase"] == "blocked"
+
+
+def test_write_secure_file_sets_requested_permissions(tmp_path) -> None:
+    state_path = tmp_path / "state.json"
+    report_path = tmp_path / "report.md"
+
+    write_secure_file(state_path, "{}\n")
+    write_secure_file(report_path, "# Report\n", 0o640)
+
+    assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(report_path.stat().st_mode) == 0o640
+    assert state_path.read_text(encoding="utf-8") == "{}\n"
+    assert report_path.read_text(encoding="utf-8") == "# Report\n"
+
+
+def test_redact_secrets_covers_required_patterns() -> None:
+    text = "\n".join(
+        [
+            "openai=sk-proj-" + "A" * 24,
+            "anthropic=sk-ant-" + "B" * 24,
+            "api=sk-" + "C" * 24,
+            "ghp=ghp_" + "D" * 36,
+            "gho=gho_" + "E" * 36,
+            "auth=Bearer abcDEF123-._~+/==",
+            "url=https://user:password@example.com/path",
+            "hex=" + "a" * 40,
+            "b64=" + "QUJD" * 11,
+        ]
+    )
+
+    redacted = redact_secrets(text)
+
+    assert "[REDACTED:openai_key]" in redacted
+    assert "[REDACTED:anthropic_key]" in redacted
+    assert "[REDACTED:api_key]" in redacted
+    assert redacted.count("[REDACTED:github_token]") == 2
+    assert "[REDACTED:bearer_token]" in redacted
+    assert "https://[REDACTED:url_credentials]@example.com/path" in redacted
+    assert "[REDACTED:long_hex_token]" in redacted
+    assert "[REDACTED:long_base64_token]" in redacted
+    assert "password" not in redacted
+
+
+def test_write_secure_file_redacts_secrets_on_disk(tmp_path) -> None:
+    path = tmp_path / "state.json"
+
+    write_secure_file(path, "stderr_tail=Bearer abcDEF123-._~+/==\n", 0o600)
+
+    assert path.read_text(encoding="utf-8") == "stderr_tail=[REDACTED:bearer_token]\n"

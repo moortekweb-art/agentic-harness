@@ -10,18 +10,28 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime, timezone
+import sys
 from pathlib import Path
 from typing import Any
 
 
-PROFILE = Path("/mnt/raid0/home-ai-inference/.hermes-control/profiles/controller")
-SUPERVISOR = PROFILE / "scripts/local-node1-goal-supervisor.py"
-MANAGER = Path("/mnt/raid0/documentation/scripts/local-node1-goal-manager.py")
-LOCAL_GOAL = Path("/mnt/raid0/documentation/scripts/local-goal")
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from local_node1_goal_phases import (
+    CURRENT_TRUTH_REPORT_PATH as REPORT_PATH,
+    CURRENT_TRUTH_STATE_PATH as STATE_PATH,
+    DOC_ROOT,
+    LOCAL_GOAL_WRAPPER as LOCAL_GOAL,
+    MANAGER,
+    PROFILE,
+    SUPERVISOR,
+    now_iso as now,
+    parse_error_record,
+    write_secure_file,
+)
+
 INTEGRATION_AUDIT_STATE = PROFILE / "state/local-node1-goal-integration-audit.json"
-STATE_PATH = PROFILE / "reports/local-node1-goal-current-truth-latest.json"
-REPORT_PATH = PROFILE / "reports/local-node1-goal-current-truth-latest.md"
 
 ALIASES = [
     "agentic harness",
@@ -68,15 +78,6 @@ def mission_context_note(applies_to_active_goal: bool, mission: dict[str, Any]) 
     return "mission_context_unavailable"
 
 
-def now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
-
-
 def run_supervisor(*args: str) -> dict[str, Any]:
     cmd = ["python3", str(SUPERVISOR), *args]
     return run_command(cmd)
@@ -99,7 +100,7 @@ def run_command(cmd: list[str]) -> dict[str, Any]:
         capture_output=True,
         timeout=120,
         check=False,
-        cwd="/mnt/raid0/documentation",
+        cwd=str(DOC_ROOT),
     )
     try:
         payload = json.loads(proc.stdout)
@@ -119,15 +120,19 @@ def run_command(cmd: list[str]) -> dict[str, Any]:
 
 def load_json_file(path: Path) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        payload = json.loads(text)
     except FileNotFoundError:
         return {"available": False, "path": str(path)}
-    except Exception as exc:
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
         return {
             "available": False,
             "path": str(path),
             "unreadable": True,
             "error": str(exc),
+            "_parse_errors": [
+                parse_error_record(exc, str(path), text if "text" in locals() else "")
+            ],
         }
     if not isinstance(payload, dict):
         return {
@@ -652,9 +657,7 @@ def build_status() -> dict[str, Any]:
 def write_reports(status: dict[str, Any]) -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(
-        json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    write_secure_file(STATE_PATH, json.dumps(status, indent=2, sort_keys=True) + "\n", 0o600)
     dirty = status.get("dirty_operator_summary") or {}
     capacity = (
         status.get("node1_capacity")
@@ -770,7 +773,7 @@ def write_reports(status: dict[str, Any]) -> None:
         f"- JSON: `{STATE_PATH}`",
         ]
     )
-    REPORT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_secure_file(REPORT_PATH, "\n".join(lines) + "\n", 0o640)
 
 
 def main() -> int:

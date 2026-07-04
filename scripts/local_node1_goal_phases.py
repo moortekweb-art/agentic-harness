@@ -4,11 +4,28 @@
 from __future__ import annotations
 
 import json
+import contextlib
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
+
+
+PROFILE = Path("/mnt/raid0/home-ai-inference/.hermes-control/profiles/controller")
+HERMES_ROOT = PROFILE
+DOC_ROOT = (
+    Path(os.environ.get("DOC_ROOT", "/mnt/raid0/documentation")).expanduser().resolve()
+)
+MANAGER = DOC_ROOT / "scripts/local-node1-goal-manager.py"
+LOCAL_GOAL_WRAPPER = DOC_ROOT / "scripts/local-goal"
+SUPERVISOR = PROFILE / "scripts/local-node1-goal-supervisor.py"
+COMMAND_STATE_PATH = PROFILE / "state/local-node1-goal-command-latest.json"
+COMMAND_REPORT_PATH = PROFILE / "reports/local-node1-goal-command-latest.md"
+CURRENT_TRUTH_STATE_PATH = PROFILE / "reports/local-node1-goal-current-truth-latest.json"
+CURRENT_TRUTH_REPORT_PATH = PROFILE / "reports/local-node1-goal-current-truth-latest.md"
 
 
 class Phase(StrEnum):
@@ -88,6 +105,71 @@ def now_iso() -> str:
         .isoformat()
         .replace("+00:00", "Z")
     )
+
+
+def write_secure_file(path: str | Path, content: str, mode: int = 0o600) -> None:
+    """Write text with deterministic local artifact permissions."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    content = redact_secrets(content)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(target, flags, mode)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.chmod(target, mode)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        raise
+
+
+def redact_secrets(text: str) -> str:
+    """Redact common API keys, bearer tokens, credentials, and long secrets."""
+    redacted = text
+    redacted = re.sub(
+        r"sk-ant-[a-zA-Z0-9\-_]{20,}",
+        "[REDACTED:anthropic_key]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"sk-proj-[a-zA-Z0-9\-_]{20,}",
+        "[REDACTED:openai_key]",
+        redacted,
+    )
+    redacted = re.sub(r"sk-[a-zA-Z0-9]{20,}", "[REDACTED:api_key]", redacted)
+    redacted = re.sub(r"ghp_[a-zA-Z0-9]{36}", "[REDACTED:github_token]", redacted)
+    redacted = re.sub(r"gho_[a-zA-Z0-9]{36}", "[REDACTED:github_token]", redacted)
+    redacted = re.sub(
+        r"[Bb]earer\s+[a-zA-Z0-9\-._~+/]+=*",
+        "[REDACTED:bearer_token]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"://[^/\s]+:[^/@\s]+@",
+        "://[REDACTED:url_credentials]@",
+        redacted,
+    )
+    redacted = re.sub(
+        r"\b[a-fA-F0-9]{40,}\b",
+        "[REDACTED:long_hex_token]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"\b[A-Za-z0-9+/]{40,}={0,2}\b",
+        "[REDACTED:long_base64_token]",
+        redacted,
+    )
+    return redacted
+
+
+def parse_error_record(error: Exception, source: str, text: str) -> dict[str, str]:
+    """Return a compact structured JSON parse error for state artifacts."""
+    return {
+        "source": source,
+        "type": type(error).__name__,
+        "snippet": text[:100],
+    }
 
 
 def validate_phase_transition(old: Phase, new: Phase) -> bool:

@@ -14,6 +14,7 @@ SCRIPTS = Path("/mnt/raid0/home-ai-inference/.hermes-control/profiles/controller
 COMMAND_PATH = SCRIPTS / "local-node1-goal-command.py"
 SUPERVISOR_PATH = SCRIPTS / "local-node1-goal-supervisor.py"
 WORKER_PATH = SCRIPTS / "local-node1-goal-worker.py"
+CURRENT_TRUTH_PATH = SCRIPTS / "local-node1-goal-current-truth.py"
 
 cmd_ns: dict = {"__name__": "local_node1_goal_command_negative_canaries_test"}
 exec(compile(COMMAND_PATH.read_text(), str(COMMAND_PATH), "exec"), cmd_ns)
@@ -31,6 +32,13 @@ worker_spec = importlib.util.spec_from_file_location(
 worker = importlib.util.module_from_spec(worker_spec)
 assert worker_spec.loader is not None
 worker_spec.loader.exec_module(worker)
+
+current_truth_spec = importlib.util.spec_from_file_location(
+    "local_node1_goal_current_truth_negative_canaries_test", CURRENT_TRUTH_PATH
+)
+current_truth = importlib.util.module_from_spec(current_truth_spec)
+assert current_truth_spec.loader is not None
+current_truth_spec.loader.exec_module(current_truth)
 
 
 def run_command_main(
@@ -63,7 +71,10 @@ def test_corrupted_queue_state_invalid_json_falls_back_without_rewriting(
 
     queue = supervisor.load_queue()
 
-    assert queue == {"contract": "local_node1_goal_queue.v1", "items": []}
+    assert queue["contract"] == "local_node1_goal_queue.v1"
+    assert queue["items"] == []
+    assert queue["_parse_errors"][0]["type"] == "JSONDecodeError"
+    assert queue["_parse_errors"][0]["snippet"] == "{not-json"
     assert queue_path.read_text(encoding="utf-8") == "{not-json"
 
 
@@ -272,3 +283,28 @@ def test_worker_accepts_controller_report_and_worker_run_outputs() -> None:
 
     assert str(report).endswith("/reports/local-node1.md")
     assert str(status).endswith("/worker-runs/local-node1/result.json")
+
+
+def test_current_truth_load_json_file_records_parse_error(tmp_path) -> None:
+    path = tmp_path / "bad.json"
+    path.write_text('{"bad"', encoding="utf-8")
+
+    payload = current_truth.load_json_file(path)
+
+    assert payload["available"] is False
+    assert payload["unreadable"] is True
+    assert payload["_parse_errors"][0]["type"] == "JSONDecodeError"
+    assert payload["_parse_errors"][0]["snippet"] == '{"bad"'
+
+
+def test_worker_manager_status_records_parse_error(monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, '{"bad"', "stderr")
+
+    monkeypatch.setattr(worker, "run", fake_run)
+
+    payload = worker.manager_status()
+
+    assert payload["error"] == "manager status unreadable"
+    assert payload["_parse_errors"][0]["type"] == "JSONDecodeError"
+    assert payload["_parse_errors"][0]["snippet"] == '{"bad"'
