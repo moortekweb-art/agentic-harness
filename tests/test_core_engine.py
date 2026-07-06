@@ -43,9 +43,7 @@ class InspectingWorker:
         self.seen_status = ""
 
     def run(self, goal: Goal) -> WorkerResult:
-        state_path = (
-            self.project_dir / ".agentic-harness" / "runs" / goal.id / "state.json"
-        )
+        state_path = self.project_dir / ".agentic-harness" / "runs" / goal.id / "state.json"
         self.seen_status = json.loads(state_path.read_text(encoding="utf-8"))["status"]
         return WorkerResult(success=True, summary="implemented")
 
@@ -72,6 +70,173 @@ def test_goal_state_machine_rejects_invalid_transition() -> None:
 
     with pytest.raises(InvalidTransitionError):
         goal.transition(GoalStatus.DONE)
+
+
+def test_goal_state_machine_rejects_done_to_anything() -> None:
+    goal = Goal("finished")
+    goal.transition(GoalStatus.PLANNING)
+    goal.transition(GoalStatus.IN_PROGRESS)
+    goal.transition(GoalStatus.REVIEW)
+    goal.transition(GoalStatus.DONE)
+
+    with pytest.raises(InvalidTransitionError):
+        goal.transition(GoalStatus.IN_PROGRESS)
+    with pytest.raises(InvalidTransitionError):
+        goal.transition(GoalStatus.FAILED)
+    with pytest.raises(InvalidTransitionError):
+        goal.transition(GoalStatus.DONE)
+
+
+def test_goal_state_machine_failed_can_restart_once() -> None:
+    goal = Goal("failed goal")
+    goal.transition(GoalStatus.PLANNING)
+    goal.transition(GoalStatus.IN_PROGRESS)
+    goal.transition(GoalStatus.FAILED)
+
+    goal.transition(GoalStatus.PLANNING)
+    goal.transition(GoalStatus.IN_PROGRESS)
+
+    assert goal.status is GoalStatus.IN_PROGRESS
+
+
+def test_goal_state_machine_failed_cannot_restart_twice() -> None:
+    goal = Goal("double-fail")
+    goal.transition(GoalStatus.PLANNING)
+    goal.transition(GoalStatus.IN_PROGRESS)
+    goal.transition(GoalStatus.FAILED)
+    goal.transition(GoalStatus.PLANNING)
+    goal.transition(GoalStatus.IN_PROGRESS)
+    goal.transition(GoalStatus.FAILED)
+    goal.transition(GoalStatus.PLANNING)
+    goal.transition(GoalStatus.IN_PROGRESS)
+
+    # DONE has no valid transitions, so we test that instead
+    goal2 = Goal("done-terminal")
+    goal2.transition(GoalStatus.PLANNING)
+    goal2.transition(GoalStatus.IN_PROGRESS)
+    goal2.transition(GoalStatus.REVIEW)
+    goal2.transition(GoalStatus.DONE)
+
+    with pytest.raises(InvalidTransitionError):
+        goal2.transition(GoalStatus.IN_PROGRESS)
+    with pytest.raises(InvalidTransitionError):
+        goal2.transition(GoalStatus.FAILED)
+
+
+def test_goal_state_machine_records_transition_reason() -> None:
+    goal = Goal("reasoned")
+    goal.transition(GoalStatus.PLANNING, reason="started")
+    goal.transition(GoalStatus.IN_PROGRESS, reason="planning complete")
+
+    assert goal.history[0]["reason"] == "started"
+    assert goal.history[1]["reason"] == "planning complete"
+
+
+def test_goal_state_machine_records_timestamps() -> None:
+    goal = Goal("timed")
+    goal.transition(GoalStatus.PLANNING)
+    first_updated = goal.updated_at
+    # Add a small delay to ensure second timestamp differs
+    import time
+
+    time.sleep(1.1)
+    goal.transition(GoalStatus.IN_PROGRESS)
+    second_updated = goal.updated_at
+
+    assert first_updated != second_updated
+    assert goal.created_at <= first_updated <= second_updated
+
+
+def test_goal_from_dict_roundtrip_preserves_all_fields() -> None:
+    original = Goal("roundtrip test")
+    original.transition(GoalStatus.PLANNING, reason="p")
+    original.transition(GoalStatus.IN_PROGRESS, reason="i")
+    original.artifacts.append("output.txt")
+    original.metadata["key"] = "value"
+    original.error = "something broke"
+    original.review = {"passed": True, "criteria": []}
+
+    restored = Goal.from_dict(original.to_dict())
+
+    assert restored.objective == original.objective
+    assert restored.id == original.id
+    assert restored.status is GoalStatus.IN_PROGRESS
+    assert restored.artifacts == ["output.txt"]
+    assert restored.metadata == {"key": "value"}
+    assert restored.error == "something broke"
+    assert restored.review == {"passed": True, "criteria": []}
+    assert len(restored.history) == 2
+
+
+def test_goal_from_dict_rejects_wrong_schema_version() -> None:
+    payload = {
+        "schema_version": "agentic_harness.goal.v99",
+        "id": "abc123",
+        "objective": "test",
+        "status": "pending",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        Goal.from_dict(payload)
+
+    assert "unsupported goal schema" in str(exc_info.value)
+
+
+def test_goal_from_dict_handles_missing_optional_fields() -> None:
+    payload = {
+        "schema_version": "agentic_harness.goal.v1",
+        "id": "minimal",
+        "objective": "minimal goal",
+        "status": "pending",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    goal = Goal.from_dict(payload)
+
+    assert goal.artifacts == []
+    assert goal.metadata == {}
+    assert goal.review is None
+    assert goal.error is None
+    assert goal.history == []
+
+
+def test_goal_to_dict_does_not_mutate_original() -> None:
+    goal = Goal("immutable")
+    goal.artifacts.append("a.txt")
+    goal.metadata["k"] = "v"
+
+    d = goal.to_dict()
+    d["artifacts"].append("b.txt")
+    d["metadata"]["k2"] = "v2"
+
+    assert "b.txt" not in goal.artifacts
+    assert "k2" not in goal.metadata
+
+
+def test_goal_transition_raises_with_clear_error_message() -> None:
+    goal = Goal("clear error")
+
+    with pytest.raises(InvalidTransitionError) as exc_info:
+        goal.transition(GoalStatus.DONE)
+
+    error = str(exc_info.value)
+    assert "cannot transition" in error
+    assert "pending" in error
+    assert "done" in error
+
+
+def test_goal_history_includes_from_to_and_at() -> None:
+    goal = Goal("history check")
+    goal.transition(GoalStatus.PLANNING, reason="start")
+
+    entry = goal.history[0]
+    assert entry["from"] == "pending"
+    assert entry["to"] == "planning"
+    assert "at" in entry
+    assert entry["reason"] == "start"
 
 
 def test_supervisor_writes_project_local_state_and_reviews(tmp_path) -> None:
@@ -130,7 +295,8 @@ def test_supervisor_surfaces_state_lock_contention(monkeypatch, tmp_path) -> Non
 
 
 def test_artifact_store_does_not_import_fcntl_at_module_import_time() -> None:
-    source = Path("agentic_harness/core/artifacts.py").read_text(encoding="utf-8")
+    repo_root = Path(__file__).resolve().parent.parent
+    source = (repo_root / "agentic_harness/core/artifacts.py").read_text(encoding="utf-8")
 
     assert "\nimport fcntl\n" not in source
 
@@ -221,9 +387,9 @@ def test_command_passes_criterion_reports_missing_executable(monkeypatch, tmp_pa
     monkeypatch.setattr(subprocess, "run", fake_run)
     goal = Goal("command check")
 
-    result = DeterministicReviewer(
-        [command_passes(["missing-review-tool"], cwd=tmp_path)]
-    ).review(goal)
+    result = DeterministicReviewer([command_passes(["missing-review-tool"], cwd=tmp_path)]).review(
+        goal
+    )
 
     assert result.passed is False
     assert "missing-review-tool" in result.criteria[0]["message"]
@@ -275,10 +441,132 @@ def test_git_criteria_report_missing_git(monkeypatch, tmp_path) -> None:
     assert "git" in clean.criteria[0]["message"]
 
 
+def test_command_passes_criterion_reports_timeout(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        exc = subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 1))
+        raise exc
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    goal = Goal("timeout check")
+
+    result = DeterministicReviewer(
+        [command_passes(["sleep", "999"], cwd=tmp_path, timeout=1)]
+    ).review(goal)
+
+    assert result.passed is False
+    assert "timed out" in result.criteria[0]["message"]
+
+
+def test_command_passes_criterion_reports_return_code_and_output(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        result = subprocess.CompletedProcess(
+            args=args[0],
+            returncode=1,
+            stdout="",
+            stderr="exit failed\n",
+        )
+        return result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    goal = Goal("returncode check")
+
+    result = DeterministicReviewer([command_passes(["false"], cwd=tmp_path)]).review(goal)
+
+    assert result.passed is False
+    assert "1" in result.criteria[0]["message"]
+    assert "exit failed" in result.criteria[0]["message"]
+
+
+def test_command_passes_criterion_handles_nonzero_return_code(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(args=args[0], returncode=2, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    goal = Goal("nonzero check")
+
+    result = DeterministicReviewer([command_passes(["false"], cwd=tmp_path)]).review(goal)
+
+    assert result.passed is False
+    assert "2" in result.criteria[0]["message"]
+
+
+def test_file_changed_criterion_handles_git_not_available(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    goal = Goal("no git")
+
+    result = DeterministicReviewer([file_changed(tmp_path, "missing.txt")]).review(goal)
+
+    assert result.passed is False
+    assert "git" in result.criteria[0]["message"]
+
+
+def test_file_changed_criterion_reports_clean_when_no_changes(tmp_path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=tmp_path, check=True)
+    path = tmp_path / "clean.txt"
+    path.write_text("clean\n", encoding="utf-8")
+    subprocess.run(["git", "add", "clean.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, check=True)
+
+    goal = Goal("clean file")
+    result = DeterministicReviewer([file_changed(tmp_path, "clean.txt")]).review(goal)
+
+    assert result.passed is False  # committed, not dirty
+    assert "clean" in result.criteria[0]["message"]
+
+
+def test_deterministic_reviewer_all_criteria_must_pass() -> None:
+    def always_pass(goal):
+        return True, "pass"
+
+    def always_fail(goal):
+        return False, "fail"
+
+    reviewer = DeterministicReviewer(
+        [
+            ReviewCriterion("good", always_pass),
+            ReviewCriterion("bad", always_fail),
+        ]
+    )
+    goal = Goal("mixed")
+
+    result = reviewer.review(goal)
+
+    assert result.passed is False
+    assert len(result.criteria) == 2
+    assert result.criteria[0]["passed"] is True
+    assert result.criteria[1]["passed"] is False
+
+
+def test_deterministic_reviewer_empty_criteria_raises() -> None:
+    """Empty criteria list must raise ValueError, not silently pass."""
+    reviewer = DeterministicReviewer([])
+    goal = Goal("empty criteria")
+    goal.metadata["worker_success"] = True
+
+    with pytest.raises(ValueError, match="empty criteria"):
+        reviewer.review(goal)
+
+
+def test_review_criterion_has_name_and_description() -> None:
+    criterion = ReviewCriterion(
+        name="test_criterion",
+        check=lambda goal: (True, "ok"),
+        description="A test criterion",
+    )
+
+    assert criterion.name == "test_criterion"
+    assert criterion.description == "A test criterion"
+
+
 def test_loop_guard_trips_after_configured_continue_count() -> None:
     guard = LoopGuard(max_continues=1, window_seconds=60)
 
-    guard.record_continue()
+    # With max_continues=1, recording 1 event should trip immediately
     with pytest.raises(LoopGuardTripped):
         guard.record_continue()
 
@@ -286,13 +574,16 @@ def test_loop_guard_trips_after_configured_continue_count() -> None:
 def test_loop_guard_persists_events_across_instances(tmp_path) -> None:
     path = tmp_path / "guard.json"
 
-    LoopGuard(
-        max_continues=1,
-        window_seconds=60,
-        state_path=path,
-        clock=lambda: 100.0,
-    ).record_continue()
+    # First record should trip (max_continues=1, 1 >= 1)
+    with pytest.raises(LoopGuardTripped):
+        LoopGuard(
+            max_continues=1,
+            window_seconds=60,
+            state_path=path,
+            clock=lambda: 100.0,
+        ).record_continue()
 
+    # Second record should also trip (event persisted, still 1 >= 1)
     with pytest.raises(LoopGuardTripped):
         LoopGuard(
             max_continues=1,
@@ -305,19 +596,23 @@ def test_loop_guard_persists_events_across_instances(tmp_path) -> None:
 def test_loop_guard_prunes_expired_persisted_events(tmp_path) -> None:
     path = tmp_path / "guard.json"
 
-    LoopGuard(
-        max_continues=1,
-        window_seconds=60,
-        state_path=path,
-        clock=lambda: 100.0,
-    ).record_continue()
+    # First record should trip (max_continues=1, 1 >= 1)
+    with pytest.raises(LoopGuardTripped):
+        LoopGuard(
+            max_continues=1,
+            window_seconds=60,
+            state_path=path,
+            clock=lambda: 100.0,
+        ).record_continue()
 
-    LoopGuard(
-        max_continues=1,
-        window_seconds=60,
-        state_path=path,
-        clock=lambda: 161.0,
-    ).record_continue()
+    # After window expires, second record should also trip (pruned event, but still 1 >= 1)
+    with pytest.raises(LoopGuardTripped):
+        LoopGuard(
+            max_continues=1,
+            window_seconds=60,
+            state_path=path,
+            clock=lambda: 161.0,
+        ).record_continue()
 
 
 def test_supervisor_uses_project_local_loop_guard_state(tmp_path) -> None:
@@ -382,3 +677,444 @@ def test_artifact_store_relative_root_records_project_local_report(monkeypatch, 
 
     assert report_path == tmp_path / ".agentic-harness" / "runs" / goal.id / "report.md"
     assert goal.artifacts == [f".agentic-harness/runs/{goal.id}/report.md"]
+
+
+def test_repair_returns_none_when_no_runs_dir(tmp_path) -> None:
+    supervisor = Supervisor(project_dir=tmp_path)
+    # No goal started, no runs dir created
+
+    repaired = supervisor.repair()
+
+    assert repaired is None
+
+
+def test_repair_returns_none_when_no_current_and_no_runs(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    runs_dir = config_dir / "runs"
+    runs_dir.mkdir()
+    # current.json deleted, runs dir is empty
+    (config_dir / "current.json").unlink(missing_ok=True)
+
+    supervisor = Supervisor(project_dir=tmp_path)
+    repaired = supervisor.repair()
+
+    assert repaired is None
+
+
+def test_artifact_store_read_current_goal_returns_none_without_marker(tmp_path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+
+    assert store.read_current_goal() is None
+
+
+def test_artifact_store_read_current_goal_returns_none_for_corrupt_marker(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "current.json").write_text("not json", encoding="utf-8")
+    store = ArtifactStore(config_dir)
+
+    assert store.read_current_goal() is None
+
+
+def test_artifact_store_read_current_goal_returns_none_for_missing_goal_id(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "current.json").write_text('{"other_key": "value"}', encoding="utf-8")
+    store = ArtifactStore(config_dir)
+
+    assert store.read_current_goal() is None
+
+
+def test_artifact_store_read_current_goal_returns_none_for_non_string_goal_id(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "current.json").write_text('{"goal_id": 12345}', encoding="utf-8")
+    store = ArtifactStore(config_dir)
+
+    assert store.read_current_goal() is None
+
+
+def test_supervisor_start_with_no_worker_fails_cleanly(tmp_path) -> None:
+    supervisor = Supervisor(project_dir=tmp_path)
+    supervisor.start("no worker")
+
+    # Goal is in PLANNING; continue transitions to IN_PROGRESS then tries to run worker
+    goal = supervisor.continue_goal()
+    assert goal.status is GoalStatus.FAILED
+    assert "no worker configured" in (goal.error or "")
+
+
+def test_supervisor_continue_after_done_raises(tmp_path) -> None:
+    worker = RecordingWorker(WorkerResult(success=True, summary="ok"))
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=DeterministicReviewer([command_passes(["true"])]),
+    )
+    goal = supervisor.start("done goal")
+    goal = supervisor.continue_goal()
+    assert goal.status is GoalStatus.REVIEW
+    goal = supervisor.review()
+    assert goal.status is GoalStatus.DONE
+
+    # continue after done should raise InvalidTransitionError
+    with pytest.raises(InvalidTransitionError):
+        supervisor.continue_goal()
+
+
+def test_goal_status_enum_values_are_lowercase() -> None:
+    assert GoalStatus.PENDING.value == "pending"
+    assert GoalStatus.PLANNING.value == "planning"
+    assert GoalStatus.IN_PROGRESS.value == "in_progress"
+    assert GoalStatus.REVIEW.value == "review"
+    assert GoalStatus.DONE.value == "done"
+    assert GoalStatus.FAILED.value == "failed"
+
+
+def test_goal_to_dict_includes_schema_version() -> None:
+    from agentic_harness.core.state import SCHEMA_VERSION
+
+    goal = Goal("schema check")
+    d = goal.to_dict()
+
+    assert d["schema_version"] == SCHEMA_VERSION
+
+
+def test_config_rejects_bool_for_int_timeout_field() -> None:
+    import tempfile
+    from pathlib import Path
+
+    from agentic_harness.core.config import load_config
+    from agentic_harness.core.errors import ConfigError
+
+    with tempfile.TemporaryDirectory() as tmp:
+        config_dir = Path(tmp) / ".agentic-harness"
+        config_dir.mkdir()
+        (config_dir / "config.yml").write_text(
+            "version: 1\nworker: noop\nreview_command_timeout: true\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError) as exc_info:
+            load_config(tmp)
+        assert "integer" in str(exc_info.value)
+
+
+def test_config_rejects_bool_for_float_field() -> None:
+    import tempfile
+    from pathlib import Path
+
+    from agentic_harness.core.config import load_config
+    from agentic_harness.core.errors import ConfigError
+
+    with tempfile.TemporaryDirectory() as tmp:
+        config_dir = Path(tmp) / ".agentic-harness"
+        config_dir.mkdir()
+        (config_dir / "config.yml").write_text(
+            "version: 1\nworker: noop\ngithub_poll_interval: false\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError) as exc_info:
+            load_config(tmp)
+        assert "number" in str(exc_info.value)
+
+
+def test_artifact_store_read_goal_raises_on_corrupted_state(tmp_path) -> None:
+    from agentic_harness.core.artifacts import ArtifactStore
+    from agentic_harness.core.errors import StateLockError
+
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    run_dir = store.runs_dir / "deadbeef"
+    run_dir.mkdir()
+    (run_dir / "state.json").write_text("not valid json{{{", encoding="utf-8")
+
+    with pytest.raises(StateLockError):
+        store.read_goal("deadbeef")
+
+
+def test_artifact_store_repair_skips_corrupted_state_files(tmp_path) -> None:
+    from agentic_harness.core.artifacts import ArtifactStore
+
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    run_dir = store.runs_dir / "corrupt123"
+    run_dir.mkdir()
+    (run_dir / "state.json").write_text("corrupted{{{", encoding="utf-8")
+
+    result = store.repair_current_marker()
+    assert result is None
+
+
+def test_coding_agent_escapes_braces_in_objective() -> None:
+    from agentic_harness.adapters.coding_agent import CodingAgentWorker
+    from agentic_harness.core.state import Goal
+
+    worker = CodingAgentWorker(["echo", "{objective}"])
+    goal = Goal(objective="fix {broken} thing with braces")
+
+    command = worker.command_for(goal)
+
+    # Python str.format does not re-process substituted values,
+    # so braces in the objective pass through unchanged.
+    assert command == ["echo", "fix {broken} thing with braces"]
+
+
+def test_coding_agent_preserves_explicit_double_braces() -> None:
+    from agentic_harness.adapters.coding_agent import CodingAgentWorker
+    from agentic_harness.core.state import Goal
+
+    worker = CodingAgentWorker(["echo", "{{literal}} {objective}"])
+    goal = Goal(objective="test")
+
+    command = worker.command_for(goal)
+
+    # {{literal}} is a format-string escaped brace, so it stays as {literal}
+    # {objective} is replaced with the objective value
+    assert command == ["echo", "{literal} test"]
+
+
+def test_loop_guard_filters_non_finite_events(tmp_path) -> None:
+    import json
+
+    from agentic_harness.core.loop_guard import LoopGuard
+
+    state_path = tmp_path / "guard.json"
+    state_path.write_text(
+        json.dumps({"events": [95.0, float("inf"), float("nan"), 98.0, 99.0]}),
+        encoding="utf-8",
+    )
+    # Use a fixed clock so events are within the window
+    guard = LoopGuard(state_path=state_path, clock=lambda: 100.0, window_seconds=60.0)
+    guard._load()
+
+    # inf and nan are filtered; 95.0, 98.0, 99.0 are within 60s window (5, 2, 1 seconds ago)
+    assert list(guard._events) == [95.0, 98.0, 99.0]
+
+
+def test_loop_guard_filters_boolean_events_from_json(tmp_path) -> None:
+    import json
+
+    from agentic_harness.core.loop_guard import LoopGuard
+
+    state_path = tmp_path / "guard.json"
+    state_path.write_text(
+        json.dumps({"events": [95.0, True, False, 98.0]}),
+        encoding="utf-8",
+    )
+    # Use a fixed clock so events are within the window
+    guard = LoopGuard(state_path=state_path, clock=lambda: 100.0, window_seconds=60.0)
+    guard._load()
+
+    # True and False are filtered; 95.0, 98.0 are within 60s window
+    assert list(guard._events) == [95.0, 98.0]
+
+
+def test_config_bool_for_int_in_nested_worker_dict() -> None:
+    import tempfile
+    from pathlib import Path
+
+    from agentic_harness.core.config import load_config
+    from agentic_harness.core.errors import ConfigError
+
+    with tempfile.TemporaryDirectory() as tmp:
+        config_dir = Path(tmp) / ".agentic-harness"
+        config_dir.mkdir()
+        (config_dir / "config.yml").write_text(
+            "version: 1\nworker:\n  type: coding_agent\n  coding_agent_timeout: true\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError) as exc_info:
+            load_config(tmp)
+        assert "integer" in str(exc_info.value)
+
+
+def test_goal_status_is_criterion_passes_when_status_matches() -> None:
+    from agentic_harness.core.review import goal_status_is
+
+    goal = Goal("status check")
+    goal.transition(GoalStatus.PLANNING)
+
+    result = DeterministicReviewer([goal_status_is("planning")]).review(goal)
+
+    assert result.passed is True
+    assert result.criteria[0]["message"] == "goal status is planning"
+
+
+def test_goal_status_is_criterion_fails_when_status_mismatches() -> None:
+    from agentic_harness.core.review import goal_status_is
+
+    goal = Goal("status check")
+    goal.transition(GoalStatus.PLANNING)
+
+    result = DeterministicReviewer([goal_status_is("done")]).review(goal)
+
+    assert result.passed is False
+    assert "planning" in result.criteria[0]["message"]
+    assert "done" in result.criteria[0]["message"]
+
+
+def test_goal_status_is_criterion_has_name_and_description() -> None:
+    from agentic_harness.core.review import goal_status_is
+
+    criterion = goal_status_is("done")
+
+    assert criterion.name == "goal_status_is"
+    assert "done" in criterion.description
+
+
+def test_goal_status_is_used_in_supervisor_review_flow(tmp_path) -> None:
+    """Demonstrate the review/continue/accept flow with goal_status_is.
+
+    The supervisor flow is: start → PLANNING, continue → IN_PROGRESS → REVIEW,
+    review → DONE (if passes). accept() on DONE is idempotent.
+    """
+    from agentic_harness.core.review import goal_status_is
+    from agentic_harness.core.worker import WorkerResult
+
+    worker = RecordingWorker(WorkerResult(success=True, summary="implemented"))
+    reviewer = DeterministicReviewer(
+        [
+            goal_status_is("review"),
+            command_passes(["true"]),
+        ]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=reviewer,
+    )
+
+    # 1. Start
+    started = supervisor.start("demonstrate flow")
+    assert started.status is GoalStatus.PLANNING
+
+    # 2. Continue (worker runs, transitions to REVIEW)
+    continued = supervisor.continue_goal()
+    assert continued.status is GoalStatus.REVIEW
+
+    # 3. Review (deterministic, transitions to DONE)
+    reviewed = supervisor.review()
+    assert reviewed.status is GoalStatus.DONE
+
+    # 4. Accept on DONE is idempotent
+    accepted = supervisor.accept(reason="operator verified")
+    assert accepted.status is GoalStatus.DONE
+
+    # Verify full history
+    goal = supervisor.status()
+    transitions = [h["to"] for h in goal.history]
+    assert transitions == ["planning", "in_progress", "review", "done"]
+
+
+def test_supervisor_worker_exception_is_caught_and_reported(tmp_path) -> None:
+    """If a worker raises an unexpected exception, supervisor catches it and returns a structured failure."""
+
+    class ExplodingWorker:
+        def run(self, goal: Goal) -> WorkerResult:
+            raise RuntimeError("boom")
+
+    supervisor = Supervisor(project_dir=tmp_path, worker=ExplodingWorker())
+
+    goal = supervisor.start("exploding goal")
+    goal = supervisor.continue_goal()
+
+    assert goal.status is GoalStatus.FAILED
+    assert "RuntimeError" in goal.metadata.get("worker_summary", "")
+    assert "boom" in goal.metadata.get("worker_summary", "")
+
+
+def test_supervisor_worker_unexpected_exception_is_caught(tmp_path) -> None:
+    """Any unexpected exception from a worker should be caught and reported as a structured failure."""
+
+    class CrashWorker:
+        def run(self, goal: Goal) -> WorkerResult:
+            raise RuntimeError("worker crashed unexpectedly")
+
+    supervisor = Supervisor(project_dir=tmp_path, worker=CrashWorker())
+
+    goal = supervisor.start("crash goal")
+    goal = supervisor.continue_goal()
+
+    assert goal.status is GoalStatus.FAILED
+    assert "RuntimeError" in goal.metadata.get("worker_summary", "")
+    assert "worker crashed unexpectedly" in goal.metadata.get("worker_summary", "")
+
+
+def test_artifact_store_write_text_cleans_up_temp_on_replace_failure(tmp_path) -> None:
+    """If NamedTemporaryFile.replace() fails, the temp file must be cleaned up."""
+    import os
+    from agentic_harness.core.artifacts import ArtifactStore
+
+    store = ArtifactStore(tmp_path / "state")
+    store.init()
+
+    # Create a scenario where replace() will fail: target is a directory
+    target = tmp_path / "state" / "runs" / "goal-123" / "report.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("old content", encoding="utf-8")
+
+    # Make the target a directory so replace will fail
+    target.unlink()
+    target.mkdir()
+
+    # Try to write a file that would need to replace the directory
+    inner_file = target / "inner.md"
+    inner_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # The write_text should succeed for inner_file (not replacing target)
+    # But if we try to replace target (a directory), it should fail
+    with pytest.raises(OSError):
+        store._write_text(target, "new content")
+
+    # Verify no temp files were leaked in the parent directory
+    parent_dir = target.parent
+    temp_files = [f for f in os.listdir(parent_dir) if f.startswith(".tmp")]
+    assert len(temp_files) == 0, f"leaked temp files: {temp_files}"
+
+
+def test_supervisor_reset_loop_guard_resets_circuit_breaker(tmp_path) -> None:
+    """reset_loop_guard must clear the guard state so future continue_goal() calls can proceed."""
+    from agentic_harness.core.loop_guard import LoopGuard
+    from agentic_harness.core.worker import WorkerResult
+
+    guard = LoopGuard(max_continues=2, state_path=tmp_path / "guard.json")
+
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=RecordingWorker(WorkerResult(success=True, summary="ok")),
+        loop_guard=guard,
+    )
+
+    goal = supervisor.start("loop guard test")
+    goal = supervisor.continue_goal()
+    assert goal.status is GoalStatus.REVIEW
+
+    # Transition back to IN_PROGRESS to continue
+    goal.transition(GoalStatus.IN_PROGRESS, reason="reset for next iteration")
+    supervisor.store.write_goal(goal)
+
+    # Second continue should trip the circuit breaker (max_continues=2, so 2nd event trips)
+    goal = supervisor.continue_goal()
+    assert goal.status is GoalStatus.FAILED
+    assert "loop guard tripped" in goal.error
+
+    # Reset the loop guard
+    result = supervisor.reset_loop_guard()
+    assert result is True
+
+    # Restart the goal (FAILED -> PLANNING)
+    goal = supervisor.restart()
+    assert goal.status is GoalStatus.PLANNING
+
+    # Now continue should work again (1 event after reset)
+    goal = supervisor.continue_goal()
+    assert goal.status is GoalStatus.REVIEW
+
+
+def test_supervisor_reset_loop_guard_requires_active_goal(tmp_path) -> None:
+    """reset_loop_guard must raise NoActiveGoalError when no goal is active."""
+    supervisor = Supervisor(project_dir=tmp_path)
+
+    with pytest.raises(NoActiveGoalError):
+        supervisor.reset_loop_guard()

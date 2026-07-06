@@ -1,0 +1,17 @@
+name: lint-fix
+description: Fix lint failures without unrelated rewrites.
+objective_template: |
+  Fix lint failures in this project.
+
+  Rules:
+  - Prefer small targeted edits.
+  - Do not change behavior unless required by the lint issue.
+  - Do not rewrite unrelated files.
+  - Summarize changed files and why the lint gate now passes.
+review:
+  command:
+    - python
+    - -m
+    - ruff
+    - check
+  command_timeout: 120

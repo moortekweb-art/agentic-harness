@@ -18,7 +18,7 @@ Use this checklist for a v0.6.9 release.
   python -m ruff check
   python -m mypy agentic_harness
   python -m compileall agentic_harness
-  python -m build --outdir /tmp/agentic-harness-dist
+  python -m agentic_harness.cli release-smoke
   ```
 
 - Run CLI smoke checks:

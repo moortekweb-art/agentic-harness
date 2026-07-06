@@ -51,13 +51,14 @@ class TmuxWorker:
                 stderr=str(exc),
                 returncode=127,
             )
+        summary = (
+            f"tmux session started: {session}"
+            if proc.returncode == 0
+            else f"tmux session failed (exit {proc.returncode}): {session}"
+        )
         return WorkerResult(
             success=proc.returncode == 0,
-            summary=(
-                f"tmux session started: {session}"
-                if proc.returncode == 0
-                else "tmux session failed"
-            ),
+            summary=summary,
             stdout=proc.stdout,
             stderr=proc.stderr,
             returncode=proc.returncode,

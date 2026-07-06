@@ -37,15 +37,26 @@ class CodingAgentWorker:
         self.transcript_path = transcript_path
 
     def command_for(self, goal: Goal) -> list[str]:
-        return [
-            part.format(goal_id=goal.id, objective=goal.objective)
-            for part in self.command_template
-        ]
+        result: list[str] = []
+        for part in self.command_template:
+            # Use safe substitution: replace known placeholders first, then
+            # fall back to str.format for any remaining template variables.
+            # This prevents objectives containing bare braces from breaking
+            # the format string while still supporting arbitrary template
+            # variables (goal_id, objective, and any user-defined ones).
+            try:
+                substituted = part.format(goal_id=goal.id, objective=goal.objective)
+            except (KeyError, ValueError):
+                # If format() fails (e.g. unmatched braces in template),
+                # fall back to safe replacement of known placeholders only.
+                substituted = part.replace("{goal_id}", goal.id).replace(
+                    "{objective}", goal.objective
+                )
+            result.append(substituted)
+        return result
 
     def transcript_for(self, goal: Goal) -> Path:
-        rel = Path(
-            self.transcript_path.format(goal_id=goal.id, objective=goal.objective)
-        )
+        rel = Path(self.transcript_path.format(goal_id=goal.id, objective=goal.objective))
         root = self.cwd.resolve()
         path = (root / rel).resolve()
         try:
@@ -89,20 +100,24 @@ class CodingAgentWorker:
             transcript = self.transcript_for(goal)
             transcript.parent.mkdir(parents=True, exist_ok=True)
             transcript.write_text(
-                "$ " + " ".join(command) + "\n\n"
-                "[stdout]\n"
-                f"{proc.stdout}\n"
-                "[stderr]\n"
-                f"{proc.stderr}",
+                "$ " + " ".join(command) + f"\n\n[stdout]\n{proc.stdout}\n[stderr]\n{proc.stderr}",
                 encoding="utf-8",
             )
         except (OSError, ValueError) as exc:
+            # Transcript write failure is a logging issue, not a work failure.
+            # Surface the error in the summary but preserve the actual result.
+            summary = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+            if not summary:
+                summary = (
+                    "coding agent completed" if proc.returncode == 0 else "coding agent failed"
+                )
+            summary = f"{summary} (transcript write failed: {exc})"
             return WorkerResult(
-                success=False,
-                summary=f"could not write transcript: {exc}",
+                success=proc.returncode == 0,
+                summary=summary,
                 stdout=proc.stdout,
                 stderr=str(exc),
-                returncode=1,
+                returncode=proc.returncode,
             )
         success = proc.returncode == 0
         summary = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""

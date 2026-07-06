@@ -21,28 +21,92 @@ Agentic Harness gives you a project-local goal loop: start a goal, execute it th
 - [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
 - [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on Linux, Windows, and macOS.
 
+## Release Smoke
+
+Before tagging a release, run:
+
+```bash
+python -m pip install -e ".[test]"
+python -m pytest tests/ -q
+python -m ruff check
+python -m mypy agentic_harness
+python -m compileall agentic_harness
+python -m agentic_harness.cli release-smoke
+```
+
+`release-smoke` builds the wheel and sdist, installs each into a fresh virtual
+environment, verifies direct recipe commands, runs the packaged demo, and
+checks the transcript/report artifacts.
+
+## Fastest Demo
+
+Agentic Harness supervises a coding agent and only marks work done when review
+passes.
+
+```bash
+agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
+```
+
 ## Quick Start
 
 ```bash
 pipx install git+https://github.com/moortekweb-art/agentic-harness.git
-agentic-harness init
-cat > .agentic-harness/config.yml <<'YAML'
-version: 1
-worker: shell
-shell_command:
-  - python
-  - -c
-  - "import os; print('goal:', os.environ['AGENTIC_HARNESS_OBJECTIVE'])"
-YAML
-agentic-harness start "write a changelog for the last three commits"
-agentic-harness continue && agentic-harness review
+agentic-harness selftest
+agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
 ```
 
-For one-shot local runs:
+To inspect the demo files instead of running them immediately:
 
 ```bash
-agentic-harness run "write a changelog for the last three commits"
+agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force
+cd /tmp/agentic-harness-demo
+python -m pip install -r requirements-dev.txt
+python -m pytest tests/ -q   # expected to fail
+agentic-harness init shell
+agentic-harness fix-tests
+agentic-harness status --format text
+python -m pytest tests/ -q   # should pass
 ```
+
+Or ask the installed CLI to print the shortest path for this machine:
+
+```bash
+agentic-harness quickstart
+```
+
+Advanced users can still hand-write `.agentic-harness/config.yml`; the
+configuration format is documented below.
+
+### Recipes
+
+```bash
+agentic-harness init-agent codex
+agentic-harness init shell
+agentic-harness recipes
+agentic-harness run-recipe fix-tests --explain
+agentic-harness run-recipe fix-tests
+agentic-harness fix-tests
+agentic-harness lint-fix
+agentic-harness typecheck-fix
+agentic-harness update-docs
+agentic-harness changelog
+agentic-harness verify-tests
+```
+
+Recipes hide the common prompt and review-command setup for beginner workflows.
+Use `init-agent` once to configure a backend, then run recipes such as
+`fix-tests`, `lint-fix`, `typecheck-fix`, `update-docs`, and `changelog`.
+Each built-in recipe also has a direct command; `run-recipe <name>` remains
+available for scripts that prefer one generic entrypoint.
+Recipe runs write `.agentic-harness/runs/<goal-id>/report.md` automatically,
+so the operator-readable handoff exists even if you do not run
+`agentic-harness report` afterward.
+
+## Not a Coding Agent
+
+Agentic Harness does not replace Codex, Aider, CodeWhale, OpenCode, or your
+shell scripts. It wraps them in a deterministic goal loop with state,
+transcripts, artifacts, loop limits, and review gates.
 
 ## Why This Exists
 
@@ -196,6 +260,15 @@ supervisor = Supervisor(project_dir=".", worker=MyWorker())
 ## Configuration
 
 `agentic-harness init` creates `.agentic-harness/config.yml`.
+
+```bash
+agentic-harness init
+agentic-harness init shell
+agentic-harness init codex
+```
+
+The `init` command without a tool argument creates a minimal config. The `init <tool>` variant
+writes a pre-configured template for the named backend.
 
 ```yaml
 version: 1

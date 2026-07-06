@@ -1,0 +1,17 @@
+name: typecheck-fix
+description: Fix type-check failures with precise typing changes.
+objective_template: |
+  Fix type-check failures in this project.
+
+  Rules:
+  - Prefer precise typing changes over broad ignores.
+  - Do not suppress errors unless there is no better local fix.
+  - Do not rewrite unrelated files.
+  - Summarize changed files and why the type-check gate now passes.
+review:
+  command:
+    - python
+    - -m
+    - mypy
+    - agentic_harness
+  command_timeout: 120

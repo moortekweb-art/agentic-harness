@@ -31,8 +31,14 @@ line-length = 100
 target-version = "py311"
 extend-exclude = ["legacy"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [project.scripts]
 agentic-harness = "agentic_harness.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["agentic_harness*"]
+
+[tool.setuptools.package-data]
+agentic_harness = ["recipes/*.yml"]

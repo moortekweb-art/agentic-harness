@@ -1,0 +1,18 @@
+name: fix-tests
+description: Fix failing tests with the smallest safe change.
+objective_template: |
+  Fix the failing tests in this project.
+
+  Rules:
+  - Make the smallest necessary code change.
+  - Do not rewrite unrelated files.
+  - Do not change tests unless the tests are clearly wrong.
+  - After editing, summarize the files changed and why the fix works.
+review:
+  command:
+    - python
+    - -m
+    - pytest
+    - tests/
+    - -q
+  command_timeout: 120
