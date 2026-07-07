@@ -119,10 +119,32 @@ def build_parser() -> argparse.ArgumentParser:
     run_recipe.add_argument("recipe")
     run_recipe.add_argument("--explain", action="store_true", help="Show what would run.")
     run_recipe.add_argument("--json", action="store_true", help="Print the final goal JSON.")
+    run_recipe.add_argument(
+        "--until-done",
+        action="store_true",
+        help="Retry failed worker attempts up to --max-attempts.",
+    )
+    run_recipe.add_argument(
+        "--max-attempts",
+        type=int,
+        default=3,
+        help="Maximum worker attempts with --until-done. Default: 3.",
+    )
     for recipe_name in sorted(RECIPE_COMMANDS):
         recipe_cmd = sub.add_parser(recipe_name, help=f"Run the built-in {recipe_name} recipe")
         recipe_cmd.add_argument("--explain", action="store_true", help="Show what would run.")
         recipe_cmd.add_argument("--json", action="store_true", help="Print the final goal JSON.")
+        recipe_cmd.add_argument(
+            "--until-done",
+            action="store_true",
+            help="Retry failed worker attempts up to --max-attempts.",
+        )
+        recipe_cmd.add_argument(
+            "--max-attempts",
+            type=int,
+            default=3,
+            help="Maximum worker attempts with --until-done. Default: 3.",
+        )
     sub.add_parser("report", help="Show a plain-language status report")
     start = sub.add_parser("start", help="Start a goal")
     start.add_argument("objective")
@@ -237,7 +259,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.explain:
             print(explain_recipe(recipe))
             return 0
-        return run_recipe(project_dir, recipe, output_json=args.json)
+        return run_recipe(
+            project_dir,
+            recipe,
+            output_json=args.json,
+            until_done=args.until_done,
+            max_attempts=args.max_attempts,
+        )
     if args.command == "doctor":
         payload = doctor(project_dir)
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -374,7 +402,14 @@ def run_until_done(
     return goal
 
 
-def run_recipe(project_dir: Path, recipe: Recipe, *, output_json: bool = False) -> int:
+def run_recipe(
+    project_dir: Path,
+    recipe: Recipe,
+    *,
+    output_json: bool = False,
+    until_done: bool = False,
+    max_attempts: int = 3,
+) -> int:
     initialized_config: tuple[Path, str] | None = None
     try:
         initialized_config = ensure_recipe_config(project_dir)
@@ -383,10 +418,17 @@ def run_recipe(project_dir: Path, recipe: Recipe, *, output_json: bool = False) 
             review_command=recipe_review_command(project_dir, recipe.review_command),
             review_command_timeout=recipe.review_command_timeout,
         )
-        goal = supervisor.start(recipe.objective)
-        goal = supervisor.continue_goal()
-        if goal.status is GoalStatus.REVIEW:
-            goal = supervisor.review()
+        if until_done:
+            goal = run_until_done(
+                supervisor,
+                objective=recipe.objective,
+                max_attempts=max_attempts,
+            )
+        else:
+            goal = supervisor.start(recipe.objective)
+            goal = supervisor.continue_goal()
+            if goal.status is GoalStatus.REVIEW:
+                goal = supervisor.review()
     except (ConfigError, HarnessError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
         return 2
@@ -642,6 +684,34 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
         return False
     if len(list((driver_project / CONFIG_DIR / "runs").glob("*/report.md"))) != 1:
         print(f"{stem} smoke failed: run-until-done did not write one report artifact")
+        return False
+    recipe_project = smoke_root / "recipe-until-done"
+    recipe_config_dir = recipe_project / CONFIG_DIR
+    recipe_config_dir.mkdir(parents=True)
+    (recipe_project / "tests").mkdir()
+    (recipe_project / "tests" / "test_ok.py").write_text(
+        "def test_ok():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (recipe_config_dir / CONFIG_NAME).write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    if not _run_release_step(
+        f"Smoke {stem} recipe until-done",
+        [
+            str(harness_bin),
+            "--project-dir",
+            str(recipe_project),
+            "fix-tests",
+            "--until-done",
+        ],
+        cwd=tmp_root,
+        required_stdout="Recipe: fix-tests",
+    ):
+        return False
+    if len(list((recipe_project / CONFIG_DIR / "runs").glob("*/report.md"))) != 1:
+        print(f"{stem} smoke failed: recipe --until-done did not write one report artifact")
         return False
     demo_dir = smoke_root / "demo"
     if not _run_release_step(

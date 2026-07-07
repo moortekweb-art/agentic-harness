@@ -477,6 +477,14 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
                 "Report: .agentic-harness/runs/goal/report.md\n",
                 encoding="utf-8",
             )
+        if label == "Smoke wheel recipe until-done":
+            project_dir = Path(command[command.index("--project-dir") + 1])
+            run_dir = project_dir / ".agentic-harness" / "runs" / "goal"
+            run_dir.mkdir(parents=True)
+            (run_dir / "report.md").write_text(
+                "Report: .agentic-harness/runs/goal/report.md\n",
+                encoding="utf-8",
+            )
         if label == "Smoke wheel packaged demo":
             demo_dir = Path(command[-1])
             run_dir = demo_dir / ".agentic-harness" / "runs" / "goal"
@@ -498,6 +506,7 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
     assert "Smoke wheel version --version" in labels
     assert "Smoke wheel version version" in labels
     assert "Smoke wheel run-until-done" in labels
+    assert "Smoke wheel recipe until-done" in labels
 
 
 def test_easy_explain_does_not_create_config(tmp_path, capsys) -> None:
@@ -650,6 +659,81 @@ def test_run_recipe_auto_initializes_available_backend(
     assert "no worker configured" not in output
     assert load_config(tmp_path).worker == "shell"
     assert (tmp_path / ".agentic-harness" / "config.yml").exists()
+    assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
+
+
+def test_direct_recipe_until_done_restarts_failed_attempt_and_finishes(
+    tmp_path, capsys
+) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_ok.py").write_text(
+        "def test_ok():\n    assert True\n",
+        encoding="utf-8",
+    )
+    worker = tmp_path / "flaky_worker.py"
+    worker.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "attempts = Path('attempts.txt')",
+                "count = int(attempts.read_text() or '0') if attempts.exists() else 0",
+                "attempts.write_text(str(count + 1))",
+                "raise SystemExit(1 if count == 0 else 0)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert main(["--project-dir", str(tmp_path), "init-agent", "shell"]) == 0
+    (tmp_path / ".agentic-harness" / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: shell",
+                "shell_command:",
+                f"  - {sys.executable}",
+                "  - flaky_worker.py",
+                "review_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                "  - 'raise SystemExit(0)'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "fix-tests", "--until-done"])
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "Recipe: fix-tests" in output
+    assert "Result: done" in output
+    assert "Report: .agentic-harness/runs/" in output
+    assert (tmp_path / "attempts.txt").read_text(encoding="utf-8") == "2"
+    assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
+
+
+def test_run_recipe_until_done_can_print_json(tmp_path, capsys) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_ok.py").write_text(
+        "def test_ok():\n    assert True\n",
+        encoding="utf-8",
+    )
+    assert main(["--project-dir", str(tmp_path), "init"]) == 0
+    (tmp_path / ".agentic-harness" / "config.yml").write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "run-recipe", "fix-tests", "--until-done", "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["status"] == "done"
+    assert payload["review"]["passed"] is True
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
 
 
