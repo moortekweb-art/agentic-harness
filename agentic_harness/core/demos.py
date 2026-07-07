@@ -26,7 +26,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest tests/ -q   # expected to fail
 agentic-harness init shell
 agentic-harness fix-tests
-agentic-harness status --format text
+agentic-harness status
 agentic-harness report
 python -m pytest tests/ -q   # should pass
 ```

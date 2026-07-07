@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-agentic-harness"
-version = "0.6.18"
+version = "0.6.19"
 description = "A local-first goal execution harness with deterministic review gates."
 readme = "README.md"
 requires-python = ">=3.11"

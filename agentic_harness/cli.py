@@ -894,7 +894,7 @@ def run_demo(name: str, path: Path, *, force: bool = False, install: bool = True
         return 1
     if not _run_demo_step(
         "Show status",
-        [sys.executable, "-m", "agentic_harness.cli", "status", "--format", "text"],
+        [sys.executable, "-m", "agentic_harness.cli", "status"],
         cwd=demo_path,
         env=env,
         echo_output=True,

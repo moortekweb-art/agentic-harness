@@ -142,7 +142,7 @@ def test_killer_demo_runs_failure_fix_review_cycle(tmp_path) -> None:
     assert "Review: passed" in run.stdout
 
     status = subprocess.run(
-        [sys.executable, "-m", "agentic_harness.cli", "status", "--format", "text"],
+        [sys.executable, "-m", "agentic_harness.cli", "status"],
         cwd=demo,
         text=True,
         capture_output=True,
