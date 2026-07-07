@@ -67,6 +67,9 @@ def test_publish_workflow_template_uses_pypi_trusted_publishing() -> None:
     steps = publish["steps"]
     assert any(step.get("uses") == "pypa/gh-action-pypi-publish@release/v1" for step in steps)
     assert not any("PYPI_TOKEN" in str(step) or "password" in str(step) for step in steps)
+    run_steps = "\n".join(str(step.get("run", "")) for step in steps)
+    assert 'python -m pip install -e ".[test]"' in run_steps
+    assert "python -m agentic_harness.cli release-smoke --dist-dir dist" in run_steps
 
 
 def test_active_publish_workflow_uses_pypi_trusted_publishing() -> None:
@@ -81,6 +84,9 @@ def test_active_publish_workflow_uses_pypi_trusted_publishing() -> None:
     steps = publish["steps"]
     assert any(step.get("uses") == "pypa/gh-action-pypi-publish@release/v1" for step in steps)
     assert not any("PYPI_TOKEN" in str(step) or "password" in str(step) for step in steps)
+    run_steps = "\n".join(str(step.get("run", "")) for step in steps)
+    assert 'python -m pip install -e ".[test]"' in run_steps
+    assert "python -m agentic_harness.cli release-smoke --dist-dir dist" in run_steps
 
 
 def test_distribution_name_avoids_occupied_pypi_project() -> None:

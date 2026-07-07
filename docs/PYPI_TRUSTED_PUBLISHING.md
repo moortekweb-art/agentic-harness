@@ -8,6 +8,17 @@ The publish workflow is checked in at `.github/workflows/publish.yml`.
 `docs/templates/publish.yml` is retained only as a reference copy. Configure the
 PyPI trusted publisher below before expecting release publishes to succeed.
 
+Before uploading, the workflow installs the project with test extras and runs:
+
+```bash
+python -m agentic_harness.cli release-smoke --dist-dir dist
+```
+
+That command builds the wheel and sdist, runs `twine check`, installs both
+artifacts in fresh virtual environments, runs the packaged demo from each
+artifact, and verifies the final demo tests. The PyPI publish action uploads the
+same `dist/` artifacts only after that gate passes.
+
 ## Name Availability Blocker
 
 As of 2026-07-04, the `agentic-harness` project name on PyPI is already used by
@@ -37,7 +48,8 @@ release attempt were:
 - `environment`: `pypi`
 
 After the external PyPI setup exists, publishing a GitHub release runs the
-`Publish` workflow and uploads the distributions built from that release.
+`Publish` workflow and uploads the release-smoke-verified distributions built
+from that release.
 
 ## Current Publish Status
 
@@ -52,7 +64,8 @@ workflow or publish a new release tag.
 ## Manual Verification
 
 ```bash
-python -m build --outdir /tmp/agentic-harness-dist
+python -m pip install -e ".[test]"
+python -m agentic_harness.cli release-smoke --dist-dir /tmp/agentic-harness-dist
 python -m pip index versions local-agentic-harness
 gh release view v0.6.9 --repo moortekweb-art/agentic-harness
 gh run view 28703761225 --repo moortekweb-art/agentic-harness --log-failed

@@ -64,5 +64,7 @@ gh release create v0.6.9 --title "v0.6.9" --notes-file docs/RELEASE_NOTES_0.6.9.
 
 PyPI publishing has an active trusted-publishing workflow at
 `.github/workflows/publish.yml` for the `local-agentic-harness` distribution.
+The publish job runs `agentic-harness release-smoke --dist-dir dist` and uploads
+the same verified `dist/` artifacts only if release-smoke passes.
 Complete the external trusted publisher setup documented in
 `docs/PYPI_TRUSTED_PUBLISHING.md` before relying on release-triggered uploads.
