@@ -483,6 +483,14 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
                 "Report: .agentic-harness/runs/goal/report.md\n",
                 encoding="utf-8",
             )
+        if label == "Smoke wheel run":
+            project_dir = Path(command[command.index("--project-dir") + 1])
+            run_dir = project_dir / ".agentic-harness" / "runs" / "goal"
+            run_dir.mkdir(parents=True)
+            (run_dir / "report.md").write_text(
+                "Report: .agentic-harness/runs/goal/report.md\n",
+                encoding="utf-8",
+            )
         if label == "Smoke wheel recipe until-done":
             project_dir = Path(command[command.index("--project-dir") + 1])
             run_dir = project_dir / ".agentic-harness" / "runs" / "goal"
@@ -518,6 +526,7 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
     assert cli._smoke_installed_artifact(artifact, tmp_root)
     assert "Smoke wheel version --version" in labels
     assert "Smoke wheel version version" in labels
+    assert "Smoke wheel run" in labels
     assert "Smoke wheel run-until-done" in labels
     assert "Smoke wheel recipe until-done" in labels
 
@@ -898,7 +907,7 @@ def test_review_reports_invalid_transition_as_json(tmp_path, capsys) -> None:
         encoding="utf-8",
     )
     capsys.readouterr()
-    assert main(["--project-dir", str(tmp_path), "run", "done goal"]) == 0
+    assert main(["--project-dir", str(tmp_path), "run", "done goal", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "done"
 
@@ -927,7 +936,7 @@ def test_run_reports_missing_shell_executable_as_failed_goal(tmp_path, capsys) -
     )
     capsys.readouterr()
 
-    rc = main(["--project-dir", str(tmp_path), "run", "missing executable"])
+    rc = main(["--project-dir", str(tmp_path), "run", "missing executable", "--json"])
 
     payload = json.loads(capsys.readouterr().out)
     assert rc == 1
@@ -1505,11 +1514,30 @@ def test_cli_run_executes_start_continue_review_round_trip(tmp_path, capsys) -> 
     )
     capsys.readouterr()
 
-    assert main(["--project-dir", str(tmp_path), "run", "ship in one command"]) == 0
+    assert main(["--project-dir", str(tmp_path), "run", "ship in one command", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["status"] == "done"
     assert payload["review"]["passed"] is True
+
+
+def test_cli_run_default_output_writes_report(tmp_path, capsys) -> None:
+    assert main(["--project-dir", str(tmp_path), "init"]) == 0
+    config_path = tmp_path / ".agentic-harness" / "config.yml"
+    config_path.write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "run", "ship plain run output"])
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "Result: done" in output
+    assert "Objective: ship plain run output" in output
+    assert "Report: .agentic-harness/runs/" in output
+    assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
 
 
 def test_run_until_done_restarts_failed_attempt_and_finishes(tmp_path, capsys) -> None:

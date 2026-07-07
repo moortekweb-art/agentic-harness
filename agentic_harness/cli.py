@@ -151,6 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("objective")
     run = sub.add_parser("run", help="Start, continue, and review a goal")
     run.add_argument("objective")
+    run.add_argument("--json", action="store_true", help="Print the final goal JSON.")
     drive = sub.add_parser(
         "run-until-done",
         help="Start or resume a goal and keep retrying failed attempts up to a limit",
@@ -287,7 +288,15 @@ def main(argv: list[str] | None = None) -> int:
             goal = supervisor.continue_goal()
             if goal.status is GoalStatus.REVIEW:
                 goal = supervisor.review()
-            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            goal, report_path = write_goal_report(supervisor, project_dir, goal)
+            if args.json:
+                print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            else:
+                changes = workspace_change_summary(
+                    project_dir,
+                    goal.metadata.get("workspace_snapshot"),
+                )
+                print(format_report_text(goal, report_path=report_path, workspace_changes=changes))
             return 0 if goal.status is GoalStatus.DONE else 1
         if args.command == "run-until-done":
             goal = run_until_done(
@@ -681,6 +690,29 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
             required_stdout=f"Recipe: {command}",
         ):
             return False
+    run_project = smoke_root / "run"
+    run_config_dir = run_project / CONFIG_DIR
+    run_config_dir.mkdir(parents=True)
+    (run_config_dir / CONFIG_NAME).write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    if not _run_release_step(
+        f"Smoke {stem} run",
+        [
+            str(harness_bin),
+            "--project-dir",
+            str(run_project),
+            "run",
+            "release smoke goal",
+        ],
+        cwd=tmp_root,
+        required_stdout="Report: .agentic-harness/runs/",
+    ):
+        return False
+    if len(list((run_project / CONFIG_DIR / "runs").glob("*/report.md"))) != 1:
+        print(f"{stem} smoke failed: run did not write one report artifact")
+        return False
     driver_project = smoke_root / "run-until-done"
     config_dir = driver_project / CONFIG_DIR
     config_dir.mkdir(parents=True)
