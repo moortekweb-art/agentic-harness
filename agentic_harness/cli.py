@@ -204,8 +204,11 @@ def main(argv: list[str] | None = None) -> int:
                 path = write_tool_config(project_dir, args.tool, force=args.force)
                 tool = args.tool
             else:
-                path = write_default_config(project_dir)
-                tool = None
+                tool = preferred_agent_tool()
+                if tool:
+                    path = write_tool_config(project_dir, tool, force=args.force)
+                else:
+                    path = write_default_config(project_dir)
         except ConfigError as exc:
             print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
             return 2
@@ -524,7 +527,7 @@ def format_init_text(path: Path, tool: str | None) -> str:
     else:
         lines = ["Configured default project."]
     lines.append(f"Config: {config_path}")
-    lines.append("Next: agentic-harness fix-tests" if tool else "Next: agentic-harness init shell --force")
+    lines.append("Next: agentic-harness fix-tests" if tool else "Next: agentic-harness quickstart")
     return "\n".join(lines)
 
 
@@ -1168,12 +1171,20 @@ def project_relative_path(project_dir: Path, path: Path) -> str:
 def format_next_text(project_dir: Path) -> str:
     config_path = project_dir / CONFIG_DIR / CONFIG_NAME
     if not config_path.exists():
+        selected = preferred_agent_tool()
+        if selected:
+            return "\n".join(
+                [
+                    "State: not set up",
+                    f"Next: agentic-harness fix-tests  # auto-creates config for {selected}",
+                    "Preview: agentic-harness run-recipe fix-tests --explain",
+                ]
+            )
         return "\n".join(
             [
                 "State: not set up",
-                "Next: agentic-harness init shell",
-                "Then: agentic-harness fix-tests",
-                "Preview: agentic-harness run-recipe fix-tests --explain",
+                "Next: agentic-harness quickstart",
+                "Demo: agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force",
             ]
         )
     try:

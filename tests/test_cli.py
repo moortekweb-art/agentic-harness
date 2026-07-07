@@ -30,7 +30,9 @@ def current_package_version() -> str:
     return str(metadata["project"]["version"])
 
 
-def test_init_creates_valid_project_config(tmp_path, capsys) -> None:
+def test_init_without_backend_creates_safe_placeholder(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "available_agent_tools", lambda: {})
+
     rc = main(["--project-dir", str(tmp_path), "init"])
 
     assert rc == 0
@@ -39,7 +41,31 @@ def test_init_creates_valid_project_config(tmp_path, capsys) -> None:
     output = capsys.readouterr().out
     assert "Configured default project." in output
     assert "Config:" in output
-    assert "Next: agentic-harness init shell --force" in output
+    assert "Next: agentic-harness quickstart" in output
+
+
+def test_init_auto_selects_detected_backend(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "available_agent_tools",
+        lambda: {
+            "aider": False,
+            "codewhale": False,
+            "codex": True,
+            "opencode": False,
+            "shell": False,
+        },
+    )
+
+    rc = main(["--project-dir", str(tmp_path), "init"])
+
+    assert rc == 0
+    config = load_config(tmp_path)
+    assert config.worker == "coding_agent"
+    assert config.coding_agent_command[:2] == ["codex", "exec"]
+    output = capsys.readouterr().out
+    assert "Configured codex tool." in output
+    assert "Next: agentic-harness fix-tests" in output
 
 
 def test_init_shell_creates_beginner_config(tmp_path, capsys) -> None:
@@ -783,14 +809,37 @@ def test_report_plain_text_for_no_active_run(tmp_path, capsys) -> None:
     assert capsys.readouterr().out == "No active run.\nNext: agentic-harness quickstart\n"
 
 
-def test_next_suggests_easy_when_project_is_not_set_up(tmp_path, capsys) -> None:
+def test_next_suggests_direct_recipe_when_backend_available(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "available_agent_tools",
+        lambda: {
+            "aider": False,
+            "codewhale": False,
+            "codex": True,
+            "opencode": False,
+            "shell": False,
+        },
+    )
+
     rc = main(["--project-dir", str(tmp_path), "next"])
 
     output = capsys.readouterr().out
     assert rc == 0
     assert "State: not set up" in output
-    assert "Next: agentic-harness init shell" in output
-    assert "Then: agentic-harness fix-tests" in output
+    assert "Next: agentic-harness fix-tests  # auto-creates config for codex" in output
+
+
+def test_next_without_backend_points_to_quickstart_and_demo(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "available_agent_tools", lambda: {})
+
+    rc = main(["--project-dir", str(tmp_path), "next"])
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "State: not set up" in output
+    assert "Next: agentic-harness quickstart" in output
+    assert "Demo: agentic-harness run-demo fix-tests" in output
 
 
 def test_next_suggests_easy_when_configured_but_idle(tmp_path, capsys) -> None:

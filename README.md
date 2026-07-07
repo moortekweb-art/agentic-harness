@@ -114,7 +114,7 @@ transcripts, artifacts, loop limits, and review gates.
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.21 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.22 release checks.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active publish workflow and external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
@@ -290,7 +290,9 @@ supervisor = Supervisor(project_dir=".", worker=MyWorker())
 
 ## Configuration
 
-`agentic-harness init` creates `.agentic-harness/config.yml`.
+`agentic-harness init` creates `.agentic-harness/config.yml`. When Codex,
+CodeWhale, OpenCode, or Aider is available on `PATH`, bare `init` selects that
+backend automatically.
 
 ```bash
 agentic-harness init
@@ -298,8 +300,9 @@ agentic-harness init-agent shell
 agentic-harness init-agent codex
 ```
 
-The `init` command without a tool argument creates a minimal config. The `init <tool>` variant
-and `init-agent <tool>` variants write a pre-configured template for the named backend.
+If no supported coding-agent backend is available, bare `init` creates a safe
+placeholder config. The `init <tool>` variant and `init-agent <tool>` variants
+write a pre-configured template for the named backend.
 
 ```yaml
 version: 1
