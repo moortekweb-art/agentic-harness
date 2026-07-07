@@ -68,6 +68,44 @@ def test_init_auto_selects_detected_backend(tmp_path, capsys, monkeypatch) -> No
     assert "Next: agentic-harness fix-tests" in output
 
 
+def test_run_auto_configures_detected_backend(tmp_path, capsys, monkeypatch) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text("#!/bin/sh\necho fake codex \"$@\"\n", encoding="utf-8")
+    codex.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_ok.py").write_text(
+        "def test_ok():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    rc = main(["--project-dir", str(tmp_path), "run", "do useful work"])
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "Configured codex tool." in output
+    assert "Result: done" in output
+    assert load_config(tmp_path).worker == "coding_agent"
+    assert list((tmp_path / ".agentic-harness" / "runs").glob("*/coding-agent.log"))
+    assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
+
+
+def test_run_without_config_or_backend_fails_before_state_creation(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    monkeypatch.setattr(cli, "available_agent_tools", lambda: {})
+
+    rc = main(["--project-dir", str(tmp_path), "run", "do useful work"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["ok"] is False
+    assert "agentic-harness quickstart" in payload["error"]
+    assert not (tmp_path / ".agentic-harness" / "current.json").exists()
+
+
 def test_init_shell_creates_beginner_config(tmp_path, capsys) -> None:
     rc = main(["--project-dir", str(tmp_path), "init", "shell"])
 
@@ -432,6 +470,7 @@ def test_release_smoke_resolves_relative_dist_dir_against_project_root(
         *,
         cwd: Path,
         required_stdout: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> bool:
         release_steps.append((label, command))
         if label == "Build wheel and sdist":
@@ -502,6 +541,7 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
         *,
         cwd: Path,
         required_stdout: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> bool:
         labels.append(label)
         if label == "Smoke wheel run-until-done":
@@ -548,6 +588,19 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
                 ),
                 encoding="utf-8",
             )
+        if label == "Smoke wheel run auto-config":
+            project_dir = Path(command[command.index("--project-dir") + 1])
+            config_dir = project_dir / ".agentic-harness"
+            run_dir = config_dir / "runs" / "goal"
+            run_dir.mkdir(parents=True)
+            (config_dir / "config.yml").write_text(
+                "version: 1\nworker:\n  type: coding_agent\n  coding_agent_command:\n    - codex\n",
+                encoding="utf-8",
+            )
+            (run_dir / "report.md").write_text(
+                "Report: .agentic-harness/runs/goal/report.md\n",
+                encoding="utf-8",
+            )
         return True
 
     monkeypatch.setattr(cli, "_run_release_step", fake_run_release_step)
@@ -559,6 +612,7 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
     assert "Smoke wheel status default text" in labels
     assert "Smoke wheel run-until-done" in labels
     assert "Smoke wheel recipe until-done" in labels
+    assert "Smoke wheel run auto-config" in labels
 
 
 def test_easy_explain_does_not_create_config(tmp_path, capsys) -> None:

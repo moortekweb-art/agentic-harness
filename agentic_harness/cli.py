@@ -276,7 +276,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
+    initialized_config: tuple[Path, str] | None = None
     try:
+        if args.command == "run" or (args.command == "run-until-done" and args.objective):
+            initialized_config = ensure_execution_config(project_dir)
         supervisor = build_supervisor(project_dir)
     except ConfigError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
@@ -295,6 +298,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.json:
                 print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
             else:
+                if initialized_config is not None:
+                    path, tool = initialized_config
+                    print(format_init_text(path, tool))
                 changes = workspace_change_summary(
                     project_dir,
                     goal.metadata.get("workspace_snapshot"),
@@ -311,6 +317,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.json:
                 print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
             else:
+                if initialized_config is not None:
+                    path, tool = initialized_config
+                    print(format_init_text(path, tool))
                 changes = workspace_change_summary(
                     project_dir,
                     goal.metadata.get("workspace_snapshot"),
@@ -480,6 +489,16 @@ def run_recipe(
 
 
 def ensure_recipe_config(project_dir: Path) -> tuple[Path, str] | None:
+    try:
+        return ensure_execution_config(project_dir)
+    except ConfigError as exc:
+        raise ConfigError(
+            "no .agentic-harness/config.yml and no coding-agent backend found; "
+            "run agentic-harness init-agent codex or agentic-harness init-agent shell"
+        ) from exc
+
+
+def ensure_execution_config(project_dir: Path) -> tuple[Path, str] | None:
     config_path = project_dir / CONFIG_DIR / CONFIG_NAME
     if config_path.exists():
         return None
@@ -487,7 +506,7 @@ def ensure_recipe_config(project_dir: Path) -> tuple[Path, str] | None:
     if selected is None:
         raise ConfigError(
             "no .agentic-harness/config.yml and no coding-agent backend found; "
-            "run agentic-harness init-agent codex or agentic-harness init-agent shell"
+            "run agentic-harness quickstart or agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force"
         )
     return write_tool_config(project_dir, selected), selected
 
@@ -805,6 +824,44 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
     if "Changed: 1 file" not in demo_report or "- modified calculator.py" not in demo_report:
         print(f"{stem} smoke failed: report artifact did not include changed-file summary")
         return False
+    auto_project = smoke_root / "auto-run"
+    (auto_project / "tests").mkdir(parents=True)
+    (auto_project / "tests" / "test_ok.py").write_text(
+        "def test_ok():\n    assert True\n",
+        encoding="utf-8",
+    )
+    fake_bin = smoke_root / "fake-bin"
+    fake_bin.mkdir()
+    if os.name == "nt":
+        fake_codex = fake_bin / "codex.cmd"
+        fake_codex.write_text("@echo off\necho fake codex %*\n", encoding="utf-8")
+    else:
+        fake_codex = fake_bin / "codex"
+        fake_codex.write_text("#!/bin/sh\necho fake codex \"$@\"\n", encoding="utf-8")
+        fake_codex.chmod(0o755)
+    auto_env = os.environ.copy()
+    auto_env["PATH"] = str(fake_bin) + os.pathsep + auto_env.get("PATH", "")
+    if not _run_release_step(
+        f"Smoke {stem} run auto-config",
+        [
+            str(harness_bin),
+            "--project-dir",
+            str(auto_project),
+            "run",
+            "release smoke goal",
+        ],
+        cwd=tmp_root,
+        required_stdout="Configured codex tool.",
+        env=auto_env,
+    ):
+        return False
+    auto_config = auto_project / CONFIG_DIR / CONFIG_NAME
+    if "codex" not in auto_config.read_text(encoding="utf-8"):
+        print(f"{stem} smoke failed: auto-config run did not write codex config")
+        return False
+    if len(list((auto_project / CONFIG_DIR / "runs").glob("*/report.md"))) != 1:
+        print(f"{stem} smoke failed: auto-config run did not write one report artifact")
+        return False
     return _run_release_step(
         f"Verify {stem} final demo tests",
         [str(python_bin), "-m", "pytest", "tests/", "-q"],
@@ -830,11 +887,13 @@ def _run_release_step(
     *,
     cwd: Path,
     required_stdout: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> bool:
     print(f"{label}: {' '.join(command)}")
     proc = subprocess.run(
         command,
         cwd=cwd,
+        env=env,
         text=True,
         capture_output=True,
         check=False,
