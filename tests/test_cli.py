@@ -180,9 +180,12 @@ def test_quickstart_without_backend_points_to_shell_demo(monkeypatch) -> None:
 
     assert "agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force" in output
     assert "agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force" in output
+    assert "python -m pip install -r requirements-dev.txt" in output
+    assert "python -m pytest tests/ -q  # expected to fail" in output
     assert "agentic-harness fix-tests" in output
     assert "agentic-harness status" in output
     assert "agentic-harness report" in output
+    assert "python -m pytest tests/ -q  # should pass" in output
     assert "cat >" not in output
 
 

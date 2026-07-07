@@ -61,8 +61,9 @@ def test_killer_demo_contains_runnable_fix_failing_tests_loop() -> None:
 
     readme = (root / "README.md").read_text(encoding="utf-8")
 
-    assert "agentic-harness init shell" in readme
+    assert "agentic-harness init shell" not in readme
     assert "agentic-harness fix-tests" in readme
+    assert "auto-creates demo config" in readme
     assert "agentic-harness report" in readme
     assert not (root / ".agentic-harness" / "config.yml").exists()
 
@@ -114,20 +115,6 @@ def test_killer_demo_runs_failure_fix_review_cycle(tmp_path) -> None:
     assert before.returncode != 0
     assert "assert 6 == 5" in before.stdout
 
-    init = subprocess.run(
-        [sys.executable, "-m", "agentic_harness.cli", "init", "shell"],
-        cwd=demo,
-        text=True,
-        capture_output=True,
-        env=env,
-        check=False,
-    )
-
-    assert init.returncode == 0, init.stderr
-    config = (demo / ".agentic-harness" / "config.yml").read_text(encoding="utf-8")
-    assert "mock_coding_agent.py" in config
-    assert sys.executable in config
-
     run = subprocess.run(
         [sys.executable, "-m", "agentic_harness.cli", "fix-tests"],
         cwd=demo,
@@ -140,6 +127,9 @@ def test_killer_demo_runs_failure_fix_review_cycle(tmp_path) -> None:
     assert run.returncode == 0, run.stderr
     assert "Result: done" in run.stdout
     assert "Review: passed" in run.stdout
+    config = (demo / ".agentic-harness" / "config.yml").read_text(encoding="utf-8")
+    assert "mock_coding_agent.py" in config
+    assert sys.executable in config
 
     status = subprocess.run(
         [sys.executable, "-m", "agentic_harness.cli", "status"],
@@ -212,20 +202,6 @@ def test_packaged_demo_generator_runs_failure_fix_review_cycle(tmp_path) -> None
     assert before.returncode != 0
     assert "assert 6 == 5" in before.stdout
 
-    init = subprocess.run(
-        [sys.executable, "-m", "agentic_harness.cli", "init", "shell"],
-        cwd=demo,
-        text=True,
-        capture_output=True,
-        env=env,
-        check=False,
-    )
-
-    assert init.returncode == 0, init.stderr
-    config = (demo / ".agentic-harness" / "config.yml").read_text(encoding="utf-8")
-    assert "mock_coding_agent.py" in config
-    assert sys.executable in config
-
     run = subprocess.run(
         [sys.executable, "-m", "agentic_harness.cli", "fix-tests"],
         cwd=demo,
@@ -238,6 +214,9 @@ def test_packaged_demo_generator_runs_failure_fix_review_cycle(tmp_path) -> None
     assert run.returncode == 0, run.stderr
     assert "Result: done" in run.stdout
     assert "Review: passed" in run.stdout
+    config = (demo / ".agentic-harness" / "config.yml").read_text(encoding="utf-8")
+    assert "mock_coding_agent.py" in config
+    assert sys.executable in config
 
     report = subprocess.run(
         [sys.executable, "-m", "agentic_harness.cli", "report"],

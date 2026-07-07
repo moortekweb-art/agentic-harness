@@ -1307,9 +1307,12 @@ def format_quickstart_text() -> str:
                 "Or just generate the files:",
                 "  agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force",
                 "  cd /tmp/agentic-harness-demo",
-                "  agentic-harness fix-tests",
+                "  python -m pip install -r requirements-dev.txt",
+                "  python -m pytest tests/ -q  # expected to fail",
+                "  agentic-harness fix-tests  # auto-creates demo config",
                 "  agentic-harness status",
                 "  agentic-harness report",
+                "  python -m pytest tests/ -q  # should pass",
             ]
         )
     return "\n".join(
