@@ -26,7 +26,10 @@ def test_init_creates_valid_project_config(tmp_path, capsys) -> None:
     assert rc == 0
     assert (tmp_path / ".agentic-harness" / "config.yml").exists()
     assert load_config(tmp_path).worker == "noop"
-    assert "created" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Configured default project." in output
+    assert "Config:" in output
+    assert "Next: agentic-harness init shell --force" in output
 
 
 def test_init_shell_creates_beginner_config(tmp_path, capsys) -> None:
@@ -37,7 +40,10 @@ def test_init_shell_creates_beginner_config(tmp_path, capsys) -> None:
     assert config.worker == "shell"
     assert config.shell_command
     assert config.review_command == ["python", "-m", "pytest", "tests/", "-q"]
-    assert "created" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Configured shell tool." in output
+    assert "Config:" in output
+    assert "Next: agentic-harness fix-tests" in output
 
 
 def test_init_shell_uses_demo_mock_agent_when_present(tmp_path, capsys) -> None:
@@ -50,7 +56,7 @@ def test_init_shell_uses_demo_mock_agent_when_present(tmp_path, capsys) -> None:
     assert config.worker == "shell"
     assert config.shell_command == [sys.executable, "mock_coding_agent.py", "{objective}"]
     assert config.review_command == [sys.executable, "-m", "pytest", "tests/", "-q"]
-    assert "created" in capsys.readouterr().out
+    assert "Configured shell tool." in capsys.readouterr().out
 
 
 def test_init_tool_refuses_overwrite_without_force(tmp_path, capsys) -> None:
@@ -76,7 +82,7 @@ def test_init_tool_force_replaces_config(tmp_path, capsys) -> None:
 
     assert rc == 0
     assert load_config(tmp_path).worker == "coding_agent"
-    assert "created" in capsys.readouterr().out
+    assert "Configured codex tool." in capsys.readouterr().out
 
 
 def test_init_agent_codewhale_writes_expected_config(tmp_path, capsys) -> None:
@@ -88,7 +94,7 @@ def test_init_agent_codewhale_writes_expected_config(tmp_path, capsys) -> None:
     assert config.coding_agent_command[:2] == ["codewhale", "exec"]
     assert "--allowed-tools" in config.coding_agent_command
     assert config.coding_agent_transcript.endswith("codewhale.log")
-    assert "created" in capsys.readouterr().out
+    assert "Configured codewhale tool." in capsys.readouterr().out
 
 
 def test_recipe_loader_returns_expected_builtin_names() -> None:
@@ -362,7 +368,8 @@ def test_easy_shell_configures_and_runs_recipe(tmp_path, capsys) -> None:
 
     output = capsys.readouterr().out
     assert rc == 0
-    assert "created" in output
+    assert "Configured shell tool." in output
+    assert "Next: agentic-harness fix-tests" in output
     assert "Result: done" in output
     assert load_config(tmp_path).worker == "shell"
 

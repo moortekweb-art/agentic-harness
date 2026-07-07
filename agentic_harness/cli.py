@@ -144,12 +144,14 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.command == "init-agent" or args.tool:
                 path = write_tool_config(project_dir, args.tool, force=args.force)
+                tool = args.tool
             else:
                 path = write_default_config(project_dir)
+                tool = None
         except ConfigError as exc:
             print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
             return 2
-        print(f"created {path}")
+        print(format_init_text(path, tool))
         return 0
     if args.command == "agents":
         print(format_agents_text())
@@ -325,8 +327,19 @@ def run_easy(project_dir: Path, recipe: Recipe, agent: str) -> int:
         except ConfigError as exc:
             print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
             return 2
-        print(f"created {path}")
+        print(format_init_text(path, selected))
     return run_recipe(project_dir, recipe)
+
+
+def format_init_text(path: Path, tool: str | None) -> str:
+    config_path = Path(path)
+    if tool:
+        lines = [f"Configured {tool} tool."]
+    else:
+        lines = ["Configured default project."]
+    lines.append(f"Config: {config_path}")
+    lines.append("Next: agentic-harness fix-tests" if tool else "Next: agentic-harness init shell --force")
+    return "\n".join(lines)
 
 
 def run_selftest() -> int:
