@@ -16,8 +16,9 @@ python -m agentic_harness.cli release-smoke --dist-dir dist
 
 That command builds the wheel and sdist, runs `twine check`, installs both
 artifacts in fresh virtual environments, runs the packaged demo from each
-artifact, and verifies the final demo tests. The PyPI publish action uploads the
-same `dist/` artifacts only after that gate passes.
+artifact, verifies the final demo tests, and writes `SHA256SUMS` beside the
+verified artifacts. The PyPI publish action uploads the same `dist/` artifacts
+only after that gate passes.
 
 ## Name Availability Blocker
 

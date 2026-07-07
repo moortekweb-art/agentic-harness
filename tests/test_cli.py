@@ -378,6 +378,11 @@ def test_release_smoke_resolves_relative_dist_dir_against_project_root(
     output = capsys.readouterr().out
     assert rc == 0
     assert len(smoked_artifacts) == 2
+    checksums = tmp_path / "dist" / "SHA256SUMS"
+    assert checksums.exists()
+    checksums_text = checksums.read_text(encoding="utf-8")
+    assert "local_agentic_harness-0.0.0-py3-none-any.whl" in checksums_text
+    assert "local_agentic_harness-0.0.0.tar.gz" in checksums_text
     assert any(
         label == "Check PyPI metadata"
         and command[1:4] == ["-m", "twine", "check"]
@@ -386,6 +391,22 @@ def test_release_smoke_resolves_relative_dist_dir_against_project_root(
         for label, command in release_steps
     )
     assert f"Wheel: {tmp_path / 'dist' / 'local_agentic_harness-0.0.0-py3-none-any.whl'}" in output
+    assert f"SHA256SUMS: {checksums}" in output
+
+
+def test_write_release_checksums_uses_sha256_and_artifact_names(tmp_path) -> None:
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    sdist = tmp_path / "pkg-1.0.0.tar.gz"
+    wheel.write_bytes(b"wheel")
+    sdist.write_bytes(b"sdist")
+
+    checksums = cli.write_release_checksums(tmp_path, [sdist, wheel])
+
+    assert checksums == tmp_path / "SHA256SUMS"
+    assert checksums.read_text(encoding="utf-8").splitlines() == [
+        f"{cli.sha256_file(wheel)}  {wheel.name}",
+        f"{cli.sha256_file(sdist)}  {sdist.name}",
+    ]
 
 
 def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch) -> None:

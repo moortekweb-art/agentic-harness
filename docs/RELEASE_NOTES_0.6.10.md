@@ -27,6 +27,8 @@ smoke-tested artifacts.
 - Updated the active PyPI publish workflow and template so publishing runs
   `agentic-harness release-smoke --dist-dir dist` and uploads the same verified
   artifacts only after release-smoke passes.
+- `agentic-harness release-smoke` now writes a `SHA256SUMS` manifest beside the
+  verified wheel and sdist artifacts.
 - Updated PyPI/release docs to describe the release-smoke-gated publish path.
 
 ## Verification
@@ -38,7 +40,7 @@ smoke-tested artifacts.
 - `agentic-harness release-smoke --dist-dir /tmp/agentic-harness-publish-gate-dist`
   passes from a clean throwaway virtual environment, including `twine check`,
   installed-artifact version checks, wheel smoke, sdist smoke, packaged demo,
-  and final demo tests.
+  final demo tests, and release checksum generation.
 
 ## Publishing Note
 

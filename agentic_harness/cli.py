@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -460,9 +461,11 @@ def run_release_smoke(project_dir: Path, dist_dir: Path | None = None) -> int:
         for artifact in (wheel, sdist):
             if not _smoke_installed_artifact(artifact, tmp_root):
                 return 1
+        checksums = write_release_checksums(out_dir, [wheel, sdist])
         print("Release smoke: passed")
         print(f"Wheel: {wheel}")
         print(f"sdist: {sdist}")
+        print(f"SHA256SUMS: {checksums}")
         return 0
 
 
@@ -471,6 +474,21 @@ def _single_artifact(dist_dir: Path, pattern: str) -> Path:
     if len(matches) != 1:
         raise ConfigError(f"expected one {pattern} artifact in {dist_dir}, found {len(matches)}")
     return matches[0]
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_release_checksums(dist_dir: Path, artifacts: list[Path]) -> Path:
+    checksums_path = dist_dir / "SHA256SUMS"
+    lines = [f"{sha256_file(artifact)}  {artifact.name}" for artifact in sorted(artifacts)]
+    checksums_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return checksums_path
 
 
 def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:

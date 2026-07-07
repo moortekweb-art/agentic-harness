@@ -23,7 +23,8 @@ Use this checklist for a v0.6.10 release.
 
   `release-smoke` builds the wheel and sdist, runs `twine check` against both
   distributions, installs each artifact in a fresh virtual environment, runs
-  the packaged demo, and verifies the final demo tests.
+  the packaged demo, verifies the final demo tests, and writes `SHA256SUMS` next
+  to the verified release artifacts.
 
 - Run CLI smoke checks:
 
