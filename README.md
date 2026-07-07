@@ -7,45 +7,36 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Support](https://img.shields.io/badge/support-Buy%20Me%20a%20Coffee-ffdd00.svg)](https://buymeacoffee.com/moortekweb3)
 
-A small Python harness for running long-lived agent goals without turning your local scripts into a tangled control plane.
+Coding agents say "done" too early. Agentic Harness makes "done" mean checks
+passed.
 
-Agentic Harness gives you a project-local goal loop: start a goal, execute it through an adapter, save artifacts, run deterministic review, and stop before auto-continue loops get weird.
-
-## Project Links
-
-- [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.9 release checks.
-- [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active publish workflow and external PyPI setup required for tokenless publishing.
-- [Repo artwork](docs/assets/) includes a social preview banner and square icon.
-- [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
-- [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
-- [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on Linux, Windows, and macOS.
-
-## Release Smoke
-
-Before tagging a release, run:
-
-```bash
-python -m pip install -e ".[test]"
-python -m pytest tests/ -q
-python -m ruff check
-python -m mypy agentic_harness
-python -m compileall agentic_harness
-python -m agentic_harness.cli release-smoke
-```
-
-`release-smoke` builds the wheel and sdist, installs each into a fresh virtual
-environment, verifies direct recipe commands, runs the packaged demo, and
-checks the transcript/report artifacts.
+Agentic Harness runs coding agents and automation jobs as bounded, reviewable
+goals. It captures transcripts and artifacts, prevents runaway loops, and only
+marks work done when deterministic review passes.
 
 ## Fastest Demo
 
-Agentic Harness supervises a coding agent and only marks work done when review
-passes.
+Run a complete supervised fix-tests workflow from any directory:
 
 ```bash
 agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
 ```
+
+Or inspect the no-hidden-YAML path yourself:
+
+```bash
+agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force
+cd /tmp/agentic-harness-demo
+python -m pip install -r requirements-dev.txt
+python -m pytest tests/ -q   # expected to fail
+agentic-harness init shell
+agentic-harness fix-tests
+agentic-harness status
+agentic-harness report
+python -m pytest tests/ -q   # should pass
+```
+
+No prompt design. No dashboard. No controller.
 
 ## Quick Start
 
@@ -107,6 +98,33 @@ so the operator-readable handoff exists even if you do not run
 Agentic Harness does not replace Codex, Aider, CodeWhale, OpenCode, or your
 shell scripts. It wraps them in a deterministic goal loop with state,
 transcripts, artifacts, loop limits, and review gates.
+
+## Project Links
+
+- [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.9 release checks.
+- [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active publish workflow and external PyPI setup required for tokenless publishing.
+- [Repo artwork](docs/assets/) includes a social preview banner and square icon.
+- [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
+- [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
+- [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on Linux, Windows, and macOS.
+
+## Release Smoke
+
+Before tagging a release, run:
+
+```bash
+python -m pip install -e ".[test]"
+python -m pytest tests/ -q
+python -m ruff check
+python -m mypy agentic_harness
+python -m compileall agentic_harness
+python -m agentic_harness.cli release-smoke
+```
+
+`release-smoke` builds the wheel and sdist, installs each into a fresh virtual
+environment, verifies direct recipe commands, runs the packaged demo, and
+checks the transcript/report artifacts.
 
 ## Why This Exists
 
