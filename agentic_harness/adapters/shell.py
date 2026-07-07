@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.state import Goal
 from agentic_harness.core.worker import WorkerResult
 
@@ -67,16 +68,18 @@ class ShellWorker:
             transcript = self.transcript_for(goal)
             transcript.parent.mkdir(parents=True, exist_ok=True)
             transcript.write_text(
-                "\n".join(
-                    [
-                        f"$ {' '.join(self.command)}",
-                        f"returncode: {proc.returncode}",
-                        "",
-                        "[stdout]",
-                        proc.stdout,
-                        "[stderr]",
-                        proc.stderr,
-                    ]
+                redact_secrets(
+                    "\n".join(
+                        [
+                            f"$ {' '.join(self.command)}",
+                            f"returncode: {proc.returncode}",
+                            "",
+                            "[stdout]",
+                            proc.stdout,
+                            "[stderr]",
+                            proc.stderr,
+                        ]
+                    )
                 ),
                 encoding="utf-8",
             )

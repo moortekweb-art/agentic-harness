@@ -11,6 +11,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Iterator, cast
 
 from agentic_harness.core.errors import StateLockError
+from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.state import Goal
 
 fcntl = importlib.import_module("fcntl") if importlib.util.find_spec("fcntl") else None
@@ -135,7 +136,7 @@ class ArtifactStore:
             with NamedTemporaryFile(
                 "w", encoding="utf-8", dir=str(path.parent), delete=False
             ) as handle:
-                handle.write(content)
+                handle.write(redact_secrets(content))
                 tmp = Path(handle.name)
             tmp.replace(path)
         except Exception:

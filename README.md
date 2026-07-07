@@ -114,7 +114,7 @@ transcripts, artifacts, loop limits, and review gates.
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.24 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.25 release checks.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active publish workflow and external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.

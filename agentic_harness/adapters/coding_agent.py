@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.state import Goal
 from agentic_harness.core.worker import WorkerResult
 
@@ -100,7 +101,11 @@ class CodingAgentWorker:
             transcript = self.transcript_for(goal)
             transcript.parent.mkdir(parents=True, exist_ok=True)
             transcript.write_text(
-                "$ " + " ".join(command) + f"\n\n[stdout]\n{proc.stdout}\n[stderr]\n{proc.stderr}",
+                redact_secrets(
+                    "$ "
+                    + " ".join(command)
+                    + f"\n\n[stdout]\n{proc.stdout}\n[stderr]\n{proc.stderr}"
+                ),
                 encoding="utf-8",
             )
         except (OSError, ValueError) as exc:

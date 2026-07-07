@@ -658,6 +658,22 @@ def test_artifact_store_writes_markdown_report_under_project_state(tmp_path) -> 
     assert goal.artifacts == [f".agentic-harness/runs/{goal.id}/report.md"]
 
 
+def test_artifact_store_redacts_secret_like_report_content(tmp_path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    goal = Goal("write report")
+
+    report_path = store.write_report(
+        goal,
+        "token=secret-value-12345\nAuthorization: Bearer abcdefghijklmnopqrstuvwxyz\n",
+    )
+
+    text = report_path.read_text(encoding="utf-8")
+    assert "secret-value-12345" not in text
+    assert "abcdefghijklmnopqrstuvwxyz" not in text
+    assert "token=<redacted>" in text
+    assert "Bearer <redacted>" in text
+
+
 def test_artifact_store_rejects_report_name_path_escape(tmp_path) -> None:
     store = ArtifactStore(tmp_path / ".agentic-harness")
     goal = Goal("write report")

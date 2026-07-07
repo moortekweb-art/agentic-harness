@@ -44,6 +44,28 @@ def test_shell_worker_writes_transcript(tmp_path) -> None:
     assert "worker stdout" in transcript.read_text(encoding="utf-8")
 
 
+def test_shell_worker_redacts_secret_like_transcript_content(tmp_path) -> None:
+    worker = ShellWorker(
+        [
+            "python",
+            "-c",
+            "print('API_KEY=super-secret-value'); print('Bearer abcdefghijklmnop')",
+        ],
+        cwd=tmp_path,
+    )
+    goal = Goal("run shell", id="goal-redact")
+
+    result = worker.run(goal)
+
+    transcript = tmp_path / ".agentic-harness" / "runs" / "goal-redact" / "shell-worker.log"
+    text = transcript.read_text(encoding="utf-8")
+    assert result.success is True
+    assert "super-secret-value" not in text
+    assert "abcdefghijklmnop" not in text
+    assert "API_KEY=<redacted>" in text
+    assert "Bearer <redacted>" in text
+
+
 def test_shell_worker_reports_failure(tmp_path) -> None:
     worker = ShellWorker(["python", "-c", "import sys; print('bad'); sys.exit(3)"], cwd=tmp_path)
 
@@ -120,6 +142,32 @@ def test_coding_agent_worker_formats_command_and_writes_transcript(monkeypatch, 
         "goal-123",
     ]
     assert calls[0][1]["cwd"] == str(tmp_path)
+
+
+def test_coding_agent_worker_redacts_secret_like_transcript_content(monkeypatch, tmp_path) -> None:
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            "fixed with token=super-secret-value\n",
+            "Authorization: Bearer abcdefghijklmnop\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    worker = CodingAgentWorker(["codex", "exec", "{objective}"], cwd=tmp_path)
+    goal = Goal("fix with API_KEY=objective-secret-12345", id="goal-redact")
+
+    result = worker.run(goal)
+
+    transcript = tmp_path / ".agentic-harness" / "runs" / "goal-redact" / "coding-agent.log"
+    text = transcript.read_text(encoding="utf-8")
+    assert result.success is True
+    assert "super-secret-value" not in text
+    assert "objective-secret-12345" not in text
+    assert "abcdefghijklmnop" not in text
+    assert "token=<redacted>" in text
+    assert "API_KEY=<redacted>" in text
+    assert "Bearer <redacted>" in text
 
 
 def test_coding_agent_worker_rejects_transcript_path_escape(tmp_path) -> None:
