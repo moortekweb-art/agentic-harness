@@ -168,8 +168,8 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument(
         "--format",
         choices=["json", "text"],
-        default="json",
-        help="Output format.",
+        default="text",
+        help="Output format. Default: text.",
     )
     sub.add_parser("continue", help="Advance the active goal")
     sub.add_parser("review", help="Run deterministic review")
@@ -712,6 +712,18 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
         return False
     if len(list((run_project / CONFIG_DIR / "runs").glob("*/report.md"))) != 1:
         print(f"{stem} smoke failed: run did not write one report artifact")
+        return False
+    if not _run_release_step(
+        f"Smoke {stem} status default text",
+        [
+            str(harness_bin),
+            "--project-dir",
+            str(run_project),
+            "status",
+        ],
+        cwd=tmp_root,
+        required_stdout="Status: done",
+    ):
         return False
     driver_project = smoke_root / "run-until-done"
     config_dir = driver_project / CONFIG_DIR
@@ -1328,7 +1340,7 @@ def format_create_demo_text(demo: str, path: Path) -> str:
             "  python -m pip install -r requirements-dev.txt",
             "  python -m pytest tests/ -q  # expected to fail",
             "  agentic-harness fix-tests",
-            "  agentic-harness status --format text",
+            "  agentic-harness status",
             "  agentic-harness report",
             "  python -m pytest tests/ -q  # should pass",
             "",

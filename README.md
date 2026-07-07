@@ -54,7 +54,7 @@ cd /tmp/agentic-harness-demo
 python -m pip install -r requirements-dev.txt
 python -m pytest tests/ -q   # expected to fail
 agentic-harness fix-tests     # auto-creates config when it can pick a backend
-agentic-harness status --format text
+agentic-harness status
 python -m pytest tests/ -q   # should pass
 ```
 
@@ -114,7 +114,7 @@ transcripts, artifacts, loop limits, and review gates.
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.17 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.18 release checks.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active publish workflow and external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
@@ -243,10 +243,10 @@ agentic-harness review
 agentic-harness status
 ```
 
-For a compact operator view instead of JSON:
+For machine-readable output:
 
 ```bash
-agentic-harness status --format text
+agentic-harness status --format json
 ```
 
 ### Local LLM Worker

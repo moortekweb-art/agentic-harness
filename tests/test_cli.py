@@ -527,6 +527,7 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
     assert "Smoke wheel version --version" in labels
     assert "Smoke wheel version version" in labels
     assert "Smoke wheel run" in labels
+    assert "Smoke wheel status default text" in labels
     assert "Smoke wheel run-until-done" in labels
     assert "Smoke wheel recipe until-done" in labels
 
@@ -1468,7 +1469,7 @@ def test_cli_start_status_continue_review_round_trip(tmp_path, capsys) -> None:
     reviewed = json.loads(capsys.readouterr().out)
     assert reviewed["status"] == "done"
 
-    assert main(["--project-dir", str(tmp_path), "status"]) == 0
+    assert main(["--project-dir", str(tmp_path), "status", "--format", "json"]) == 0
     status = json.loads(capsys.readouterr().out)
     assert status["id"] == started["id"]
 
@@ -1477,7 +1478,7 @@ def test_cli_status_text_reports_no_active_goal(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     capsys.readouterr()
 
-    rc = main(["--project-dir", str(tmp_path), "status", "--format", "text"])
+    rc = main(["--project-dir", str(tmp_path), "status"])
 
     assert rc == 0
     assert capsys.readouterr().out == "No active goal.\n"
@@ -1494,7 +1495,7 @@ def test_cli_status_text_summarizes_active_goal(tmp_path, capsys) -> None:
 
     assert main(["--project-dir", str(tmp_path), "run", "ship text status"]) == 0
     capsys.readouterr()
-    rc = main(["--project-dir", str(tmp_path), "status", "--format", "text"])
+    rc = main(["--project-dir", str(tmp_path), "status"])
 
     output = capsys.readouterr().out
     assert rc == 0
@@ -2177,7 +2178,7 @@ def test_cli_restart_restarts_failed_goal(tmp_path, capsys) -> None:
     capsys.readouterr()
 
     # Verify the goal is failed
-    rc = main(["--project-dir", str(tmp_path), "status"])
+    rc = main(["--project-dir", str(tmp_path), "status", "--format", "json"])
     status = json.loads(capsys.readouterr().out)
     assert status["status"] == "failed"
 
@@ -2268,7 +2269,7 @@ def test_cli_repair_restores_current_marker(tmp_path, capsys) -> None:
     capsys.readouterr()
 
     # Verify the goal is done
-    rc = main(["--project-dir", str(tmp_path), "status"])
+    rc = main(["--project-dir", str(tmp_path), "status", "--format", "json"])
     status = json.loads(capsys.readouterr().out)
     goal_id = status["id"]
     assert status["status"] == "done"
