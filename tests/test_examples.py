@@ -89,6 +89,17 @@ def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
     assert "cat > .agentic-harness/config.yml" not in quick_start
 
 
+def test_terminal_demo_script_uses_packaged_auto_config_path() -> None:
+    script = (REPO_ROOT / "docs" / "demo-script.md").read_text(encoding="utf-8")
+
+    assert "agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force" in script
+    assert "agentic-harness create-demo fix-tests /tmp/agentic-harness-demo" in script
+    assert "agentic-harness fix-tests     # auto-creates demo config" in script
+    assert "agentic-harness status" in script
+    assert "agentic-harness report" in script
+    assert "cat > .agentic-harness/config.yml" not in script
+
+
 def test_killer_demo_readme_says_first_pytest_is_expected_to_fail() -> None:
     readme = (REPO_ROOT / "examples/fix-failing-tests-demo/README.md").read_text(encoding="utf-8")
 
