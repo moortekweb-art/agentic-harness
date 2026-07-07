@@ -15,7 +15,7 @@ worker:
   coding_agent_command:
     - codex
     - exec
-    - --full-auto
+    - --skip-git-repo-check
     - "{objective}"
   coding_agent_timeout: 1800
   coding_agent_transcript: .agentic-harness/runs/{goal_id}/coding-agent.log
@@ -57,4 +57,3 @@ Expected shape:
 - `.agentic-harness/runs/<goal-id>/coding-agent.log` records the command,
   stdout, and stderr.
 - The goal only reaches `done` if the configured review command passes.
-

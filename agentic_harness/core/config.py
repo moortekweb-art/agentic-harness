@@ -176,6 +176,7 @@ worker:
   coding_agent_command:
     - codex
     - exec
+    - --skip-git-repo-check
     - "{objective}"
   coding_agent_timeout: 1800
   coding_agent_transcript: .agentic-harness/runs/{goal_id}/coding-agent.log

@@ -62,7 +62,7 @@ def test_init_auto_selects_detected_backend(tmp_path, capsys, monkeypatch) -> No
     assert rc == 0
     config = load_config(tmp_path)
     assert config.worker == "coding_agent"
-    assert config.coding_agent_command[:2] == ["codex", "exec"]
+    assert config.coding_agent_command[:3] == ["codex", "exec", "--skip-git-repo-check"]
     output = capsys.readouterr().out
     assert "Configured codex tool." in output
     assert "Next: agentic-harness fix-tests" in output
@@ -88,6 +88,11 @@ def test_run_auto_configures_detected_backend(tmp_path, capsys, monkeypatch) -> 
     assert "Configured codex tool." in output
     assert "Result: done" in output
     assert load_config(tmp_path).worker == "coding_agent"
+    assert load_config(tmp_path).coding_agent_command[:3] == [
+        "codex",
+        "exec",
+        "--skip-git-repo-check",
+    ]
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/coding-agent.log"))
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
 
@@ -740,6 +745,10 @@ def test_verify_tests_alias_runs_with_report_artifact(tmp_path, capsys) -> None:
 
 
 def test_lint_fix_alias_failure_writes_report_artifact(tmp_path, capsys) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text("version: 1\nworker: noop\n", encoding="utf-8")
+
     rc = main(["--project-dir", str(tmp_path), "lint-fix"])
 
     output = capsys.readouterr().out
