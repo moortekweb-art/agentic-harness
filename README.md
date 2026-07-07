@@ -71,24 +71,23 @@ configuration format is documented below.
 ### Recipes
 
 ```bash
-agentic-harness init-agent codex
+agentic-harness init codex
 agentic-harness init shell
 agentic-harness recipes
-agentic-harness run-recipe fix-tests --explain
-agentic-harness run-recipe fix-tests
 agentic-harness fix-tests
 agentic-harness lint-fix
 agentic-harness typecheck-fix
 agentic-harness update-docs
 agentic-harness changelog
 agentic-harness verify-tests
+agentic-harness run-recipe fix-tests --explain
 ```
 
 Recipes hide the common prompt and review-command setup for beginner workflows.
-Use `init-agent` once to configure a backend, then run recipes such as
+Use `init` once to configure a backend, then run recipes such as
 `fix-tests`, `lint-fix`, `typecheck-fix`, `update-docs`, and `changelog`.
-Each built-in recipe also has a direct command; `run-recipe <name>` remains
-available for scripts that prefer one generic entrypoint.
+Each built-in recipe has a direct command; `run-recipe <name>` remains available
+for scripts that prefer one generic entrypoint or want `--explain`.
 Recipe runs write `.agentic-harness/runs/<goal-id>/report.md` automatically,
 so the operator-readable handoff exists even if you do not run
 `agentic-harness report` afterward.
