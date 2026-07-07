@@ -246,7 +246,8 @@ def test_agents_lists_supported_tools(monkeypatch, capsys) -> None:
     assert rc == 0
     assert "- codex: found" in output
     assert "- codewhale: not found" in output
-    assert "agentic-harness init-agent codex" in output
+    assert "agentic-harness init codex" in output
+    assert "Next: agentic-harness fix-tests" in output
 
 
 def test_start_here_shows_beginner_commands(capsys) -> None:
@@ -257,9 +258,11 @@ def test_start_here_shows_beginner_commands(capsys) -> None:
     assert "Agentic Harness beginner guide" in output
     assert "agentic-harness selftest" in output
     assert "agentic-harness run-demo fix-tests" in output
-    assert "agentic-harness next" in output
-    assert "agentic-harness easy fix-tests" in output
-    assert "beginners usually only need" in output
+    assert "agentic-harness quickstart" in output
+    assert "agentic-harness init shell" in output
+    assert "agentic-harness fix-tests" in output
+    assert "agentic-harness status" in output
+    assert "No prompt design" in output
 
 
 def test_top_level_help_shows_beginner_guide() -> None:
@@ -389,7 +392,8 @@ def test_easy_without_backend_prints_plain_next_step(monkeypatch, tmp_path, caps
     output = capsys.readouterr().out
     assert rc == 2
     assert "No supported coding-agent backend found" in output
-    assert "agentic-harness easy fix-tests" in output
+    assert "agentic-harness init shell" in output
+    assert "agentic-harness fix-tests" in output
 
 
 def test_recipes_lists_beginner_recipes(capsys) -> None:
@@ -495,7 +499,7 @@ def test_recipe_failure_suggests_init_agent_when_no_worker_configured(tmp_path, 
     assert "Result: not done" in output
     assert "no worker configured" in output
     assert "Report: .agentic-harness/runs/" in output
-    assert "agentic-harness init-agent codex" in output
+    assert "agentic-harness init codex" in output
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
 
 
@@ -503,7 +507,7 @@ def test_report_plain_text_for_no_active_run(tmp_path, capsys) -> None:
     rc = main(["--project-dir", str(tmp_path), "report"])
 
     assert rc == 0
-    assert capsys.readouterr().out == "No active run.\nNext: agentic-harness recipes\n"
+    assert capsys.readouterr().out == "No active run.\nNext: agentic-harness quickstart\n"
 
 
 def test_next_suggests_easy_when_project_is_not_set_up(tmp_path, capsys) -> None:
@@ -512,7 +516,8 @@ def test_next_suggests_easy_when_project_is_not_set_up(tmp_path, capsys) -> None
     output = capsys.readouterr().out
     assert rc == 0
     assert "State: not set up" in output
-    assert "Next: agentic-harness easy fix-tests" in output
+    assert "Next: agentic-harness init shell" in output
+    assert "Then: agentic-harness fix-tests" in output
 
 
 def test_next_suggests_easy_when_configured_but_idle(tmp_path, capsys) -> None:
@@ -524,7 +529,7 @@ def test_next_suggests_easy_when_configured_but_idle(tmp_path, capsys) -> None:
     output = capsys.readouterr().out
     assert rc == 0
     assert "State: ready" in output
-    assert "Next: agentic-harness easy fix-tests" in output
+    assert "Next: agentic-harness fix-tests" in output
 
 
 def test_next_reports_done_goal_next_step(tmp_path, capsys) -> None:
@@ -552,7 +557,7 @@ def test_selftest_runs_temporary_harness_smoke(capsys) -> None:
     assert "Selftest: passed" in output
     assert "Worker: passed" in output
     assert "Review: passed" in output
-    assert "agentic-harness easy fix-tests" in output
+    assert "Next: agentic-harness quickstart" in output
 
 
 def test_start_reports_active_goal_conflict_as_json(tmp_path, capsys) -> None:

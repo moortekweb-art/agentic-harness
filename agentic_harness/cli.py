@@ -376,7 +376,7 @@ def run_selftest() -> int:
         print("Selftest: passed")
         print("Worker: passed")
         print("Review: passed")
-        print("Next: agentic-harness easy fix-tests")
+        print("Next: agentic-harness quickstart")
         return 0
 
 
@@ -775,7 +775,7 @@ def format_recipe_result_text(
     if goal.status is GoalStatus.FAILED:
         lines.append("Next: check the error above, then run agentic-harness report")
         if "no worker configured" in (goal.error or ""):
-            lines.append("Tip: run agentic-harness init-agent codex before using coding recipes.")
+            lines.append("Tip: run agentic-harness init codex before using coding recipes.")
     if goal.artifacts:
         lines.append("Artifacts:")
         lines.extend(f"- {artifact}" for artifact in goal.artifacts)
@@ -787,7 +787,7 @@ def format_report_text(goal: Goal | None, *, report_path: str | None = None) -> 
         return "\n".join(
             [
                 "No active run.",
-                "Next: agentic-harness recipes",
+                "Next: agentic-harness quickstart",
             ]
         )
     result = "done" if goal.status is GoalStatus.DONE else goal.status.value
@@ -837,8 +837,9 @@ def format_next_text(project_dir: Path) -> str:
         return "\n".join(
             [
                 "State: not set up",
-                "Next: agentic-harness easy fix-tests",
-                "Preview: agentic-harness easy fix-tests --explain",
+                "Next: agentic-harness init shell",
+                "Then: agentic-harness fix-tests",
+                "Preview: agentic-harness run-recipe fix-tests --explain",
             ]
         )
     try:
@@ -848,7 +849,7 @@ def format_next_text(project_dir: Path) -> str:
             [
                 "State: config needs attention",
                 f"Problem: {exc}",
-                "Next: edit .agentic-harness/config.yml or run agentic-harness init-agent codex --force",
+                "Next: edit .agentic-harness/config.yml or run agentic-harness init codex --force",
             ]
         )
     goal = supervisor.status()
@@ -856,7 +857,7 @@ def format_next_text(project_dir: Path) -> str:
         return "\n".join(
             [
                 "State: ready",
-                "Next: agentic-harness easy fix-tests",
+                "Next: agentic-harness fix-tests",
                 "Other recipes: agentic-harness recipes",
             ]
         )
@@ -886,7 +887,7 @@ def format_next_text(project_dir: Path) -> str:
             [
                 f"State: goal {goal.id} is done",
                 "Next: agentic-harness report",
-                "Run another: agentic-harness easy fix-tests",
+                "Run another: agentic-harness fix-tests",
             ]
         )
     return "\n".join(
@@ -894,7 +895,7 @@ def format_next_text(project_dir: Path) -> str:
             f"State: goal {goal.id} failed",
             "Next: agentic-harness report",
             "Retry: agentic-harness restart",
-            "Or start new: agentic-harness easy fix-tests",
+            "Or start new: agentic-harness fix-tests",
         ]
     )
 
@@ -911,19 +912,21 @@ def format_start_here_text() -> str:
             "   agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force",
             "",
             "3. See what to do in this project:",
-            "   agentic-harness next",
+            "   agentic-harness quickstart",
             "",
-            "4. Run the easiest useful recipe:",
-            "   agentic-harness easy fix-tests",
+            "4. Set up a backend and run a useful recipe:",
+            "   agentic-harness init shell",
+            "   agentic-harness fix-tests",
             "",
             "5. Read the result:",
+            "   agentic-harness status",
             "   agentic-harness report",
             "",
             "Useful previews:",
-            "   agentic-harness easy fix-tests --explain",
+            "   agentic-harness run-recipe fix-tests --explain",
             "   agentic-harness recipes",
             "",
-            "Advanced commands exist, but beginners usually only need selftest, run-demo, next, easy, and report.",
+            "No prompt design. No YAML editing. Beginners usually only need selftest, run-demo, quickstart, init, fix-tests, status, and report.",
         ]
     )
 
@@ -948,10 +951,11 @@ def format_agents_text() -> str:
         lines.append(f"- {tool}: {status}")
     selected = preferred_agent_tool(tools)
     if selected:
-        lines.append(f"Recommended setup: agentic-harness init-agent {selected}")
+        lines.append(f"Recommended setup: agentic-harness init {selected}")
+        lines.append("Next: agentic-harness fix-tests")
     else:
         lines.append("Recommended setup: install Codex, CodeWhale, OpenCode, or Aider first.")
-        lines.append("Script-only setup: agentic-harness init-agent shell")
+        lines.append("Script-only setup: agentic-harness init shell")
     return "\n".join(lines)
 
 
@@ -1045,11 +1049,12 @@ def format_no_agent_text() -> str:
             "No supported coding-agent backend found on PATH.",
             "Install one of: Codex, CodeWhale, OpenCode, Aider.",
             "Then run:",
-            "  agentic-harness easy fix-tests",
+            "  agentic-harness init codex",
+            "  agentic-harness fix-tests",
             "",
             "For script-only workflows:",
-            "  agentic-harness init-agent shell",
-            "  agentic-harness run-recipe fix-tests",
+            "  agentic-harness init shell",
+            "  agentic-harness fix-tests",
         ]
     )
 
