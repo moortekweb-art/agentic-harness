@@ -43,6 +43,7 @@ from agentic_harness.core.review import (
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.supervisor import Supervisor
 from agentic_harness.core.worker import Worker
+from agentic_harness.core.workspace import format_workspace_change_lines, workspace_change_summary
 
 
 RECIPE_COMMANDS = {
@@ -298,7 +299,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.json:
                 print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
             else:
-                print(format_report_text(goal, report_path=report_path))
+                changes = workspace_change_summary(
+                    project_dir,
+                    goal.metadata.get("workspace_snapshot"),
+                )
+                print(format_report_text(goal, report_path=report_path, workspace_changes=changes))
             return 0 if goal.status is GoalStatus.DONE else 1
         if args.command == "status":
             active_goal = supervisor.status()
@@ -323,6 +328,10 @@ def main(argv: list[str] | None = None) -> int:
                 format_report_text(
                     reported_goal,
                     report_path=report_rel,
+                    workspace_changes=workspace_change_summary(
+                        project_dir,
+                        reported_goal.metadata.get("workspace_snapshot"),
+                    ),
                 )
             )
             return 0
@@ -444,7 +453,17 @@ def run_recipe(
         if initialized_config is not None:
             path, tool = initialized_config
             print(format_init_text(path, tool))
-        print(format_recipe_result_text(recipe, goal, report_path=report_path))
+        print(
+            format_recipe_result_text(
+                recipe,
+                goal,
+                report_path=report_path,
+                workspace_changes=workspace_change_summary(
+                    project_dir,
+                    goal.metadata.get("workspace_snapshot"),
+                ),
+            )
+        )
     return 0 if goal.status is GoalStatus.DONE else 1
 
 
@@ -732,8 +751,12 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
     if str(python_bin) not in transcripts[0].read_text(encoding="utf-8"):
         print(f"{stem} smoke failed: demo transcript did not use venv Python")
         return False
-    if "Report: .agentic-harness/runs/" not in reports[0].read_text(encoding="utf-8"):
+    demo_report = reports[0].read_text(encoding="utf-8")
+    if "Report: .agentic-harness/runs/" not in demo_report:
         print(f"{stem} smoke failed: report artifact did not include its path")
+        return False
+    if "Changed: 1 file" not in demo_report or "- modified calculator.py" not in demo_report:
+        print(f"{stem} smoke failed: report artifact did not include changed-file summary")
         return False
     return _run_release_step(
         f"Verify {stem} final demo tests",
@@ -887,10 +910,14 @@ def write_goal_report(
     project_dir: Path,
     goal: Goal,
 ) -> tuple[Goal, str]:
-    reported_goal, report_path = supervisor.write_report(format_report_markdown(goal))
+    changes = workspace_change_summary(project_dir, goal.metadata.get("workspace_snapshot"))
+    reported_goal, report_path = supervisor.write_report(
+        format_report_markdown(goal, workspace_changes=changes)
+    )
     report_rel = project_relative_path(project_dir, report_path)
+    changes = workspace_change_summary(project_dir, reported_goal.metadata.get("workspace_snapshot"))
     reported_goal, _ = supervisor.write_report(
-        format_report_markdown(reported_goal, report_path=report_rel)
+        format_report_markdown(reported_goal, report_path=report_rel, workspace_changes=changes)
     )
     return reported_goal, report_rel
 
@@ -1003,6 +1030,7 @@ def format_recipe_result_text(
     goal: Goal,
     *,
     report_path: str | None = None,
+    workspace_changes: dict[str, object] | None = None,
 ) -> str:
     verdict = "done" if goal.status is GoalStatus.DONE else "not done"
     lines = [
@@ -1013,6 +1041,7 @@ def format_recipe_result_text(
     ]
     if report_path:
         lines.append(f"Report: {report_path}")
+    lines.extend(format_workspace_change_lines(workspace_changes))
     if goal.review:
         passed = "passed" if goal.review.get("passed") is True else "failed"
         lines.append(f"Review: {passed}")
@@ -1028,7 +1057,12 @@ def format_recipe_result_text(
     return "\n".join(lines)
 
 
-def format_report_text(goal: Goal | None, *, report_path: str | None = None) -> str:
+def format_report_text(
+    goal: Goal | None,
+    *,
+    report_path: str | None = None,
+    workspace_changes: dict[str, object] | None = None,
+) -> str:
     if goal is None:
         return "\n".join(
             [
@@ -1045,6 +1079,7 @@ def format_report_text(goal: Goal | None, *, report_path: str | None = None) -> 
     ]
     if report_path:
         lines.append(f"Report: {report_path}")
+    lines.extend(format_workspace_change_lines(workspace_changes))
     duration = goal.duration_seconds
     if duration is not None:
         if duration < 60:
@@ -1066,8 +1101,17 @@ def format_report_text(goal: Goal | None, *, report_path: str | None = None) -> 
     return "\n".join(lines)
 
 
-def format_report_markdown(goal: Goal, *, report_path: str | None = None) -> str:
-    return "# Agentic Harness Report\n\n" + format_report_text(goal, report_path=report_path) + "\n"
+def format_report_markdown(
+    goal: Goal,
+    *,
+    report_path: str | None = None,
+    workspace_changes: dict[str, object] | None = None,
+) -> str:
+    return (
+        "# Agentic Harness Report\n\n"
+        + format_report_text(goal, report_path=report_path, workspace_changes=workspace_changes)
+        + "\n"
+    )
 
 
 def project_relative_path(project_dir: Path, path: Path) -> str:

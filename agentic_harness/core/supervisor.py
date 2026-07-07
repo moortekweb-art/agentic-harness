@@ -15,6 +15,7 @@ from agentic_harness.core.loop_guard import LoopGuard
 from agentic_harness.core.review import DeterministicReviewer
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.worker import Worker, WorkerResult
+from agentic_harness.core.workspace import capture_workspace_snapshot
 
 
 class Supervisor:
@@ -51,6 +52,7 @@ class Supervisor:
                     f"active goal {active.id} is {active.status}; finish or fail it before starting another"
                 )
             goal = Goal(objective=objective)
+            goal.metadata["workspace_snapshot"] = capture_workspace_snapshot(self.project_dir)
             goal.transition(GoalStatus.PLANNING, reason="goal started")
             self.store.write_goal(goal)
             return goal
@@ -94,6 +96,8 @@ class Supervisor:
                     f"only goals in in_progress can be continued. "
                     f"Terminal states (done/failed) require a new goal."
                 )
+            if "workspace_snapshot" not in goal.metadata:
+                goal.metadata["workspace_snapshot"] = capture_workspace_snapshot(self.project_dir)
             try:
                 self.loop_guard.record_continue()
             except LoopGuardTripped:
@@ -228,6 +232,7 @@ class Supervisor:
             goal.metadata.pop("worker_success", None)
             goal.metadata.pop("worker_summary", None)
             goal.metadata.pop("worker_returncode", None)
+            goal.metadata.pop("workspace_snapshot", None)
             goal.review = None
             self.loop_guard.reset()
             goal.transition(

@@ -250,10 +250,16 @@ def test_run_demo_fix_tests_executes_end_to_end(tmp_path, monkeypatch, capsys) -
     assert "Expected failure observed." in output
     assert "Recipe: fix-tests" in output
     assert "Result: done" in output
+    assert "Changed: 1 file" in output
+    assert "- modified calculator.py" in output
     assert "Report: .agentic-harness/runs/" in output
     assert "Demo complete:" in output
     assert list((demo / ".agentic-harness" / "runs").glob("*/shell-worker.log"))
     assert list((demo / ".agentic-harness" / "runs").glob("*/report.md"))
+    report = next((demo / ".agentic-harness" / "runs").glob("*/report.md"))
+    report_text = report.read_text(encoding="utf-8")
+    assert "Changed: 1 file" in report_text
+    assert "- modified calculator.py" in report_text
     transcript = next((demo / ".agentic-harness" / "runs").glob("*/shell-worker.log"))
     assert f"$ {sys.executable} mock_coding_agent.py" in transcript.read_text(encoding="utf-8")
 
@@ -495,7 +501,14 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
                 encoding="utf-8",
             )
             (run_dir / "report.md").write_text(
-                "Report: .agentic-harness/runs/goal/report.md\n",
+                "\n".join(
+                    [
+                        "Report: .agentic-harness/runs/goal/report.md",
+                        "Changed: 1 file",
+                        "- modified calculator.py",
+                        "",
+                    ]
+                ),
                 encoding="utf-8",
             )
         return True
@@ -1563,6 +1576,51 @@ def test_run_until_done_default_output_writes_report(tmp_path, capsys) -> None:
     assert "Objective: ship report handoff" in output
     assert "Report: .agentic-harness/runs/" in output
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
+
+
+def test_run_until_done_reports_changed_files(tmp_path, capsys) -> None:
+    (tmp_path / "target.txt").write_text("before\n", encoding="utf-8")
+    worker = tmp_path / "edit_worker.py"
+    worker.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "Path('target.txt').write_text('after\\n', encoding='utf-8')",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert main(["--project-dir", str(tmp_path), "init-agent", "shell"]) == 0
+    (tmp_path / ".agentic-harness" / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: shell",
+                "shell_command:",
+                f"  - {sys.executable}",
+                "  - edit_worker.py",
+                "review_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                "  - 'raise SystemExit(0)'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "run-until-done", "edit target"])
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "Changed: 1 file" in output
+    assert "- modified target.txt" in output
+    report = next((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
+    report_text = report.read_text(encoding="utf-8")
+    assert "Changed: 1 file" in report_text
+    assert "- modified target.txt" in report_text
 
 
 def test_run_until_done_requires_active_goal_or_objective(tmp_path, capsys) -> None:
