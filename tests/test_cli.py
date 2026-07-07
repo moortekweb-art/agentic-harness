@@ -132,9 +132,12 @@ def test_quickstart_prefers_available_coding_agent(monkeypatch) -> None:
 
     output = format_quickstart_text()
 
-    assert "agentic-harness init-agent codewhale" in output
-    assert "agentic-harness run-recipe fix-tests" in output
+    assert "Shortest path with codewhale:" in output
+    assert "agentic-harness init codewhale" in output
+    assert "agentic-harness fix-tests" in output
+    assert "agentic-harness status" in output
     assert "agentic-harness report" in output
+    assert "agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force" in output
 
 
 def test_quickstart_without_backend_points_to_shell_demo(monkeypatch) -> None:
@@ -153,6 +156,10 @@ def test_quickstart_without_backend_points_to_shell_demo(monkeypatch) -> None:
 
     assert "agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force" in output
     assert "agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force" in output
+    assert "agentic-harness init shell" in output
+    assert "agentic-harness fix-tests" in output
+    assert "agentic-harness status" in output
+    assert "agentic-harness report" in output
     assert "cat >" not in output
 
 
