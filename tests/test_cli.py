@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,14 @@ from agentic_harness.cli import build_supervisor, format_quickstart_text, main
 from agentic_harness.core.config import load_config
 from agentic_harness.core.errors import ConfigError
 from agentic_harness.core.recipes import list_recipes, load_recipe
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def current_package_version() -> str:
+    metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return str(metadata["project"]["version"])
 
 
 def test_init_creates_valid_project_config(tmp_path, capsys) -> None:
@@ -116,6 +125,20 @@ def test_recipe_loader_accepts_kebab_case_and_snake_case() -> None:
 
     assert kebab == snake
     assert kebab.review_command == ["python", "-m", "mypy", "agentic_harness"]
+
+
+def test_version_command_prints_current_package_version(capsys) -> None:
+    rc = main(["version"])
+
+    assert rc == 0
+    assert capsys.readouterr().out == f"agentic-harness {current_package_version()}\n"
+
+
+def test_version_flag_prints_current_package_version(capsys) -> None:
+    rc = main(["--version"])
+
+    assert rc == 0
+    assert capsys.readouterr().out == f"agentic-harness {current_package_version()}\n"
 
 
 def test_quickstart_prefers_available_coding_agent(monkeypatch) -> None:
@@ -363,6 +386,42 @@ def test_release_smoke_resolves_relative_dist_dir_against_project_root(
         for label, command in release_steps
     )
     assert f"Wheel: {tmp_path / 'dist' / 'local_agentic_harness-0.0.0-py3-none-any.whl'}" in output
+
+
+def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch) -> None:
+    artifact = tmp_path / "local_agentic_harness-0.0.0-py3-none-any.whl"
+    artifact.write_text("wheel\n", encoding="utf-8")
+    tmp_root = tmp_path / "smoke"
+    labels: list[str] = []
+
+    def fake_run_release_step(
+        label: str,
+        command: list[str],
+        *,
+        cwd: Path,
+        required_stdout: str | None = None,
+    ) -> bool:
+        labels.append(label)
+        if label == "Smoke wheel packaged demo":
+            demo_dir = Path(command[-1])
+            run_dir = demo_dir / ".agentic-harness" / "runs" / "goal"
+            run_dir.mkdir(parents=True)
+            (demo_dir / "requirements-dev.txt").write_text("pytest>=8\n", encoding="utf-8")
+            (run_dir / "shell-worker.log").write_text(
+                str(cli._venv_python(tmp_root / "wheel" / "venv")),
+                encoding="utf-8",
+            )
+            (run_dir / "report.md").write_text(
+                "Report: .agentic-harness/runs/goal/report.md\n",
+                encoding="utf-8",
+            )
+        return True
+
+    monkeypatch.setattr(cli, "_run_release_step", fake_run_release_step)
+
+    assert cli._smoke_installed_artifact(artifact, tmp_root)
+    assert "Smoke wheel version --version" in labels
+    assert "Smoke wheel version version" in labels
 
 
 def test_easy_explain_does_not_create_config(tmp_path, capsys) -> None:

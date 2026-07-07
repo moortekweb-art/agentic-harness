@@ -42,6 +42,7 @@ No prompt design. No dashboard. No controller.
 
 ```bash
 pipx install git+https://github.com/moortekweb-art/agentic-harness.git
+agentic-harness --version
 agentic-harness selftest
 agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
 ```

@@ -21,6 +21,8 @@ def test_ci_runs_package_build_and_compile_smoke() -> None:
 def test_ci_runs_packaged_demo_from_installed_wheel() -> None:
     workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
+    assert '"--version"' in workflow
+    assert '"version"' in workflow
     assert '"run-demo"' in workflow
     assert '"fix-tests"' in workflow
     assert "requirements-dev.txt" in workflow

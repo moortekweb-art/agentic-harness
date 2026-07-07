@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
+from importlib import metadata
 from pathlib import Path
 
 from agentic_harness.adapters.coding_agent import CodingAgentWorker
@@ -50,6 +52,9 @@ RECIPE_COMMANDS = {
     "verify-tests",
 }
 
+DIST_NAME = "local-agentic-harness"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 class HarnessParser(argparse.ArgumentParser):
     def format_help(self) -> str:
@@ -61,11 +66,16 @@ class HarnessParser(argparse.ArgumentParser):
 def build_parser() -> argparse.ArgumentParser:
     parser = HarnessParser(prog="agentic-harness")
     parser.add_argument(
+        "--version",
+        action="store_true",
+        help="Print the installed agentic-harness version.",
+    )
+    parser.add_argument(
         "--project-dir",
         default=".",
         help="Project directory containing .agentic-harness/config.yml.",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
     init = sub.add_parser("init", help="Generate .agentic-harness/config.yml")
     init.add_argument("tool", nargs="?", choices=sorted(TOOL_CONFIGS))
     init.add_argument("--force", action="store_true", help="Replace an existing config.yml.")
@@ -75,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("quickstart", help="Print the shortest setup path for this machine")
     sub.add_parser("start-here", help="Show the beginner command guide")
     sub.add_parser("guide", help="Show the beginner command guide")
+    sub.add_parser("version", help="Print the installed agentic-harness version")
     sub.add_parser("agents", help="Show supported backend tools found on PATH")
     create_demo_cmd = sub.add_parser("create-demo", help="Create a runnable example project")
     create_demo_cmd.add_argument("demo", choices=demo_names())
@@ -139,7 +150,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.version:
+        print(format_version_text())
+        return 0
+    if args.command is None:
+        build_parser().print_help()
+        return 0
     project_dir = Path(args.project_dir)
+    if args.command == "version":
+        print(format_version_text())
+        return 0
     if args.command in {"init", "init-agent"}:
         try:
             if args.command == "init-agent" or args.tool:
@@ -342,6 +362,23 @@ def format_init_text(path: Path, tool: str | None) -> str:
     return "\n".join(lines)
 
 
+def package_version() -> str:
+    pyproject = REPO_ROOT / "pyproject.toml"
+    if pyproject.exists():
+        payload = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        version = payload.get("project", {}).get("version")
+        if isinstance(version, str) and version:
+            return version
+    try:
+        return metadata.version(DIST_NAME)
+    except metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def format_version_text() -> str:
+    return f"agentic-harness {package_version()}"
+
+
 def run_selftest() -> int:
     with tempfile.TemporaryDirectory(prefix="agentic-harness-selftest-") as tmp:
         project = Path(tmp)
@@ -454,6 +491,14 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
         cwd=tmp_root,
     ):
         return False
+    for version_command in ("--version", "version"):
+        if not _run_release_step(
+            f"Smoke {stem} version {version_command}",
+            [str(harness_bin), version_command],
+            cwd=tmp_root,
+            required_stdout=format_version_text(),
+        ):
+            return False
     for command in ("lint-fix", "typecheck-fix", "update-docs", "changelog", "verify-tests"):
         if not _run_release_step(
             f"Smoke {stem} command {command}",

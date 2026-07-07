@@ -15,6 +15,9 @@ smoke-tested artifacts.
   flow instead of the older `easy` / `init-agent` wording.
 - Cleaned up the README recipe section so direct recipe commands come before
   the generic `run-recipe` entrypoint.
+- Added `agentic-harness --version` and `agentic-harness version` so operators
+  can confirm the installed package version from source checkouts, wheels, and
+  sdists.
 - Added a PyPI metadata gate to `agentic-harness release-smoke`: after building
   the wheel and sdist, it now runs `twine check` before installing and smoking
   each artifact.
@@ -34,7 +37,8 @@ smoke-tested artifacts.
 - `python3 -m compileall agentic_harness` passes.
 - `agentic-harness release-smoke --dist-dir /tmp/agentic-harness-publish-gate-dist`
   passes from a clean throwaway virtual environment, including `twine check`,
-  wheel smoke, sdist smoke, packaged demo, and final demo tests.
+  installed-artifact version checks, wheel smoke, sdist smoke, packaged demo,
+  and final demo tests.
 
 ## Publishing Note
 
