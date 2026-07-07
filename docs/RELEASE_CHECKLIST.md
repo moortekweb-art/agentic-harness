@@ -21,6 +21,10 @@ Use this checklist for a v0.6.9 release.
   python -m agentic_harness.cli release-smoke
   ```
 
+  `release-smoke` builds the wheel and sdist, runs `twine check` against both
+  distributions, installs each artifact in a fresh virtual environment, runs
+  the packaged demo, and verifies the final demo tests.
+
 - Run CLI smoke checks:
 
   ```bash

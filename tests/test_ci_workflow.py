@@ -14,6 +14,7 @@ def test_ci_runs_package_build_and_compile_smoke() -> None:
     assert "python -m compileall agentic_harness" in workflow
     assert "python -m pip install build" in workflow
     assert "python -m build" in workflow
+    assert "python -m twine check dist/*" in workflow
     assert "dist/*.whl" in workflow
 
 
@@ -87,6 +88,12 @@ def test_distribution_name_avoids_occupied_pypi_project() -> None:
 
     assert metadata["project"]["name"] == "local-agentic-harness"
     assert metadata["project"]["scripts"]["agentic-harness"] == "agentic_harness.cli:main"
+
+
+def test_release_smoke_has_twine_dependency() -> None:
+    metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "twine>=5.1" in metadata["project"]["optional-dependencies"]["test"]
 
 
 def test_readme_documents_pypi_install_command() -> None:

@@ -18,6 +18,7 @@ test = [
     "mypy>=1.10",
     "pytest>=8",
     "ruff>=0.5",
+    "twine>=5.1",
     "types-PyYAML>=6.0",
 ]
 

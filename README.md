@@ -122,8 +122,8 @@ python -m agentic_harness.cli release-smoke
 ```
 
 `release-smoke` builds the wheel and sdist, installs each into a fresh virtual
-environment, verifies direct recipe commands, runs the packaged demo, and
-checks the transcript/report artifacts.
+environment, runs `twine check` on the distributions, verifies direct recipe
+commands, runs the packaged demo, and checks the transcript/report artifacts.
 
 ## Why This Exists
 

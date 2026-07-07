@@ -414,6 +414,12 @@ def run_release_smoke(project_dir: Path, dist_dir: Path | None = None) -> int:
         except ConfigError as exc:
             print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
             return 2
+        if not _run_release_step(
+            "Check PyPI metadata",
+            [sys.executable, "-m", "twine", "check", str(wheel), str(sdist)],
+            cwd=project_dir,
+        ):
+            return 1
         for artifact in (wheel, sdist):
             if not _smoke_installed_artifact(artifact, tmp_root):
                 return 1

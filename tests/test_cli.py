@@ -320,6 +320,7 @@ def test_release_smoke_resolves_relative_dist_dir_against_project_root(
     (tmp_path / "pyproject.toml").write_text("[build-system]\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     smoked_artifacts: list[Path] = []
+    release_steps: list[tuple[str, list[str]]] = []
 
     def fake_run_release_step(
         label: str,
@@ -328,6 +329,7 @@ def test_release_smoke_resolves_relative_dist_dir_against_project_root(
         cwd: Path,
         required_stdout: str | None = None,
     ) -> bool:
+        release_steps.append((label, command))
         if label == "Build wheel and sdist":
             out_dir = Path(command[-1])
             if not out_dir.is_absolute():
@@ -353,6 +355,13 @@ def test_release_smoke_resolves_relative_dist_dir_against_project_root(
     output = capsys.readouterr().out
     assert rc == 0
     assert len(smoked_artifacts) == 2
+    assert any(
+        label == "Check PyPI metadata"
+        and command[1:4] == ["-m", "twine", "check"]
+        and str(tmp_path / "dist" / "local_agentic_harness-0.0.0-py3-none-any.whl") in command
+        and str(tmp_path / "dist" / "local_agentic_harness-0.0.0.tar.gz") in command
+        for label, command in release_steps
+    )
     assert f"Wheel: {tmp_path / 'dist' / 'local_agentic_harness-0.0.0-py3-none-any.whl'}" in output
 
 
