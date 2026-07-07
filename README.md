@@ -29,8 +29,7 @@ agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force
 cd /tmp/agentic-harness-demo
 python -m pip install -r requirements-dev.txt
 python -m pytest tests/ -q   # expected to fail
-agentic-harness init shell
-agentic-harness fix-tests
+agentic-harness fix-tests     # auto-creates demo config
 agentic-harness status
 agentic-harness report
 python -m pytest tests/ -q   # should pass
@@ -54,8 +53,7 @@ agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force
 cd /tmp/agentic-harness-demo
 python -m pip install -r requirements-dev.txt
 python -m pytest tests/ -q   # expected to fail
-agentic-harness init shell
-agentic-harness fix-tests
+agentic-harness fix-tests     # auto-creates config when it can pick a backend
 agentic-harness status --format text
 python -m pytest tests/ -q   # should pass
 ```
@@ -85,8 +83,11 @@ agentic-harness run-recipe fix-tests --explain
 ```
 
 Recipes hide the common prompt and review-command setup for beginner workflows.
-Use `init` once to configure a backend, then run recipes such as
-`fix-tests`, `lint-fix`, `typecheck-fix`, `update-docs`, and `changelog`.
+Run recipes such as `fix-tests`, `lint-fix`, `typecheck-fix`, `update-docs`,
+and `changelog` directly. If no project config exists, recipe commands create
+one automatically when they can select a supported coding backend; demos use
+the packaged shell mock. Use `init` when you want to choose or replace the
+backend explicitly.
 Each built-in recipe has a direct command; `run-recipe <name>` remains available
 for scripts that prefer one generic entrypoint or want `--explain`.
 Recipe runs write `.agentic-harness/runs/<goal-id>/report.md` automatically,
@@ -102,7 +103,7 @@ transcripts, artifacts, loop limits, and review gates.
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.11 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.12 release checks.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active publish workflow and external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
@@ -249,7 +250,7 @@ worker = LocalLLMAdapter(
 )
 
 supervisor = Supervisor(project_dir=".", worker=worker)
-supervisor.start("draft release notes for v0.6.11")
+supervisor.start("draft release notes for v0.6.12")
 supervisor.continue_goal()
 supervisor.review()
 ```

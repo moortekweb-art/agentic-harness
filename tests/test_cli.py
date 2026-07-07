@@ -156,10 +156,10 @@ def test_quickstart_prefers_available_coding_agent(monkeypatch) -> None:
     output = format_quickstart_text()
 
     assert "Shortest path with codewhale:" in output
-    assert "agentic-harness init codewhale" in output
     assert "agentic-harness fix-tests" in output
     assert "agentic-harness status" in output
     assert "agentic-harness report" in output
+    assert "creates .agentic-harness/config.yml for codewhale" in output
     assert "agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force" in output
 
 
@@ -179,7 +179,6 @@ def test_quickstart_without_backend_points_to_shell_demo(monkeypatch) -> None:
 
     assert "agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force" in output
     assert "agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force" in output
-    assert "agentic-harness init shell" in output
     assert "agentic-harness fix-tests" in output
     assert "agentic-harness status" in output
     assert "agentic-harness report" in output
@@ -194,7 +193,7 @@ def test_create_demo_fix_tests_writes_runnable_project(tmp_path, capsys) -> None
     output = capsys.readouterr().out
     assert rc == 0
     assert "Created demo:" in output
-    assert "agentic-harness init shell" in output
+    assert "agentic-harness fix-tests" in output
     assert "agentic-harness run-demo fix-tests" in output
     assert (demo / "README.md").exists()
     assert (demo / "calculator.py").read_text(encoding="utf-8").strip().endswith(
@@ -258,6 +257,37 @@ def test_run_demo_fix_tests_executes_end_to_end(tmp_path, monkeypatch, capsys) -
     assert f"$ {sys.executable} mock_coding_agent.py" in transcript.read_text(encoding="utf-8")
 
 
+def test_direct_recipe_auto_initializes_packaged_demo(tmp_path, capsys) -> None:
+    demo = tmp_path / "demo"
+    assert main(["create-demo", "fix-tests", str(demo)]) == 0
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(demo), "fix-tests"])
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "Configured shell tool." in output
+    assert "Recipe: fix-tests" in output
+    assert "Result: done" in output
+    assert (demo / ".agentic-harness" / "config.yml").exists()
+    assert list((demo / ".agentic-harness" / "runs").glob("*/shell-worker.log"))
+    assert list((demo / ".agentic-harness" / "runs").glob("*/report.md"))
+
+
+def test_direct_recipe_without_config_fails_closed_when_no_backend(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr("agentic_harness.cli.preferred_agent_tool", lambda: None)
+
+    rc = main(["--project-dir", str(tmp_path), "fix-tests"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["ok"] is False
+    assert "no .agentic-harness/config.yml" in payload["error"]
+    assert not (tmp_path / ".agentic-harness" / "config.yml").exists()
+
+
 def test_agents_lists_supported_tools(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         "agentic_harness.cli.shutil.which", lambda name: "/bin/tool" if name == "codex" else None
@@ -269,7 +299,7 @@ def test_agents_lists_supported_tools(monkeypatch, capsys) -> None:
     assert rc == 0
     assert "- codex: found" in output
     assert "- codewhale: not found" in output
-    assert "agentic-harness init codex" in output
+    assert "agentic-harness init-agent codex" in output
     assert "Next: agentic-harness fix-tests" in output
 
 
@@ -282,8 +312,8 @@ def test_start_here_shows_beginner_commands(capsys) -> None:
     assert "agentic-harness selftest" in output
     assert "agentic-harness run-demo fix-tests" in output
     assert "agentic-harness quickstart" in output
-    assert "agentic-harness init shell" in output
     assert "agentic-harness fix-tests" in output
+    assert "Creates config automatically" in output
     assert "agentic-harness status" in output
     assert "No prompt design" in output
 
@@ -481,7 +511,7 @@ def test_easy_without_backend_prints_plain_next_step(monkeypatch, tmp_path, caps
     output = capsys.readouterr().out
     assert rc == 2
     assert "No supported coding-agent backend found" in output
-    assert "agentic-harness init shell" in output
+    assert "agentic-harness init-agent shell" in output
     assert "agentic-harness fix-tests" in output
 
 
@@ -580,15 +610,21 @@ def test_lint_fix_alias_failure_writes_report_artifact(tmp_path, capsys) -> None
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
 
 
-def test_recipe_failure_suggests_init_agent_when_no_worker_configured(tmp_path, capsys) -> None:
+def test_run_recipe_auto_initializes_available_backend(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr("agentic_harness.cli.preferred_agent_tool", lambda: "shell")
+
     rc = main(["--project-dir", str(tmp_path), "run-recipe", "fix-tests"])
 
     output = capsys.readouterr().out
     assert rc == 1
+    assert "Configured shell tool." in output
     assert "Result: not done" in output
-    assert "no worker configured" in output
     assert "Report: .agentic-harness/runs/" in output
-    assert "agentic-harness init codex" in output
+    assert "no worker configured" not in output
+    assert load_config(tmp_path).worker == "shell"
+    assert (tmp_path / ".agentic-harness" / "config.yml").exists()
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
 
 

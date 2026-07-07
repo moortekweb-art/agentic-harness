@@ -310,7 +310,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_recipe(project_dir: Path, recipe: Recipe, *, output_json: bool = False) -> int:
+    initialized_config: tuple[Path, str] | None = None
     try:
+        initialized_config = ensure_recipe_config(project_dir)
         supervisor = build_supervisor(
             project_dir,
             review_command=recipe_review_command(project_dir, recipe.review_command),
@@ -332,8 +334,24 @@ def run_recipe(project_dir: Path, recipe: Recipe, *, output_json: bool = False) 
     if output_json:
         print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
     else:
+        if initialized_config is not None:
+            path, tool = initialized_config
+            print(format_init_text(path, tool))
         print(format_recipe_result_text(recipe, goal, report_path=report_path))
     return 0 if goal.status is GoalStatus.DONE else 1
+
+
+def ensure_recipe_config(project_dir: Path) -> tuple[Path, str] | None:
+    config_path = project_dir / CONFIG_DIR / CONFIG_NAME
+    if config_path.exists():
+        return None
+    selected = "shell" if (project_dir / "mock_coding_agent.py").exists() else preferred_agent_tool()
+    if selected is None:
+        raise ConfigError(
+            "no .agentic-harness/config.yml and no coding-agent backend found; "
+            "run agentic-harness init-agent codex or agentic-harness init-agent shell"
+        )
+    return write_tool_config(project_dir, selected), selected
 
 
 def run_easy(project_dir: Path, recipe: Recipe, agent: str) -> int:
@@ -629,17 +647,6 @@ def run_demo(name: str, path: Path, *, force: bool = False, install: bool = True
         expect_failure=True,
     ):
         return 1
-    init_command = [
-        sys.executable,
-        "-m",
-        "agentic_harness.cli",
-        "init",
-        "shell",
-    ]
-    if force:
-        init_command.append("--force")
-    if not _run_demo_step("Initialize shell worker", init_command, cwd=demo_path, env=env):
-        return 1
     if not _run_demo_step(
         "Run fix-tests recipe",
         [sys.executable, "-m", "agentic_harness.cli", "fix-tests"],
@@ -844,7 +851,7 @@ def format_recipe_result_text(
     if goal.status is GoalStatus.FAILED:
         lines.append("Next: check the error above, then run agentic-harness report")
         if "no worker configured" in (goal.error or ""):
-            lines.append("Tip: run agentic-harness init codex before using coding recipes.")
+            lines.append("Tip: run agentic-harness init-agent codex before using coding recipes.")
     if goal.artifacts:
         lines.append("Artifacts:")
         lines.extend(f"- {artifact}" for artifact in goal.artifacts)
@@ -918,7 +925,7 @@ def format_next_text(project_dir: Path) -> str:
             [
                 "State: config needs attention",
                 f"Problem: {exc}",
-                "Next: edit .agentic-harness/config.yml or run agentic-harness init codex --force",
+                "Next: edit .agentic-harness/config.yml or run agentic-harness init-agent codex --force",
             ]
         )
     goal = supervisor.status()
@@ -984,8 +991,8 @@ def format_start_here_text() -> str:
             "   agentic-harness quickstart",
             "",
             "4. Set up a backend and run a useful recipe:",
-            "   agentic-harness init shell",
             "   agentic-harness fix-tests",
+            "   # Creates config automatically if a supported backend is available.",
             "",
             "5. Read the result:",
             "   agentic-harness status",
@@ -1020,11 +1027,11 @@ def format_agents_text() -> str:
         lines.append(f"- {tool}: {status}")
     selected = preferred_agent_tool(tools)
     if selected:
-        lines.append(f"Recommended setup: agentic-harness init {selected}")
+        lines.append(f"Recommended setup: agentic-harness init-agent {selected}")
         lines.append("Next: agentic-harness fix-tests")
     else:
         lines.append("Recommended setup: install Codex, CodeWhale, OpenCode, or Aider first.")
-        lines.append("Script-only setup: agentic-harness init shell")
+        lines.append("Script-only setup: agentic-harness init-agent shell")
     return "\n".join(lines)
 
 
@@ -1042,7 +1049,6 @@ def format_quickstart_text() -> str:
                 "Or just generate the files:",
                 "  agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force",
                 "  cd /tmp/agentic-harness-demo",
-                "  agentic-harness init shell",
                 "  agentic-harness fix-tests",
                 "  agentic-harness status",
                 "  agentic-harness report",
@@ -1051,10 +1057,11 @@ def format_quickstart_text() -> str:
     return "\n".join(
         [
             f"Shortest path with {selected}:",
-            f"  agentic-harness init {selected}",
             "  agentic-harness fix-tests",
             "  agentic-harness status",
             "  agentic-harness report",
+            "",
+            f"`fix-tests` creates .agentic-harness/config.yml for {selected} if needed.",
             "",
             "Packaged shell demo:",
             "  agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force",
@@ -1074,7 +1081,6 @@ def format_create_demo_text(demo: str, path: Path) -> str:
             f"  cd {path}",
             "  python -m pip install -r requirements-dev.txt",
             "  python -m pytest tests/ -q  # expected to fail",
-            "  agentic-harness init shell",
             "  agentic-harness fix-tests",
             "  agentic-harness status --format text",
             "  agentic-harness report",
@@ -1118,11 +1124,11 @@ def format_no_agent_text() -> str:
             "No supported coding-agent backend found on PATH.",
             "Install one of: Codex, CodeWhale, OpenCode, Aider.",
             "Then run:",
-            "  agentic-harness init codex",
+            "  agentic-harness init-agent codex",
             "  agentic-harness fix-tests",
             "",
             "For script-only workflows:",
-            "  agentic-harness init shell",
+            "  agentic-harness init-agent shell",
             "  agentic-harness fix-tests",
         ]
     )

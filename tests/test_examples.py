@@ -76,8 +76,8 @@ def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
     assert "agentic-harness run-demo fix-tests" in quick_start
     assert "agentic-harness create-demo fix-tests" in quick_start
     assert "python -m pip install -r requirements-dev.txt" in quick_start
-    assert "agentic-harness init shell" in quick_start
     assert "agentic-harness fix-tests" in quick_start
+    assert "auto-creates config" in quick_start
     assert "agentic-harness lint-fix" in readme
     assert "agentic-harness typecheck-fix" in readme
     assert "agentic-harness update-docs" in readme
