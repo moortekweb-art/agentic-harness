@@ -99,7 +99,8 @@ agentic-harness run-until-done "fix the failing tests" --max-attempts 3
 ```
 
 It starts or resumes one active goal, runs worker/review cycles, restarts failed
-attempts up to the limit, and still stops with a clear `done` or `failed` state.
+attempts up to the limit, writes `.agentic-harness/runs/<goal-id>/report.md`,
+and still stops with a clear `done` or `failed` state.
 
 ## Not a Coding Agent
 
@@ -110,7 +111,7 @@ transcripts, artifacts, loop limits, and review gates.
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.13 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.14 release checks.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active publish workflow and external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
@@ -257,7 +258,7 @@ worker = LocalLLMAdapter(
 )
 
 supervisor = Supervisor(project_dir=".", worker=worker)
-supervisor.start("draft release notes for v0.6.13")
+supervisor.start("draft release notes for v0.6.14")
 supervisor.continue_goal()
 supervisor.review()
 ```

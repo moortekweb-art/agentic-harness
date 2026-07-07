@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for a v0.6.13 release.
+Use this checklist for a v0.6.14 release.
 
 ## Before Tagging
 
@@ -51,14 +51,14 @@ Use this checklist for a v0.6.13 release.
 Create and push the tag:
 
 ```bash
-git tag v0.6.13
-git push origin v0.6.13
+git tag v0.6.14
+git push origin v0.6.14
 ```
 
 Create the GitHub release:
 
 ```bash
-gh release create v0.6.13 --title "v0.6.13" --notes-file docs/RELEASE_NOTES_0.6.13.md
+gh release create v0.6.14 --title "v0.6.14" --notes-file docs/RELEASE_NOTES_0.6.14.md
 ```
 
 ## PyPI Publishing

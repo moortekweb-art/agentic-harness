@@ -469,6 +469,14 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
         required_stdout: str | None = None,
     ) -> bool:
         labels.append(label)
+        if label == "Smoke wheel run-until-done":
+            project_dir = Path(command[command.index("--project-dir") + 1])
+            run_dir = project_dir / ".agentic-harness" / "runs" / "goal"
+            run_dir.mkdir(parents=True)
+            (run_dir / "report.md").write_text(
+                "Report: .agentic-harness/runs/goal/report.md\n",
+                encoding="utf-8",
+            )
         if label == "Smoke wheel packaged demo":
             demo_dir = Path(command[-1])
             run_dir = demo_dir / ".agentic-harness" / "runs" / "goal"
@@ -489,6 +497,7 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
     assert cli._smoke_installed_artifact(artifact, tmp_root)
     assert "Smoke wheel version --version" in labels
     assert "Smoke wheel version version" in labels
+    assert "Smoke wheel run-until-done" in labels
 
 
 def test_easy_explain_does_not_create_config(tmp_path, capsys) -> None:
@@ -1441,15 +1450,35 @@ def test_run_until_done_restarts_failed_attempt_and_finishes(tmp_path, capsys) -
     )
     capsys.readouterr()
 
-    rc = main(["--project-dir", str(tmp_path), "run-until-done", "retry once"])
+    rc = main(["--project-dir", str(tmp_path), "run-until-done", "retry once", "--json"])
 
     payload = json.loads(capsys.readouterr().out)
     assert rc == 0
     assert payload["status"] == "done"
     assert payload["review"]["passed"] is True
+    assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
     assert (tmp_path / "attempts.txt").read_text(encoding="utf-8") == "2"
     assert any(entry["to"] == "failed" for entry in payload["history"])
     assert any("operator restarted failed goal" in entry["reason"] for entry in payload["history"])
+
+
+def test_run_until_done_default_output_writes_report(tmp_path, capsys) -> None:
+    assert main(["--project-dir", str(tmp_path), "init"]) == 0
+    config_path = tmp_path / ".agentic-harness" / "config.yml"
+    config_path.write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "run-until-done", "ship report handoff"])
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "Result: done" in output
+    assert "Objective: ship report handoff" in output
+    assert "Report: .agentic-harness/runs/" in output
+    assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
 
 
 def test_run_until_done_requires_active_goal_or_objective(tmp_path, capsys) -> None:

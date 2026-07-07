@@ -139,6 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=3,
         help="Maximum worker attempts before stopping. Default: 3.",
     )
+    drive.add_argument("--json", action="store_true", help="Print the final goal JSON.")
     status = sub.add_parser("status", help="Show current goal state")
     status.add_argument(
         "--format",
@@ -265,7 +266,11 @@ def main(argv: list[str] | None = None) -> int:
                 objective=args.objective,
                 max_attempts=args.max_attempts,
             )
-            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            goal, report_path = write_goal_report(supervisor, project_dir, goal)
+            if args.json:
+                print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            else:
+                print(format_report_text(goal, report_path=report_path))
             return 0 if goal.status is GoalStatus.DONE else 1
         if args.command == "status":
             active_goal = supervisor.status()
@@ -615,6 +620,29 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
             required_stdout=f"Recipe: {command}",
         ):
             return False
+    driver_project = smoke_root / "run-until-done"
+    config_dir = driver_project / CONFIG_DIR
+    config_dir.mkdir(parents=True)
+    (config_dir / CONFIG_NAME).write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    if not _run_release_step(
+        f"Smoke {stem} run-until-done",
+        [
+            str(harness_bin),
+            "--project-dir",
+            str(driver_project),
+            "run-until-done",
+            "release smoke goal",
+        ],
+        cwd=tmp_root,
+        required_stdout="Report: .agentic-harness/runs/",
+    ):
+        return False
+    if len(list((driver_project / CONFIG_DIR / "runs").glob("*/report.md"))) != 1:
+        print(f"{stem} smoke failed: run-until-done did not write one report artifact")
+        return False
     demo_dir = smoke_root / "demo"
     if not _run_release_step(
         f"Smoke {stem} packaged demo",
