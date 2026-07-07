@@ -60,7 +60,8 @@ is active but PyPI does not yet have a matching trusted publisher configured for
 this project.
 
 After configuring the PyPI trusted publisher, publish a new release tag such as
-`v0.6.10` so the upload includes the release-smoke-gated publish workflow.
+`v0.6.11` so the upload includes the release-smoke-gated publish workflow and
+checksum-manifest generation.
 
 ## Manual Verification
 
@@ -70,6 +71,7 @@ python -m agentic_harness.cli release-smoke --dist-dir /tmp/agentic-harness-dist
 python -m pip index versions local-agentic-harness
 gh release view v0.6.9 --repo moortekweb-art/agentic-harness
 gh release view v0.6.10 --repo moortekweb-art/agentic-harness
+gh release view v0.6.11 --repo moortekweb-art/agentic-harness
 gh run view 28703761225 --repo moortekweb-art/agentic-harness --log-failed
 ```
 
