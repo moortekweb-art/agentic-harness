@@ -19,6 +19,7 @@ from agentic_harness.cli import build_supervisor, format_quickstart_text, main
 from agentic_harness.core.config import load_config
 from agentic_harness.core.errors import ConfigError
 from agentic_harness.core.recipes import list_recipes, load_recipe
+from agentic_harness.core.state import GoalStatus
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -277,6 +278,21 @@ def test_direct_recipe_auto_initializes_packaged_demo(tmp_path, capsys) -> None:
 def test_direct_recipe_without_config_fails_closed_when_no_backend(
     tmp_path, monkeypatch, capsys
 ) -> None:
+    monkeypatch.setattr("agentic_harness.cli.preferred_agent_tool", lambda: None)
+
+    rc = main(["--project-dir", str(tmp_path), "fix-tests"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["ok"] is False
+    assert "no .agentic-harness/config.yml" in payload["error"]
+    assert not (tmp_path / ".agentic-harness" / "config.yml").exists()
+
+
+def test_mock_agent_filename_alone_does_not_trigger_demo_config(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    (tmp_path / "mock_coding_agent.py").write_text("print('not the packaged demo')\n", encoding="utf-8")
     monkeypatch.setattr("agentic_harness.cli.preferred_agent_tool", lambda: None)
 
     rc = main(["--project-dir", str(tmp_path), "fix-tests"])
@@ -626,6 +642,19 @@ def test_run_recipe_auto_initializes_available_backend(
     assert load_config(tmp_path).worker == "shell"
     assert (tmp_path / ".agentic-harness" / "config.yml").exists()
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
+
+
+def test_recipe_result_keeps_no_worker_tip_for_programmatic_failures() -> None:
+    recipe = load_recipe("fix-tests")
+    goal = Goal(
+        objective=recipe.objective,
+        status=GoalStatus.FAILED,
+        error="no worker configured; set allow_noop_success: true only for demos",
+    )
+
+    output = cli.format_recipe_result_text(recipe, goal, report_path="report.md")
+
+    assert "Tip: run agentic-harness init-agent codex before using coding recipes." in output
 
 
 def test_report_plain_text_for_no_active_run(tmp_path, capsys) -> None:
@@ -1375,6 +1404,64 @@ def test_cli_run_executes_start_continue_review_round_trip(tmp_path, capsys) -> 
 
     assert payload["status"] == "done"
     assert payload["review"]["passed"] is True
+
+
+def test_run_until_done_restarts_failed_attempt_and_finishes(tmp_path, capsys) -> None:
+    worker = tmp_path / "flaky_worker.py"
+    worker.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "attempts = Path('attempts.txt')",
+                "count = int(attempts.read_text() or '0') if attempts.exists() else 0",
+                "attempts.write_text(str(count + 1))",
+                "raise SystemExit(1 if count == 0 else 0)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert main(["--project-dir", str(tmp_path), "init-agent", "shell"]) == 0
+    (tmp_path / ".agentic-harness" / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: shell",
+                "shell_command:",
+                f"  - {sys.executable}",
+                "  - flaky_worker.py",
+                "review_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                "  - 'raise SystemExit(0)'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "run-until-done", "retry once"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["status"] == "done"
+    assert payload["review"]["passed"] is True
+    assert (tmp_path / "attempts.txt").read_text(encoding="utf-8") == "2"
+    assert any(entry["to"] == "failed" for entry in payload["history"])
+    assert any("operator restarted failed goal" in entry["reason"] for entry in payload["history"])
+
+
+def test_run_until_done_requires_active_goal_or_objective(tmp_path, capsys) -> None:
+    assert main(["--project-dir", str(tmp_path), "init"]) == 0
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "run-until-done"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["ok"] is False
+    assert "no active goal" in payload["error"]
 
 
 def test_module_cli_init_works_in_temp_dir(tmp_path) -> None:

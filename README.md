@@ -70,8 +70,6 @@ configuration format is documented below.
 ### Recipes
 
 ```bash
-agentic-harness init codex
-agentic-harness init shell
 agentic-harness recipes
 agentic-harness fix-tests
 agentic-harness lint-fix
@@ -94,6 +92,15 @@ Recipe runs write `.agentic-harness/runs/<goal-id>/report.md` automatically,
 so the operator-readable handoff exists even if you do not run
 `agentic-harness report` afterward.
 
+For non-demo goals that may need more than one pass, use the bounded driver:
+
+```bash
+agentic-harness run-until-done "fix the failing tests" --max-attempts 3
+```
+
+It starts or resumes one active goal, runs worker/review cycles, restarts failed
+attempts up to the limit, and still stops with a clear `done` or `failed` state.
+
 ## Not a Coding Agent
 
 Agentic Harness does not replace Codex, Aider, CodeWhale, OpenCode, or your
@@ -103,7 +110,7 @@ transcripts, artifacts, loop limits, and review gates.
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.12 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.13 release checks.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active publish workflow and external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
@@ -250,7 +257,7 @@ worker = LocalLLMAdapter(
 )
 
 supervisor = Supervisor(project_dir=".", worker=worker)
-supervisor.start("draft release notes for v0.6.12")
+supervisor.start("draft release notes for v0.6.13")
 supervisor.continue_goal()
 supervisor.review()
 ```
@@ -283,12 +290,12 @@ supervisor = Supervisor(project_dir=".", worker=MyWorker())
 
 ```bash
 agentic-harness init
-agentic-harness init shell
-agentic-harness init codex
+agentic-harness init-agent shell
+agentic-harness init-agent codex
 ```
 
 The `init` command without a tool argument creates a minimal config. The `init <tool>` variant
-writes a pre-configured template for the named backend.
+and `init-agent <tool>` variants write a pre-configured template for the named backend.
 
 ```yaml
 version: 1

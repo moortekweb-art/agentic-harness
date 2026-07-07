@@ -30,6 +30,7 @@ from agentic_harness.core.config import (
 )
 from agentic_harness.core.demos import create_demo, demo_names
 from agentic_harness.core.errors import ConfigError, HarnessError
+from agentic_harness.core.errors import GoalConflictError, NoActiveGoalError
 from agentic_harness.core.recipes import Recipe, explain_recipe, list_recipes, load_recipe
 from agentic_harness.core.review import (
     DeterministicReviewer,
@@ -127,6 +128,17 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("objective")
     run = sub.add_parser("run", help="Start, continue, and review a goal")
     run.add_argument("objective")
+    drive = sub.add_parser(
+        "run-until-done",
+        help="Start or resume a goal and keep retrying failed attempts up to a limit",
+    )
+    drive.add_argument("objective", nargs="?", help="Objective to start if no goal exists.")
+    drive.add_argument(
+        "--max-attempts",
+        type=int,
+        default=3,
+        help="Maximum worker attempts before stopping. Default: 3.",
+    )
     status = sub.add_parser("status", help="Show current goal state")
     status.add_argument(
         "--format",
@@ -247,6 +259,14 @@ def main(argv: list[str] | None = None) -> int:
                 goal = supervisor.review()
             print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
             return 0 if goal.status is GoalStatus.DONE else 1
+        if args.command == "run-until-done":
+            goal = run_until_done(
+                supervisor,
+                objective=args.objective,
+                max_attempts=args.max_attempts,
+            )
+            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            return 0 if goal.status is GoalStatus.DONE else 1
         if args.command == "status":
             active_goal = supervisor.status()
             if args.format == "text":
@@ -309,6 +329,46 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def run_until_done(
+    supervisor: Supervisor,
+    *,
+    objective: str | None = None,
+    max_attempts: int = 3,
+) -> Goal:
+    if max_attempts < 1:
+        raise ConfigError("--max-attempts must be at least 1")
+    goal = supervisor.status()
+    if goal is None:
+        if not objective:
+            raise NoActiveGoalError("no active goal; provide an objective to start one")
+        goal = supervisor.start(objective)
+    elif objective and goal.status not in {GoalStatus.DONE, GoalStatus.FAILED}:
+        raise GoalConflictError(
+            f"active goal {goal.id} is {goal.status}; finish it before starting another"
+        )
+    elif objective and goal.status in {GoalStatus.DONE, GoalStatus.FAILED}:
+        goal = supervisor.start(objective)
+
+    attempts = 0
+    while attempts < max_attempts:
+        if goal.status is GoalStatus.DONE:
+            return goal
+        if goal.status is GoalStatus.FAILED:
+            goal = supervisor.restart()
+        if goal.status in {GoalStatus.PLANNING, GoalStatus.IN_PROGRESS}:
+            attempts += 1
+            goal = supervisor.continue_goal()
+            if goal.status is GoalStatus.FAILED:
+                continue
+        if goal.status is GoalStatus.REVIEW:
+            goal = supervisor.review()
+            if goal.status is GoalStatus.FAILED:
+                continue
+        if goal.status is GoalStatus.DONE:
+            return goal
+    return goal
+
+
 def run_recipe(project_dir: Path, recipe: Recipe, *, output_json: bool = False) -> int:
     initialized_config: tuple[Path, str] | None = None
     try:
@@ -345,13 +405,25 @@ def ensure_recipe_config(project_dir: Path) -> tuple[Path, str] | None:
     config_path = project_dir / CONFIG_DIR / CONFIG_NAME
     if config_path.exists():
         return None
-    selected = "shell" if (project_dir / "mock_coding_agent.py").exists() else preferred_agent_tool()
+    selected = "shell" if is_packaged_demo_project(project_dir) else preferred_agent_tool()
     if selected is None:
         raise ConfigError(
             "no .agentic-harness/config.yml and no coding-agent backend found; "
             "run agentic-harness init-agent codex or agentic-harness init-agent shell"
         )
     return write_tool_config(project_dir, selected), selected
+
+
+def is_packaged_demo_project(project_dir: Path) -> bool:
+    return all(
+        (project_dir / path).exists()
+        for path in (
+            "mock_coding_agent.py",
+            "reset_demo.py",
+            "calculator.py",
+            "tests/test_calculator.py",
+        )
+    )
 
 
 def run_easy(project_dir: Path, recipe: Recipe, agent: str) -> int:
