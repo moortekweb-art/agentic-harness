@@ -96,6 +96,20 @@ def test_distribution_name_avoids_occupied_pypi_project() -> None:
     assert metadata["project"]["scripts"]["agentic-harness"] == "agentic_harness.cli:main"
 
 
+def test_release_docs_match_current_package_version() -> None:
+    metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    version = metadata["project"]["version"]
+    checklist = (REPO_ROOT / "docs/RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
+    release_notes = REPO_ROOT / f"docs/RELEASE_NOTES_{version}.md"
+
+    assert f"v{version}" in checklist
+    assert f"docs/RELEASE_NOTES_{version}.md" in checklist
+    assert release_notes.exists()
+    assert release_notes.read_text(encoding="utf-8").startswith(
+        f"# Agentic Harness v{version}\n"
+    )
+
+
 def test_release_smoke_has_twine_dependency() -> None:
     metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
