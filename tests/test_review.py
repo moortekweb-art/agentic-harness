@@ -275,7 +275,22 @@ class TestFileChanged:
         target.write_text("original")
         subprocess.run(["git", "init", "-q"], cwd=tmp_path, capture_output=True)
         subprocess.run(["git", "add", "file.txt"], cwd=tmp_path, capture_output=True)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Agentic Harness Tests",
+                "-c",
+                "user.email=tests@example.invalid",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
+        )
         target.write_text("modified")
         criterion = file_changed(tmp_path, "file.txt")
         result = criterion.check(_make_goal())
@@ -287,7 +302,22 @@ class TestFileChanged:
         target.write_text("content")
         subprocess.run(["git", "init", "-q"], cwd=tmp_path, capture_output=True)
         subprocess.run(["git", "add", "file.txt"], cwd=tmp_path, capture_output=True)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Agentic Harness Tests",
+                "-c",
+                "user.email=tests@example.invalid",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
+        )
         criterion = file_changed(tmp_path, "file.txt")
         result = criterion.check(_make_goal())
         assert result[0] is False
