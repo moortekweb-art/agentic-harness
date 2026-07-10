@@ -12,7 +12,8 @@ from agentic_harness.core.local_goal_bridge import CommandResult, HUMAN_MODES, L
 TaskPayload = dict[str, Any]
 
 _TECHNICAL_SUMMARY_TERMS = (
-    "hermes watcher",
+    "hermes",
+    "local goal",
     "node1",
     "opencode",
     "vllm",
