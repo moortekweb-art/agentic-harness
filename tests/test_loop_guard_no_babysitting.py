@@ -115,10 +115,9 @@ def test_continue_goal_records_guard_for_in_progress(tmp_path) -> None:
     )
 
 
-def test_circuit_breaker_still_trips_for_real_work_loops(tmp_path) -> None:
-    """Real work continues should still trip the circuit breaker."""
-    # max_continues=4: events 1-3 allowed, 4th trips.
-    guard = LoopGuard(max_continues=4, window_seconds=60, state_path=tmp_path / "guard.json")
+def test_new_goal_does_not_inherit_previous_goal_circuit_breaker_events(tmp_path) -> None:
+    """Independent goals must not fail because earlier goals used the worker."""
+    guard = LoopGuard(max_continues=2, window_seconds=60, state_path=tmp_path / "guard.json")
     worker = CountingWorker()
     supervisor = Supervisor(
         project_dir=tmp_path,
@@ -126,23 +125,12 @@ def test_circuit_breaker_still_trips_for_real_work_loops(tmp_path) -> None:
         loop_guard=guard,
     )
 
-    # Start and complete 3 goals (3 guard events, all within max_continues=4)
-    for i in range(3):
+    for i in range(4):
         goal = supervisor.start(f"real work {i + 1}")
         goal = supervisor.continue_goal()
         assert goal.status is GoalStatus.REVIEW
         goal = supervisor.review()
         assert goal.status is GoalStatus.DONE
-
-    # Guard should have exactly 3 events recorded (one per real continue)
-    guard_data = json.loads(guard.state_path.read_text(encoding="utf-8"))
-    assert len(guard_data["events"]) == 3
-
-    # 4th real continue should trip (4th event, 4 >= max_continues=4)
-    supervisor.start("real work 4")
-    result = supervisor.continue_goal()
-    assert result.status is GoalStatus.FAILED
-    assert "loop guard" in (result.error or "").lower()
 
 
 def test_guard_does_not_accumulate_events_for_review_state(tmp_path) -> None:
@@ -194,8 +182,8 @@ def test_multiple_terminal_continues_raise(tmp_path) -> None:
     )
 
 
-def test_guard_events_only_count_real_work(tmp_path) -> None:
-    """Guard events should only count actual worker runs, not terminal-state checks."""
+def test_guard_events_are_scoped_to_the_current_goal(tmp_path) -> None:
+    """Guard state is reset when a distinct goal starts."""
     worker = CountingWorker()
     # max_continues=4: events 1-3 allowed, 4th trips.
     guard = LoopGuard(max_continues=4, window_seconds=60, state_path=tmp_path / "guard.json")
@@ -205,7 +193,6 @@ def test_guard_events_only_count_real_work(tmp_path) -> None:
         loop_guard=guard,
     )
 
-    # Start and complete 3 goals (3 guard events, all within max_continues=4)
     for i in range(3):
         goal = supervisor.start(f"real work {i + 1}")
         goal = supervisor.continue_goal()
@@ -213,15 +200,8 @@ def test_guard_events_only_count_real_work(tmp_path) -> None:
         goal = supervisor.review()
         assert goal.status is GoalStatus.DONE
 
-    # Guard should have exactly 3 events recorded (one per real continue)
     guard_data = json.loads(guard.state_path.read_text(encoding="utf-8"))
-    assert len(guard_data["events"]) == 3
-
-    # 4th real continue should trip (4th event, 4 >= max_continues=4)
-    supervisor.start("real work 4")
-    result = supervisor.continue_goal()
-    assert result.status is GoalStatus.FAILED
-    assert "loop guard" in (result.error or "").lower()
+    assert len(guard_data["events"]) == 1
 
 
 def test_planning_state_continue_records_guard(tmp_path) -> None:

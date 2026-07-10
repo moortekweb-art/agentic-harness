@@ -9,6 +9,7 @@ from agentic_harness.core.local_goal_bridge import (
     LocalGoalBridge,
     Mode3AGoalOptions,
     build_mode3a_goal,
+    format_popos_setup,
 )
 
 
@@ -97,6 +98,11 @@ def test_build_mode3a_goal_hides_worker_details_behind_plain_objective() -> None
     assert "- services/voice-assistant" in goal
     assert "- python3 -m pytest tests/test_voice.py" in goal
     assert "Do not expose or modify secrets" in goal
+    assert "Preserve the full original objective" in goal
+    assert "same blocking condition repeats in three consecutive supervisor cycles" in goal
+    assert "honest blocked report" not in goal
+    assert "Do not mark the goal complete" in goal
+    assert "requirement-by-requirement completion audit" in goal
 
 
 def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
@@ -138,3 +144,73 @@ def test_friendly_queue_summary_prefers_ticket_id() -> None:
 
 def test_friendly_queue_summary_handles_empty_output() -> None:
     assert _friendly_queue_summary("") == "Work ticket created."
+
+
+def test_background_supervision_is_derived_from_backend_capabilities(tmp_path) -> None:
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args[0],
+            0,
+            (
+                '{"supervision":{"watcher":{"timer_active":true,'
+                '"state":"active","summary":"watcher owns the run"}}}'
+            ),
+            "",
+        )
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+
+    supervision = bridge.background_supervision()
+
+    assert supervision["active"] is True
+    assert supervision["summary"] == "watcher owns the run"
+
+
+def test_setup_reports_verified_background_supervision(tmp_path) -> None:
+    local_goal = tmp_path / "local-goal"
+    local_goal.write_text("#!/bin/sh\n", encoding="utf-8")
+    local_goal.chmod(0o755)
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args[0],
+            0,
+            (
+                '{"supervision":{"watcher":{"timer_active":true,'
+                '"state":"active","summary":"watcher owns the run"}}}'
+            ),
+            "",
+        )
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=local_goal,
+        runner=fake_runner,
+    )
+
+    output = format_popos_setup(bridge)
+
+    assert "Background supervisor active: True" in output
+    assert "watcher owns the run" in output
+    assert "agentic-harness mode3a-monitor" not in output
+
+
+def test_bridge_timeout_is_a_recoverable_command_result(tmp_path) -> None:
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(args[0], timeout=kwargs["timeout"])
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+        timeout_seconds=7,
+    )
+
+    result = bridge.status(json_output=True)
+
+    assert result.returncode == 124
+    assert "timed out after 7s" in result.stderr

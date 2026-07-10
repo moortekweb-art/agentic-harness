@@ -45,7 +45,7 @@
           </details>
 
           <div class="actions">
-            <button class="primary" id="startButton" title="Start the task">Start</button>
+            <button class="primary" id="startButton" title="Start the task" disabled>Start</button>
             <button id="checkButton" title="Refresh current status">Check now</button>
             <button id="undoButton" title="Undo the last form edit">Undo</button>
             <button id="redoButton" title="Redo the last undone form edit">Redo</button>
@@ -79,10 +79,9 @@
           </div>
 
           <div class="quick-actions">
-            <button id="watchButton">Move forward</button>
-            <button id="continueButton">Ask to continue</button>
-            <button id="acceptButton">Accept</button>
-            <button class="danger" id="stopButton">Stop</button>
+            <button id="continueButton" hidden>Ask to continue</button>
+            <button id="acceptButton" hidden>Accept</button>
+            <button class="danger" id="stopButton" hidden>Stop</button>
           </div>
 
           <div class="evidence">
@@ -120,7 +119,6 @@
         <dl class="shortcut-list">
           <dt>Ctrl Enter</dt><dd>Start work</dd>
           <dt>Ctrl R</dt><dd>Check now</dd>
-          <dt>Ctrl M</dt><dd>Move forward</dd>
           <dt>Ctrl K</dt><dd>Search history</dd>
           <dt>Ctrl /</dt><dd>Show shortcuts</dd>
           <dt>Ctrl Z</dt><dd>Undo form edit</dd>

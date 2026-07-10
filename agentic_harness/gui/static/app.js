@@ -12,6 +12,9 @@ const state = {
   socket: null,
   authToken: "",
   authPromptPromise: null,
+  readiness: {},
+  supervisorActive: false,
+  canStart: false,
 };
 
 const els = {
@@ -22,7 +25,6 @@ const els = {
   checks: document.getElementById("checks"),
   startButton: document.getElementById("startButton"),
   checkButton: document.getElementById("checkButton"),
-  watchButton: document.getElementById("watchButton"),
   continueButton: document.getElementById("continueButton"),
   acceptButton: document.getElementById("acceptButton"),
   stopButton: document.getElementById("stopButton"),
@@ -144,13 +146,13 @@ function setBusy(isBusy) {
   [
     els.startButton,
     els.checkButton,
-    els.watchButton,
     els.continueButton,
     els.acceptButton,
     els.stopButton,
   ].forEach((button) => {
     button.disabled = isBusy;
   });
+  els.startButton.disabled = isBusy || !state.canStart;
 }
 
 function formSnapshot() {
@@ -234,9 +236,15 @@ function renderTask(task) {
   renderList(els.verification, task.verification || []);
   renderArtifacts(task.artifacts || []);
   els.advancedDetails.textContent = JSON.stringify(task.advanced_details || task, null, 2);
+  els.continueButton.hidden = !["needs_review", "blocked"].includes(status);
+  els.acceptButton.hidden = status !== "needs_review";
+  els.stopButton.hidden = !["starting", "working", "checking"].includes(status);
 }
 
 function renderReadiness(readiness = {}) {
+  state.readiness = readiness;
+  state.canStart = state.supervisorActive && readiness.can_start !== false;
+  els.startButton.disabled = state.busy || !state.canStart;
   const stateName = readiness.state || "ready";
   els.readinessCard.className = `readiness-card ${stateName}`;
   els.readinessStatus.textContent = readiness.requires_review
@@ -310,14 +318,16 @@ function renderHistory(tasks) {
 async function refreshHealth() {
   const health = await api("/api/health");
   const readiness = health.readiness || {};
+  const supervised = health.no_babysitting?.enabled === true;
+  state.supervisorActive = supervised;
   els.health.textContent = readiness.requires_review
     ? "Needs review"
-    : health.local_goal_available
-      ? "Worker ready"
-      : "Worker missing";
+    : supervised
+      ? "Supervisor active"
+      : "Supervisor unavailable";
   els.health.className = readiness.requires_review
     ? "health review"
-    : health.local_goal_available
+    : supervised && health.local_goal_available
       ? "health ok"
       : "health blocked";
   renderReadiness(readiness);
@@ -340,6 +350,7 @@ async function refreshHistory() {
 }
 
 async function startWork() {
+  if (!state.canStart) return;
   const objective = els.objective.value.trim();
   await runAction(async () => {
     const task = await api("/api/tasks", {
@@ -470,9 +481,6 @@ function handleShortcut(event) {
   } else if (event.key.toLowerCase() === "r") {
     event.preventDefault();
     runAction(refreshTask);
-  } else if (event.key.toLowerCase() === "m") {
-    event.preventDefault();
-    postAction("/api/tasks/current/watch");
   } else if (event.key.toLowerCase() === "k") {
     event.preventDefault();
     els.historySearch.focus();
@@ -499,7 +507,6 @@ function escapeHtml(value) {
 
 els.startButton.addEventListener("click", startWork);
 els.checkButton.addEventListener("click", () => runAction(refreshTask));
-els.watchButton.addEventListener("click", () => postAction("/api/tasks/current/watch"));
 els.continueButton.addEventListener("click", () => postAction("/api/tasks/current/continue"));
 els.acceptButton.addEventListener("click", () => postAction("/api/tasks/current/accept"));
 els.stopButton.addEventListener("click", () => postAction("/api/tasks/current/stop"));

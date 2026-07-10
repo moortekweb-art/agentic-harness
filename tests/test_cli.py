@@ -1023,6 +1023,8 @@ def test_continue_reports_loop_guard_trip_as_json(tmp_path, capsys) -> None:
         "version: 1\nworker: noop\nallow_noop_success: true\n",
         encoding="utf-8",
     )
+    assert main(["--project-dir", str(tmp_path), "start", "guarded"]) == 0
+    capsys.readouterr()
     guard_path = tmp_path / ".agentic-harness" / "guard.json"
     guard_path.write_text(
         json.dumps(
@@ -1039,8 +1041,6 @@ def test_continue_reports_loop_guard_trip_as_json(tmp_path, capsys) -> None:
         ),
         encoding="utf-8",
     )
-    assert main(["--project-dir", str(tmp_path), "start", "guarded"]) == 0
-    capsys.readouterr()
 
     rc = main(["--project-dir", str(tmp_path), "continue"])
 
@@ -1814,6 +1814,177 @@ def test_run_until_done_requires_active_goal_or_objective(tmp_path, capsys) -> N
     assert "no active goal" in payload["error"]
 
 
+def test_goal_command_requires_structured_completion_and_accepts_it(tmp_path, capsys) -> None:
+    worker = tmp_path / "structured_worker.py"
+    worker.write_text(
+        "\n".join(
+            [
+                "import json",
+                "outcome = {",
+                "    'status': 'complete',",
+                "    'summary': 'implemented and verified',",
+                "    'checkpoint': 'verified',",
+                "    'current_subgoal': 'final audit',",
+                "    'plan': [{'step': 'verify', 'status': 'completed'}],",
+                "    'requirements': [{",
+                "        'id': 'requested-outcome',",
+                "        'status': 'satisfied',",
+                "        'evidence': ['deterministic check passed'],",
+                "    }],",
+                "    'blockers': [],",
+                "}",
+                "print('HARNESS_RESULT_JSON=' + json.dumps(outcome))",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: coding_agent",
+                "coding_agent_command:",
+                f"  - {sys.executable}",
+                "  - structured_worker.py",
+                '  - "{objective}"',
+                "review_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                "  - 'raise SystemExit(0)'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rc = main(
+        [
+            "--project-dir",
+            str(tmp_path),
+            "goal",
+            "implement the complete requested outcome",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["status"] == "done"
+    assert payload["metadata"]["accepted"] is True
+    assert payload["metadata"]["autonomy"]["completion_audit"]["passed"] is True
+
+
+def test_run_until_done_limits_repeated_blockers_not_progressing_attempts(
+    tmp_path, capsys
+) -> None:
+    worker = tmp_path / "progressing_worker.py"
+    worker.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "attempts = Path('progress.txt')",
+                "count = int(attempts.read_text() or '0') if attempts.exists() else 0",
+                "attempts.write_text(str(count + 1))",
+                "raise SystemExit(1 if count < 4 else 0)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: shell",
+                "shell_command:",
+                f"  - {sys.executable}",
+                "  - progressing_worker.py",
+                "review_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                "  - 'raise SystemExit(0)'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rc = main(
+        [
+            "--project-dir",
+            str(tmp_path),
+            "run-until-done",
+            "finish after meaningful repairs",
+            "--max-attempts",
+            "3",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["status"] == "done"
+    assert payload["metadata"]["accepted"] is True
+    assert (tmp_path / "progress.txt").read_text(encoding="utf-8") == "5"
+
+
+def test_easy_do_requires_and_explains_background_ownership(monkeypatch, capsys) -> None:
+    class BackgroundBridge:
+        local_goal = Path("/tmp/local-goal")
+
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def available(self) -> bool:
+            return True
+
+        def background_supervision(self) -> dict[str, object]:
+            return {"active": True, "summary": "Background watcher active"}
+
+        def start_human_goal(self, **kwargs) -> cli.CommandResult:
+            return cli.CommandResult(("local-goal", "enqueue"), 0, "queued_id=goal-1\n", "")
+
+    monkeypatch.setattr(cli, "LocalGoalBridge", BackgroundBridge)
+
+    rc = main(["do", "finish this without routine check-ins"])
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "Background supervisor owns this task" in output
+    assert "You can close this" in output
+    assert "Move it forward" not in output
+
+
+def test_easy_do_refuses_to_claim_unattended_work_without_watcher(
+    monkeypatch, capsys
+) -> None:
+    class NoWatcherBridge:
+        local_goal = Path("/tmp/local-goal")
+
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def available(self) -> bool:
+            return True
+
+        def background_supervision(self) -> dict[str, object]:
+            return {"active": False, "summary": "Watcher inactive"}
+
+    monkeypatch.setattr(cli, "LocalGoalBridge", NoWatcherBridge)
+
+    rc = main(["do", "do not queue this without supervision"])
+
+    output = capsys.readouterr().out
+    assert rc == 2
+    assert "did not start the task" in output
+    assert "Watcher inactive" in output
+
+
 def test_module_cli_init_works_in_temp_dir(tmp_path) -> None:
     proc = subprocess.run(
         [
@@ -2398,7 +2569,10 @@ def test_cli_restart_clears_metadata(tmp_path, capsys) -> None:
     rc = main(["--project-dir", str(tmp_path), "restart"])
     payload = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert payload["metadata"] == {}
+    assert set(payload["metadata"]) == {"workspace_snapshot"}
+    assert payload["metadata"]["workspace_snapshot"]["schema"] == (
+        "agentic_harness.workspace_snapshot.v1"
+    )
     assert payload["review"] is None
 
 

@@ -51,6 +51,7 @@ class Supervisor:
                 raise GoalConflictError(
                     f"active goal {active.id} is {active.status}; finish or fail it before starting another"
                 )
+            self.loop_guard.reset()
             goal = Goal(objective=objective)
             goal.metadata["workspace_snapshot"] = capture_workspace_snapshot(self.project_dir)
             goal.transition(GoalStatus.PLANNING, reason="goal started")
@@ -115,6 +116,7 @@ class Supervisor:
             goal.metadata["worker_success"] = result.success
             goal.metadata["worker_summary"] = result.summary
             goal.metadata["worker_returncode"] = result.returncode
+            goal.metadata["worker_outcome"] = dict(result.outcome)
             goal.artifacts.extend(path for path in result.artifacts if path not in goal.artifacts)
             goal.error = None if result.success else result.stderr or result.summary
             goal.transition(
@@ -124,7 +126,7 @@ class Supervisor:
             self.store.write_goal(goal)
             return goal
 
-    def review(self) -> Goal:
+    def review(self, *, finalize: bool = True) -> Goal:
         with self.store.locked():
             goal = self._require_goal()
             if goal.status is not GoalStatus.REVIEW:
@@ -134,10 +136,30 @@ class Supervisor:
                 )
             result = self.reviewer.review(goal)
             goal.review = result.to_dict()
-            goal.transition(
-                GoalStatus.DONE if result.passed else GoalStatus.FAILED,
-                reason="review passed" if result.passed else "review failed",
-            )
+            if result.passed:
+                if finalize:
+                    goal.transition(GoalStatus.DONE, reason="review passed")
+            else:
+                goal.transition(GoalStatus.FAILED, reason="review failed")
+            self.store.write_goal(goal)
+            return goal
+
+    def continue_after_review(self, feedback: str) -> Goal:
+        """Continue the same goal after partial work or an incomplete completion audit."""
+        with self.store.locked():
+            goal = self._require_goal()
+            if goal.status is not GoalStatus.REVIEW:
+                raise InvalidTransitionError(
+                    f"cannot continue reviewed goal {goal.id} in {goal.status.value}"
+                )
+            if goal.review is not None:
+                history = goal.metadata.setdefault("review_history", [])
+                if isinstance(history, list):
+                    history.append(dict(goal.review))
+            goal.review = None
+            goal.error = None
+            goal.metadata["continuation_feedback"] = feedback
+            goal.transition(GoalStatus.IN_PROGRESS, reason="completion remains unproven")
             self.store.write_goal(goal)
             return goal
 
@@ -158,6 +180,15 @@ class Supervisor:
         with self.store.locked():
             goal = self._require_goal()
             if goal.status is GoalStatus.DONE:
+                if goal.metadata.get("accepted") is not True:
+                    if not isinstance(goal.review, dict) or goal.review.get("passed") is not True:
+                        raise InvalidTransitionError(
+                            f"cannot accept goal {goal.id}; deterministic review has not passed"
+                        )
+                    goal.metadata["accepted"] = True
+                    goal.metadata["accepted_at"] = goal.updated_at
+                    goal.metadata["accept_reason"] = reason
+                    self.store.write_goal(goal)
                 return goal
             if goal.status is not GoalStatus.REVIEW:
                 raise InvalidTransitionError(
@@ -232,7 +263,11 @@ class Supervisor:
             goal.metadata.pop("worker_success", None)
             goal.metadata.pop("worker_summary", None)
             goal.metadata.pop("worker_returncode", None)
-            goal.metadata.pop("workspace_snapshot", None)
+            goal.metadata.pop("worker_outcome", None)
+            if goal.review is not None:
+                review_history = goal.metadata.setdefault("review_history", [])
+                if isinstance(review_history, list):
+                    review_history.append(dict(goal.review))
             goal.review = None
             self.loop_guard.reset()
             goal.transition(

@@ -1,6 +1,7 @@
 """Core engine primitives for agentic-harness."""
 
 from agentic_harness.core.artifacts import ArtifactStore
+from agentic_harness.core.autonomy import AutonomousRunner, AutonomyPolicy
 from agentic_harness.core.loop_guard import LoopGuard
 from agentic_harness.core.review import (
     DeterministicReviewer,
@@ -17,6 +18,8 @@ from agentic_harness.core.worker import Worker, WorkerResult
 
 __all__ = [
     "ArtifactStore",
+    "AutonomousRunner",
+    "AutonomyPolicy",
     "DeterministicReviewer",
     "Goal",
     "GoalStatus",

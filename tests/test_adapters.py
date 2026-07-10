@@ -144,6 +144,57 @@ def test_coding_agent_worker_formats_command_and_writes_transcript(monkeypatch, 
     assert calls[0][1]["cwd"] == str(tmp_path)
 
 
+def test_coding_agent_worker_uses_durable_continuation_instruction_for_autonomy(
+    monkeypatch, tmp_path
+) -> None:
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0, "checkpoint saved\n", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    worker = CodingAgentWorker(["codex", "exec", "{objective}"], cwd=tmp_path)
+    goal = Goal("the immutable full objective", id="goal-autonomy")
+    goal.metadata["autonomy"] = {"strict_completion": True}
+    goal.metadata["continuation_instruction"] = (
+        "Preserve the immutable full objective. Continue from checkpoint two. "
+        "Return HARNESS_RESULT_JSON."
+    )
+
+    worker.run(goal)
+
+    assert calls[0][0][-1] == goal.metadata["continuation_instruction"]
+    assert calls[0][1]["env"]["AGENTIC_HARNESS_OBJECTIVE"] == goal.objective
+    assert (
+        calls[0][1]["env"]["AGENTIC_HARNESS_INSTRUCTION"]
+        == goal.metadata["continuation_instruction"]
+    )
+
+
+def test_coding_agent_worker_extracts_structured_harness_outcome(monkeypatch, tmp_path) -> None:
+    outcome = {
+        "status": "complete",
+        "summary": "implemented and verified",
+        "requirements": [
+            {"id": "tests", "status": "satisfied", "evidence": ["3 passed"]}
+        ],
+        "blockers": [],
+    }
+
+    def fake_run(cmd, **kwargs):
+        stdout = "work log\nHARNESS_RESULT_JSON=" + json.dumps(outcome) + "\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout, "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    worker = CodingAgentWorker(["codex", "exec", "{objective}"], cwd=tmp_path)
+
+    result = worker.run(Goal("structured completion", id="goal-structured"))
+
+    assert result.success is True
+    assert result.outcome == outcome
+
+
 def test_coding_agent_worker_redacts_secret_like_transcript_content(monkeypatch, tmp_path) -> None:
     def fake_run(cmd, **kwargs):
         return subprocess.CompletedProcess(

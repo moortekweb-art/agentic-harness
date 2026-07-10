@@ -54,8 +54,8 @@ installed, you do not need to write goal packets or remember planner names:
 ```bash
 agentic-harness setup
 agentic-harness do "make Jarvis voice startup more reliable"
+# The background supervisor owns the task now; this terminal may be closed.
 agentic-harness check
-agentic-harness watch
 ```
 
 The Python package does not install that optional backend. Commands that use it
@@ -67,10 +67,17 @@ set `AGENTIC_HARNESS_LOCAL_GOAL=/path/to/local-goal`; that executable override
 wins over the document-root lookup. `~` is expanded in configured paths.
 
 `do` accepts plain English, wraps it in the safe Mode 3A GLM cloud-lane format,
-queues it, and prints a work ticket. `check` shows what is happening. `watch`
-asks the harness to move the current work forward once. Advanced commands such
-as `mode3a-run`, `mode3a-status`, and `mode3a-monitor` remain available when
-you need the underlying details.
+verifies that the background supervisor is active, queues the task, and prints
+a work ticket. The supervisor owns continuation, repair, review, and acceptance;
+`check` is informational and is not required to keep the task moving. Advanced
+commands such as `watch`, `mode3a-run`, `mode3a-status`, and `mode3a-monitor`
+remain available as diagnostics when you need the underlying details.
+
+The public repository does not depend on Turnstone. This machine may place a
+Turnstone-compatible executable behind `AGENTIC_HARNESS_LOCAL_GOAL`; the bridge
+uses only the documented local-goal command and `capabilities --json` contract.
+That keeps private machine supervision outside the GitHub package while letting
+the installed GUI verify and use it.
 
 For a local browser interface:
 
@@ -132,6 +139,25 @@ immediately and keeps the token only for the current tab session. Bearer tokens
 are a basic access gate; they are not a complete browser-origin or CSRF security
 model.
 
+### Autonomous Goals
+
+For a project configured with Codex, OpenCode, Aider, or another supported
+coding-agent backend, give the harness one complete objective:
+
+```bash
+agentic-harness goal "fix the failing tests, preserve unrelated work, and verify the result"
+```
+
+`goal` preserves the original objective and durable plan/checkpoint state across
+cycles. Failed checks and review findings become repair input. Progress may use
+any number of cycles; the runner stops for a person only after the same
+no-progress blocker repeats three consecutive times. A repeated `progress`
+claim without a workspace or checkpoint change counts as no progress.
+Completion requires a finished plan, structured requirement audit, evidence for
+every requirement, and a passing deterministic review. If the foreground
+process is interrupted, run
+`agentic-harness goal` without a new objective to resume the same project goal.
+
 To inspect the demo files instead of running them immediately:
 
 ```bash
@@ -178,18 +204,23 @@ for scripts that prefer one generic entrypoint or want `--explain`.
 Recipe runs write `.agentic-harness/runs/<goal-id>/report.md` automatically,
 so the operator-readable handoff exists even if you do not run
 `agentic-harness report` afterward.
-Add `--until-done --max-attempts N` when a recipe should retry failed worker
-attempts through the normal restart path before giving up.
+Add `--until-done --max-attempts N` when a recipe should keep repairing while
+the workspace is progressing. `N` is the number of consecutive observations of
+the same no-progress blocker before stopping; it is not a total-attempt budget.
 
-For non-demo goals that may need more than one pass, use the bounded driver:
+For legacy non-structured goals that may need more than one pass, use the
+progress-aware compatibility driver:
 
 ```bash
 agentic-harness run-until-done "fix the failing tests" --max-attempts 3
 ```
 
-It starts or resumes one active goal, runs worker/review cycles, restarts failed
-attempts up to the limit, writes `.agentic-harness/runs/<goal-id>/report.md`,
-and still stops with a clear `done` or `failed` state.
+It starts or resumes one active goal, runs worker/review cycles, continues while
+the workspace or checkpoint changes, writes
+`.agentic-harness/runs/<goal-id>/report.md`, and stops only at deterministic
+completion or the configured repeated no-progress blocker threshold. Prefer
+`agentic-harness goal` when the backend can return structured completion
+evidence.
 
 ## Not a Coding Agent
 
@@ -201,6 +232,8 @@ transcripts, artifacts, loop limits, and review gates.
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
 - [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.27 release checks.
+- [Codex `/goal` parity contract](docs/CODEX_GOAL_PARITY.md) documents autonomous continuation, completion, recovery, and sidecar boundaries.
+- [Autonomy audit](docs/AUTONOMY_AUDIT_2026-07-10.md) records findings, fixes, verification evidence, and residual limits.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active tokenless workflow and its verified release path.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
@@ -259,6 +292,8 @@ The core package has no systemd, Cloudflare, GPU, or server-specific assumptions
 
 ## Features
 
+- Evidence-driven autonomous goals: durable plans and checkpoints continue until
+  deterministic completion or a repeated no-progress blocker.
 - Deterministic review gates: pass/fail criteria are code, not model vibes.
 - Artifact-first execution: every goal writes structured JSON state and review data.
 - Loop guard: auto-continue has a project-local circuit breaker persisted at

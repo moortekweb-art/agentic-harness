@@ -33,6 +33,20 @@ def test_gui_modes_use_human_labels() -> None:
     ]
 
 
+def test_default_gui_surface_has_no_manual_babysitting_control() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    html = (static_root / "index.html").read_text(encoding="utf-8")
+    javascript = (static_root / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="watchButton"' not in html
+    assert "Move forward" not in html
+    assert "Ctrl M" not in html
+    assert "watchButton.addEventListener" not in javascript
+    assert 'id="startButton" title="Start the task" disabled' in html
+    assert 'id="continueButton" hidden' in html
+    assert 'id="acceptButton" hidden' in html
+
+
 def test_task_from_command_result_maps_review_state() -> None:
     result = CommandResult(
         args=("local-goal", "status", "--json"),
@@ -166,7 +180,7 @@ def test_task_from_command_result_does_not_treat_accepted_false_as_done() -> Non
     assert task["agent_loop"]["stage"] == "Review"
 
 
-def test_task_from_command_result_maps_failed_command_to_blocked() -> None:
+def test_task_from_command_result_treats_one_failed_command_as_recoverable() -> None:
     result = CommandResult(
         args=("local-goal", "status"),
         returncode=1,
@@ -176,9 +190,76 @@ def test_task_from_command_result_maps_failed_command_to_blocked() -> None:
 
     task = task_from_command_result(result, fallback_status="working")
 
-    assert task["status"] == "blocked"
+    assert task["status"] == "checking"
+    assert task["needs_human"] is False
     assert task["summary"] == "missing backend"
-    assert task["progress"] == 0
+    assert task["progress"] == 60
+
+
+def test_stopped_incomplete_run_remains_under_background_recovery() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "idle",
+                "active_goal": {"accepted": False, "objective": "finish the task"},
+                "runtime": {"loop_state": {"status": "stopped_incomplete"}},
+                "recovery_block": {
+                    "recovery_attempt_count": 1,
+                    "operator_intervention_required": False,
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="ready")
+
+    assert task["status"] == "checking"
+    assert task["needs_human"] is False
+    assert task["readiness_gate"]["can_start"] is False
+    assert "stopped before completion" in task["summary"]
+
+
+def test_repeated_hard_block_requires_human_after_recovery_threshold() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "idle",
+                "active_goal": {"accepted": False, "objective": "finish the task"},
+                "runtime": {"loop_state": {"status": "stopped_incomplete"}},
+                "recovery_block": {
+                    "recovery_attempt_count": 3,
+                    "operator_intervention_required": True,
+                    "recovery_block_reason": "provider unavailable",
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="ready")
+
+    assert task["status"] == "blocked"
+    assert task["needs_human"] is True
+
+
+def test_working_task_is_owned_by_background_supervisor_not_startable() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout='{"active_goal": {"status": "running", "objective": "active work"}}',
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="ready")
+
+    assert task["status"] == "working"
+    assert task["readiness_gate"]["can_start"] is False
+    assert "Background supervisor" in task["readiness_gate"]["next_action"]
 
 
 def test_start_task_uses_bridge_human_goal() -> None:
@@ -187,6 +268,13 @@ def test_start_task_uses_bridge_human_goal() -> None:
     def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         command = args[0]
         calls.append(command)
+        if command[1:3] == ["capabilities", "--json"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                '{"supervision":{"watcher":{"timer_active":true,"state":"active"}}}',
+                "",
+            )
         return subprocess.CompletedProcess(command, 0, "queued_id=abc123\n", "")
 
     bridge = LocalGoalBridge(
@@ -207,7 +295,8 @@ def test_start_task_uses_bridge_human_goal() -> None:
 
     assert task["status"] == "starting"
     assert calls
-    assert calls[0][1] == "status"
+    assert calls[0][1] == "capabilities"
+    assert calls[1][1] == "status"
     assert calls[-1][1] == "enqueue"
 
 
@@ -218,6 +307,17 @@ def test_start_task_blocks_when_current_work_needs_review() -> None:
 
     assert task["status"] == "needs_review"
     assert task["readiness_gate"]["requires_review"] is True
+    assert bridge.commands == []
+
+
+def test_start_task_refuses_unowned_background_work() -> None:
+    bridge = InactiveSupervisionBridge()
+
+    task = start_task(bridge, {"mode": "cloud", "objective": "unowned task"})
+
+    assert task["status"] == "blocked"
+    assert task["needs_human"] is True
+    assert "supervision" in task["summary"].lower()
     assert bridge.commands == []
 
 
@@ -595,6 +695,14 @@ class FakeBridge:
     def available(self) -> bool:
         return True
 
+    def background_supervision(self) -> dict[str, object]:
+        return {
+            "active": True,
+            "timer_active": True,
+            "state": "active",
+            "summary": "Background watcher active",
+        }
+
     def start_human_goal(
         self,
         *,
@@ -656,6 +764,16 @@ class ReviewBridge(FakeBridge):
             ),
             "",
         )
+
+
+class InactiveSupervisionBridge(FakeBridge):
+    def background_supervision(self) -> dict[str, object]:
+        return {
+            "active": False,
+            "timer_active": False,
+            "state": "inactive",
+            "summary": "Background supervision is not active",
+        }
 
 
 @contextmanager
