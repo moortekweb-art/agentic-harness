@@ -100,6 +100,7 @@ class TestDeterministicReviewer:
         assert result.passed is True
         assert len(result.criteria) == 1
         assert result.criteria[0]["name"] == "worker_success"
+        assert result.criteria[0]["independent"] is False
         assert "success" in result.criteria[0]["message"].lower()
 
     def test_default_criterion_fails_when_no_worker_success(self):

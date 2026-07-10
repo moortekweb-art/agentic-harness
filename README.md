@@ -109,7 +109,7 @@ the missing optional executable and how to configure it.
 
 Agentic Harness is a Python application. Its GUI is rendered by packaged
 HTML/CSS/JS files served by the Python backend; there is no Node, Electron,
-Tauri, or native widget runtime in the v0.6.27 GUI. The packaged browser app
+Tauri, or native widget runtime in the v0.6.28 GUI. The packaged browser app
 includes live status updates over WebSocket, progress indicators, task history
 search, dark/light theme switching, keyboard shortcuts, session export/import,
 and local form undo/redo.
@@ -136,8 +136,11 @@ status stream remain gated. In token mode, enter the configured token when the
 browser asks for it, or append it once as a `token` query parameter when opening
 the page. The browser removes that query parameter from visible history
 immediately and keeps the token only for the current tab session. Bearer tokens
-are a basic access gate; they are not a complete browser-origin or CSRF security
-model.
+are a basic access gate. State-changing requests and WebSockets also reject
+cross-origin browser traffic, API writes require JSON, and request bodies are
+capped at 1 MiB. When reverse proxying the loopback GUI through a private network
+such as Tailscale Serve, preserve the original `Host` header and keep network
+membership or a GUI token as the access-control boundary.
 
 ### Autonomous Goals
 
@@ -152,9 +155,10 @@ agentic-harness goal "fix the failing tests, preserve unrelated work, and verify
 cycles. Failed checks and review findings become repair input. Progress may use
 any number of cycles; the runner stops for a person only after the same
 no-progress blocker repeats three consecutive times. A repeated `progress`
-claim without a workspace or checkpoint change counts as no progress.
+claim without a workspace change counts as no progress.
 Completion requires a finished plan, structured requirement audit, evidence for
-every requirement, and a passing deterministic review. If the foreground
+every requirement, and at least one passing independent deterministic review
+criterion. If the foreground
 process is interrupted, run
 `agentic-harness goal` without a new objective to resume the same project goal.
 
@@ -216,7 +220,7 @@ agentic-harness run-until-done "fix the failing tests" --max-attempts 3
 ```
 
 It starts or resumes one active goal, runs worker/review cycles, continues while
-the workspace or checkpoint changes, writes
+the workspace changes, writes
 `.agentic-harness/runs/<goal-id>/report.md`, and stops only at deterministic
 completion or the configured repeated no-progress blocker threshold. Prefer
 `agentic-harness goal` when the backend can return structured completion
@@ -231,7 +235,7 @@ transcripts, artifacts, loop limits, and review gates.
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.27 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.28 release checks.
 - [Codex `/goal` parity contract](docs/CODEX_GOAL_PARITY.md) documents autonomous continuation, completion, recovery, and sidecar boundaries.
 - [Autonomy audit](docs/AUTONOMY_AUDIT_2026-07-10.md) records findings, fixes, verification evidence, and residual limits.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active tokenless workflow and its verified release path.

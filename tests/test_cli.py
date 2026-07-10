@@ -651,6 +651,7 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
     assert "Smoke wheel run" in labels
     assert "Smoke wheel status default text" in labels
     assert "Smoke wheel run-until-done" in labels
+    assert "Smoke wheel strict goal" in labels
     assert "Smoke wheel recipe until-done" in labels
     assert "Smoke wheel run auto-config" in labels
 

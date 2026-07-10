@@ -1095,6 +1095,66 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
     if len(list((driver_project / CONFIG_DIR / "runs").glob("*/report.md"))) != 1:
         print(f"{stem} smoke failed: run-until-done did not write one report artifact")
         return False
+    strict_project = smoke_root / "strict-goal"
+    strict_config_dir = strict_project / CONFIG_DIR
+    strict_config_dir.mkdir(parents=True)
+    strict_worker = strict_project / "worker.py"
+    strict_outcome = {
+        "status": "complete",
+        "summary": "installed strict goal verified",
+        "current_subgoal": "final audit",
+        "checkpoint": "verified",
+        "plan": [{"step": "smoke installed goal", "status": "done"}],
+        "requirements": [
+            {
+                "id": "installed-goal",
+                "status": "satisfied",
+                "evidence": ["independent review command passed"],
+            }
+        ],
+        "blockers": [],
+    }
+    strict_worker.write_text(
+        "import json\n"
+        f"outcome = {strict_outcome!r}\n"
+        'print("HARNESS_RESULT_JSON=" + json.dumps(outcome))\n',
+        encoding="utf-8",
+    )
+    (strict_config_dir / CONFIG_NAME).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "worker": {
+                    "type": "coding_agent",
+                    "coding_agent_command": [str(python_bin), str(strict_worker)],
+                },
+                "review": {
+                    "command": [
+                        str(python_bin),
+                        "-c",
+                        "print('independent review passed')",
+                    ]
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if not _run_release_step(
+        f"Smoke {stem} strict goal",
+        [
+            str(harness_bin),
+            "--project-dir",
+            str(strict_project),
+            "goal",
+            "verify the installed strict goal path",
+            "--json",
+        ],
+        cwd=tmp_root,
+        required_stdout='"accepted": true',
+    ):
+        return False
     recipe_project = smoke_root / "recipe-until-done"
     recipe_config_dir = recipe_project / CONFIG_DIR
     recipe_config_dir.mkdir(parents=True)

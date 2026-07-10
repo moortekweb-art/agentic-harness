@@ -81,6 +81,19 @@ def test_only_one_autonomous_driver_can_own_a_project_goal(tmp_path: Path) -> No
     assert worker.calls == 0
 
 
+def test_autonomy_lease_blocks_direct_supervisor_mutation(tmp_path: Path) -> None:
+    worker = SequenceWorker([WorkerResult(success=True, summary="ran")])
+    owner = Supervisor(project_dir=tmp_path, worker=worker)
+    outsider = Supervisor(project_dir=tmp_path, worker=worker)
+    owner.start("keep one driver in control")
+
+    with owner.store.autonomy_locked():
+        with pytest.raises(StateLockError, match="autonomous driver"):
+            outsider.continue_goal()
+
+    assert worker.calls == 0
+
+
 class SequenceWorker:
     def __init__(self, results: list[WorkerResult]) -> None:
         self.results = list(results)
@@ -92,6 +105,18 @@ class SequenceWorker:
         result = self.results[self.calls]
         self.calls += 1
         return result
+
+
+class WorkspaceProgressWorker(SequenceWorker):
+    def __init__(self, project_dir: Path, results: list[WorkerResult]) -> None:
+        super().__init__(results)
+        self.project_dir = project_dir
+
+    def run(self, goal: Goal) -> WorkerResult:
+        (self.project_dir / "progress.txt").write_text(
+            str(self.calls + 1), encoding="utf-8"
+        )
+        return super().run(goal)
 
 
 class ProgressingFailureWorker:
@@ -184,7 +209,8 @@ def test_meaningful_progress_does_not_consume_the_no_progress_circuit_breaker(
         )
         for index in range(6)
     ]
-    worker = SequenceWorker(
+    worker = WorkspaceProgressWorker(
+        tmp_path,
         [*progress_results, WorkerResult(success=True, summary="complete", outcome=complete_outcome())]
     )
     supervisor = Supervisor(
@@ -232,8 +258,41 @@ def test_repeated_progress_claim_without_evidence_trips_the_blocker_threshold(
     assert goal.status is GoalStatus.FAILED
     assert autonomy["cycle"] == 3
     assert autonomy["operator_intervention_required"] is True
-    assert "without changing the workspace or checkpoint" in autonomy["blocker"]["reason"]
+    assert "without changing the workspace" in autonomy["blocker"]["reason"]
     assert worker.calls == 3
+
+
+def test_changing_checkpoint_does_not_hide_a_repeated_blocker(tmp_path: Path) -> None:
+    worker = SequenceWorker(
+        [
+            WorkerResult(
+                success=True,
+                summary="provider unavailable",
+                outcome={
+                    "status": "blocked",
+                    "summary": "provider unavailable",
+                    "checkpoint": f"worker-label-{index}",
+                    "blockers": ["provider unavailable"],
+                },
+            )
+            for index in range(3)
+        ]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=passing_reviewer(),
+    )
+    runner = AutonomousRunner(supervisor)
+
+    runner.step("require objective progress")
+    runner.step()
+    goal = runner.step()
+
+    autonomy = goal.metadata["autonomy"]
+    assert goal.status is GoalStatus.FAILED
+    assert autonomy["blocker"]["consecutive_count"] == 3
+    assert autonomy["operator_intervention_required"] is True
 
 
 def test_autonomous_runner_escalates_only_after_three_identical_no_progress_blockers(
@@ -456,6 +515,62 @@ def test_strict_autonomy_refuses_a_malformed_completion_schema(tmp_path: Path) -
     audit = goal.metadata["autonomy"]["completion_audit"]
     assert audit["passed"] is False
     assert "blockers list is missing" in audit["failures"]
+
+
+def test_strict_completion_cannot_be_downgraded_when_resumed(tmp_path: Path) -> None:
+    first = Supervisor(
+        project_dir=tmp_path,
+        worker=SequenceWorker(
+            [
+                WorkerResult(
+                    success=True,
+                    summary="partial",
+                    outcome={
+                        "status": "progress",
+                        "checkpoint": "partial",
+                        "current_subgoal": "finish",
+                        "plan": [{"step": "finish", "status": "in_progress"}],
+                        "requirements": [],
+                    },
+                )
+            ]
+        ),
+        reviewer=passing_reviewer(),
+    )
+    strict_goal = AutonomousRunner(first).step("preserve strict completion")
+
+    resumed = AutonomousRunner(
+        Supervisor(
+            project_dir=tmp_path,
+            worker=SequenceWorker([WorkerResult(success=True, summary="unstructured")]),
+            reviewer=passing_reviewer(),
+        ),
+        policy=AutonomyPolicy(require_completion_claim=False),
+    ).step()
+
+    assert strict_goal.metadata["autonomy"]["strict_completion"] is True
+    assert resumed.status is not GoalStatus.DONE
+    assert resumed.metadata["accepted"] is False
+    audit = resumed.metadata["autonomy"]["completion_audit"]
+    assert audit["passed"] is False
+    assert "structured completion claim is missing" in audit["failures"]
+
+
+def test_strict_completion_requires_an_independent_review_criterion(tmp_path: Path) -> None:
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=SequenceWorker(
+            [WorkerResult(success=True, summary="claimed", outcome=complete_outcome())]
+        ),
+    )
+
+    goal = AutonomousRunner(supervisor).step("verify independently")
+
+    assert goal.status is not GoalStatus.DONE
+    assert goal.metadata["accepted"] is False
+    audit = goal.metadata["autonomy"]["completion_audit"]
+    assert audit["passed"] is False
+    assert "deterministic review has no independent criterion" in audit["failures"]
 
 
 def test_restart_preserves_original_workspace_snapshot(tmp_path: Path) -> None:

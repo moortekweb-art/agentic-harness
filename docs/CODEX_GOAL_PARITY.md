@@ -35,12 +35,13 @@ The runner then owns routine execution decisions. It must:
    configured number of consecutive cycles.
 7. Reject completion based only on effort, elapsed time, attempts, context, or
    token use.
-8. Accept completion only after the structured audit and deterministic reviewer
-   both pass.
+8. Accept completion only after the structured audit and at least one
+   independent deterministic review criterion both pass.
 
-The default repeated-blocker threshold is three. Any workspace or checkpoint
-change alters the progress signature and resets the consecutive count. Merely
-returning `status: progress` with the same workspace and checkpoint does not.
+The default repeated-blocker threshold is three. A workspace change alters the
+progress signature and resets the consecutive count. Checkpoint text remains
+useful durable context, but changing it alone does not prove progress or reset a
+repeated blocker.
 
 ## Durable State
 
@@ -89,6 +90,8 @@ Strict completion requires all of the following:
 - The result contains an explicit empty blockers list.
 - The deterministic reviewer ran at least one criterion.
 - Every deterministic criterion passed.
+- At least one passing criterion is independent of the worker's own success
+  claim.
 - Acceptance metadata is persisted after the audit.
 
 If one condition fails, the goal returns to repair. It becomes human-blocked
@@ -103,9 +106,11 @@ The harness uses two project-local locks:
 - `autonomy.lock` leases planning and continuation decisions to one autonomous
   driver for the complete run or single resumed step.
 
-This prevents a GUI process, CLI process, and scheduler from running duplicate
-workers or reviewing different snapshots of the same goal. Atomic writes and
-the current-goal marker allow process restart without reconstructing state from
+Every mutating Supervisor entry point acquires the autonomy lease for its
+operation or proves that it owns the existing long-running lease. This prevents
+a GUI process, CLI process, and scheduler from running duplicate workers or
+reviewing different snapshots of the same goal. Atomic writes and the
+current-goal marker allow process restart without reconstructing state from
 terminal output.
 
 The original workspace snapshot is immutable across failed-attempt restarts so
@@ -159,8 +164,8 @@ Implemented parity:
 Deliberate limits:
 
 - The generic `goal` command is foreground, not a system daemon.
-- A model can propose inaccurate evidence; deterministic project checks remain
-  the independent trust boundary.
+- A model can propose inaccurate evidence; at least one independent
+  deterministic project check remains required for strict completion.
 - Destructive operations, secrets, provider dashboards, billing, and broad
   machine changes still require explicit policy and are not implied by autonomy.
 - Multiple independent simultaneous goals in one project are not supported; one
@@ -174,7 +179,8 @@ operator to babysit normal work.
 When changing the harness or a sidecar:
 
 1. Preserve or migrate both versioned contract shapes.
-2. Test more than five meaningful progress cycles without false loop failure.
+2. Test more than five workspace-backed progress cycles without false loop
+   failure.
 3. Test three identical no-progress cycles and verify escalation occurs only on
    the third observation.
 4. Test a process restart from a persisted checkpoint.
@@ -184,3 +190,6 @@ When changing the harness or a sidecar:
 7. Test deterministic review failure followed by autonomous repair.
 8. Test GUI task creation with the watcher active and inactive.
 9. Run the complete test, lint, type, compile, and installed-package smoke suite.
+10. Test that a strict goal cannot be downgraded by a compatibility resume path.
+11. Test direct Supervisor mutation while another driver owns the autonomy
+    lease.

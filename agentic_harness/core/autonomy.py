@@ -42,10 +42,10 @@ class AutonomousRunner:
         self.policy = policy or AutonomyPolicy()
 
     def run(self, objective: str | None = None) -> Goal:
-        with self.supervisor.store.autonomy_locked():
+        with self.supervisor.store.autonomy_locked() as lease:
             first = True
             while True:
-                goal = self._step_unlocked(objective if first else None)
+                goal = self._step_unlocked(objective if first else None, lease)
                 first = False
                 autonomy = _autonomy(goal)
                 if goal.status is GoalStatus.DONE:
@@ -54,28 +54,28 @@ class AutonomousRunner:
                     return goal
 
     def step(self, objective: str | None = None) -> Goal:
-        with self.supervisor.store.autonomy_locked():
-            return self._step_unlocked(objective)
+        with self.supervisor.store.autonomy_locked() as lease:
+            return self._step_unlocked(objective, lease)
 
-    def _step_unlocked(self, objective: str | None = None) -> Goal:
-        goal = self._load_or_start(objective)
+    def _step_unlocked(self, objective: str | None, lease: object) -> Goal:
+        goal = self._load_or_start(objective, lease)
         autonomy = self._initialize(goal)
         autonomy.setdefault(
             "progress_signature",
-            _progress_signature(self.supervisor, autonomy),
+            _progress_signature(self.supervisor),
         )
-        self._save(goal)
+        self._save(goal, lease)
         if goal.status is GoalStatus.DONE:
             return goal
         if goal.status is GoalStatus.FAILED:
             if autonomy.get("operator_intervention_required") is True:
                 return goal
-            goal = self.supervisor.restart()
+            goal = self.supervisor.restart(_autonomy_lease=lease)
             autonomy = _autonomy(goal)
 
         self._prepare_instruction(goal, autonomy)
-        self._save(goal)
-        goal = self.supervisor.continue_goal()
+        self._save(goal, lease)
+        goal = self.supervisor.continue_goal(_autonomy_lease=lease)
         autonomy = _autonomy(goal)
         autonomy["cycle"] = int(autonomy.get("cycle") or 0) + 1
         autonomy["heartbeat"] = now_iso()
@@ -83,58 +83,69 @@ class AutonomousRunner:
         if not isinstance(outcome, dict):
             outcome = {}
         self._record_outcome(autonomy, outcome)
-        self._save(goal)
+        self._save(goal, lease)
 
         if goal.status is GoalStatus.FAILED:
-            return self._record_blocker(goal, _worker_failure(goal))
+            return self._record_blocker(goal, _worker_failure(goal), lease)
 
         outcome_status = str(outcome.get("status") or "").strip().lower()
         if outcome_status == "progress":
-            progress_signature = _progress_signature(self.supervisor, autonomy)
+            progress_signature = _progress_signature(self.supervisor)
             if progress_signature == autonomy.get("progress_signature"):
                 return self._record_blocker(
                     goal,
-                    "worker reported progress without changing the workspace or checkpoint",
+                    "worker reported progress without changing the workspace",
+                    lease,
                 )
             autonomy["progress_signature"] = progress_signature
             self._clear_blocker(autonomy)
             self.supervisor.loop_guard.reset()
             feedback = _progress_feedback(autonomy)
-            self._save(goal)
-            return self.supervisor.continue_after_review(feedback)
+            self._save(goal, lease)
+            return self.supervisor.continue_after_review(
+                feedback,
+                _autonomy_lease=lease,
+            )
         if outcome_status == "blocked":
-            return self._record_blocker(goal, _outcome_blocker(outcome))
+            return self._record_blocker(goal, _outcome_blocker(outcome), lease)
 
-        goal = self.supervisor.review(finalize=False)
+        goal = self.supervisor.review(finalize=False, _autonomy_lease=lease)
         autonomy = _autonomy(goal)
         if goal.status is GoalStatus.FAILED:
-            return self._record_blocker(goal, _review_failure(goal))
+            return self._record_blocker(goal, _review_failure(goal), lease)
 
         audit = self._completion_audit(goal, outcome)
         autonomy["completion_audit"] = audit
         if not audit["passed"]:
-            self._save(goal)
-            return self._record_blocker(goal, "; ".join(audit["failures"]))
+            self._save(goal, lease)
+            return self._record_blocker(
+                goal,
+                "; ".join(audit["failures"]),
+                lease,
+            )
 
         self._clear_blocker(autonomy)
         autonomy["status"] = "accepted"
         autonomy["checkpoint"] = str(outcome.get("checkpoint") or "accepted")
         autonomy["operator_intervention_required"] = False
-        self._save(goal)
-        return self.supervisor.accept(reason="autonomous completion audit passed")
+        self._save(goal, lease)
+        return self.supervisor.accept(
+            reason="autonomous completion audit passed",
+            _autonomy_lease=lease,
+        )
 
-    def _load_or_start(self, objective: str | None) -> Goal:
+    def _load_or_start(self, objective: str | None, lease: object) -> Goal:
         goal = self.supervisor.status()
         if goal is None:
             if not objective or not objective.strip():
                 raise NoActiveGoalError("no active goal; provide an objective to start one")
-            return self.supervisor.start(objective.strip())
+            return self.supervisor.start(objective.strip(), _autonomy_lease=lease)
         if objective and objective.strip() != goal.objective:
             if goal.status not in {GoalStatus.DONE, GoalStatus.FAILED}:
                 raise GoalConflictError(
                     f"active goal {goal.id} is {goal.status.value}; resume it without a new objective"
                 )
-            return self.supervisor.start(objective.strip())
+            return self.supervisor.start(objective.strip(), _autonomy_lease=lease)
         return goal
 
     def _initialize(self, goal: Goal) -> dict[str, Any]:
@@ -150,6 +161,12 @@ class AutonomousRunner:
                 raise GoalConflictError(
                     "persisted goal no longer matches the original objective identity"
                 )
+            persisted_strict = existing.get("strict_completion")
+            if persisted_strict is not None and not isinstance(persisted_strict, bool):
+                raise GoalConflictError("persisted strict completion policy is malformed")
+            existing["strict_completion"] = bool(persisted_strict) or bool(
+                self.policy.require_completion_claim
+            )
             return existing
         autonomy: dict[str, Any] = {
             "contract": AUTONOMY_CONTRACT,
@@ -223,7 +240,14 @@ class AutonomousRunner:
         if not isinstance(criteria, list) or not criteria:
             failures.append("deterministic review produced no criteria evidence")
 
-        if self.policy.require_completion_claim:
+        strict_completion = _autonomy(goal).get("strict_completion") is True
+        if strict_completion:
+            has_independent_criterion = isinstance(criteria, list) and any(
+                isinstance(item, dict) and item.get("independent") is True
+                for item in criteria
+            )
+            if not has_independent_criterion:
+                failures.append("deterministic review has no independent criterion")
             if str(outcome.get("status") or "").strip().lower() != "complete":
                 failures.append("structured completion claim is missing")
             if not str(outcome.get("summary") or "").strip():
@@ -285,9 +309,9 @@ class AutonomousRunner:
             "requirements": outcome.get("requirements") or [],
         }
 
-    def _record_blocker(self, goal: Goal, reason: str) -> Goal:
+    def _record_blocker(self, goal: Goal, reason: str, lease: object) -> Goal:
         autonomy = _autonomy(goal)
-        signature = _blocker_signature(self.supervisor, reason, autonomy)
+        signature = _blocker_signature(self.supervisor, reason)
         previous = autonomy.get("blocker")
         previous_signature = previous.get("signature") if isinstance(previous, dict) else ""
         previous_count = (
@@ -305,26 +329,31 @@ class AutonomousRunner:
             count >= self.policy.repeated_blocker_limit
         )
         goal.metadata["continuation_feedback"] = reason
-        self._save(goal)
+        self._save(goal, lease)
 
         if autonomy["operator_intervention_required"]:
             autonomy["status"] = "blocked"
             goal.error = reason
             if goal.status is GoalStatus.REVIEW:
                 goal.transition(GoalStatus.FAILED, reason="same blocker repeated without progress")
-            self._save(goal)
+            self._save(goal, lease)
             return goal
         if goal.status is GoalStatus.FAILED:
-            return self.supervisor.restart()
+            return self.supervisor.restart(_autonomy_lease=lease)
         if goal.status is GoalStatus.REVIEW:
-            return self.supervisor.continue_after_review(reason)
+            return self.supervisor.continue_after_review(
+                reason,
+                _autonomy_lease=lease,
+            )
         return goal
 
     def _clear_blocker(self, autonomy: dict[str, Any]) -> None:
         autonomy["blocker"] = {"signature": "", "consecutive_count": 0, "reason": ""}
         autonomy["operator_intervention_required"] = False
 
-    def _save(self, goal: Goal) -> None:
+    def _save(self, goal: Goal, lease: object) -> None:
+        if not self.supervisor.store.owns_autonomy_lease(lease):
+            raise GoalConflictError("autonomous driver lease was lost")
         with self.supervisor.store.locked():
             current = self.supervisor.store.read_current_goal()
             if current is None or current.id != goal.id:
@@ -368,13 +397,11 @@ def _progress_feedback(autonomy: dict[str, Any]) -> str:
 def _blocker_signature(
     supervisor: Supervisor,
     reason: str,
-    autonomy: dict[str, Any],
 ) -> str:
     snapshot = capture_workspace_snapshot(supervisor.project_dir)
     payload = {
         "reason": " ".join(reason.lower().split()),
         "workspace": snapshot,
-        "checkpoint": autonomy.get("checkpoint"),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -382,11 +409,9 @@ def _blocker_signature(
 
 def _progress_signature(
     supervisor: Supervisor,
-    autonomy: dict[str, Any],
 ) -> str:
     payload = {
         "workspace": capture_workspace_snapshot(supervisor.project_dir),
-        "checkpoint": autonomy.get("checkpoint"),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

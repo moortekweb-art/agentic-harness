@@ -22,6 +22,7 @@ _TECHNICAL_SUMMARY_TERMS = (
     "local-goal",
     "run_dir",
 )
+_PERMANENT_COMMAND_FAILURES = frozenset({2, 126, 127})
 
 
 def modes_payload() -> list[dict[str, Any]]:
@@ -193,11 +194,16 @@ def task_from_command_result(result: CommandResult, *, fallback_status: str) -> 
     if parsed is not None:
         advanced_details["payload"] = parsed
     if result.returncode != 0:
+        permanent = result.returncode in _PERMANENT_COMMAND_FAILURES
         return _task(
-            status="checking",
+            status="blocked" if permanent else "checking",
             summary=_clean_summary(result.stderr or result.stdout or "The task could not move forward."),
-            needs_human=False,
-            advanced_details={**advanced_details, "transient_error": True},
+            needs_human=permanent,
+            advanced_details={
+                **advanced_details,
+                "permanent_error": permanent,
+                "transient_error": not permanent,
+            },
         )
     status = _status_from_payload(parsed, fallback_status=fallback_status)
     summary = _summary_from_payload(parsed, result.stdout, fallback_status=status)

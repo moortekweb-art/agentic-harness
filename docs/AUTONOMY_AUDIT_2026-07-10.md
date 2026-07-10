@@ -24,22 +24,26 @@ use more than five cycles without tripping the guard.
 ### High - Unevidenced progress could run forever
 
 A worker could repeatedly return `status: progress` without changing anything
-and reset the old guard. Progress now requires a workspace or checkpoint change.
-Repeated unchanged progress claims count toward operator escalation.
+and reset the old guard. Progress now requires a workspace change. Checkpoint
+text remains durable context but cannot reset the guard by itself. Repeated
+unchanged progress claims count toward operator escalation.
 
 ### High - Completion was not a strict claim-and-audit protocol
 
 The coding-agent adapter now parses a final `HARNESS_RESULT_JSON` record. Strict
 completion requires a summary, current subgoal, checkpoint, completed plan,
 identified requirements with non-empty evidence, an explicit empty blockers
-list, and a passing deterministic review. Acceptance is persisted only after
-that audit.
+list, and at least one independent deterministic review criterion. Worker
+process success alone is not independent proof. Acceptance is persisted only
+after that audit, and strictness cannot be downgraded when another command
+resumes the goal.
 
 ### High - Concurrent drivers could interleave goal decisions
 
 Short state writes were locked, but separate GUI, CLI, or scheduler processes
 could still make overlapping continuation decisions. A project-local
-`autonomy.lock` now leases the full run or resumed step to one driver while
+`autonomy.lock` now leases the full run or resumed step to one driver, and every
+mutating Supervisor entry point acquires or proves ownership of that lease.
 `state.lock` continues to protect atomic transitions.
 
 ### High - Human Mode could queue work without a verified owner
@@ -83,9 +87,17 @@ ownership are verified.
 ### Medium - Backend command errors were over-escalated
 
 Local-goal calls now have a timeout and normalize timeout/start failures into
-structured results. One failed status or monitor call is represented as a
-recoverable checking state. A stopped-incomplete run remains under background
-recovery unless the repeated-blocker contract explicitly requests intervention.
+structured results. Timeout and generic transient failures remain recoverable;
+invalid invocations and missing executables become human-visible blockers. A
+stopped-incomplete run remains under background recovery unless the
+repeated-blocker contract explicitly requests intervention.
+
+### High - Proxied GUI writes lacked browser-origin enforcement
+
+The GUI now rejects cross-origin state-changing requests and WebSocket upgrades,
+requires JSON for API writes, and caps request bodies at 1 MiB. This preserves a
+usable loopback server behind a private Tailscale-style reverse proxy while
+preventing unrelated browser origins from triggering task actions.
 
 ## Public And Private Boundary
 
@@ -100,13 +112,14 @@ Agentic Harness `0.6.27` wheel and `agentic-harness-gui.service` were updated.
 
 ## Verification Evidence
 
-- Full source suite: `721 passed`.
+- Full source suite: `731 passed`.
 - Ruff: all checks passed.
 - Mypy strict package check: no issues in 27 source files.
 - Python compileall: passed.
 - JavaScript syntax and concurrent token-prompt regression: passed.
 - Wheel and sdist release smoke: passed, including Twine metadata checks,
-  isolated installs, recipes, demos, reports, and final demo tests.
+  isolated installs, strict autonomous goals with independent review, recipes,
+  demos, reports, and final demo tests.
 - Real unattended goal pilot: two cycles, durable plan handoff, independent
   review passed, completion audit passed, and acceptance persisted.
 - Live service: active on `127.0.0.1:8769` with the Turnstone watcher reported
@@ -122,9 +135,9 @@ Agentic Harness `0.6.27` wheel and `agentic-harness-gui.service` were updated.
   the independent trust boundary and should be meaningful for the objective.
 - One project has one active-goal pointer; simultaneous independent goals need
   separate project roots.
-- A model can manufacture changing checkpoint text. Workspace evidence and
-  deterministic review reduce that risk but cannot prove semantic progress by
-  themselves.
+- Checkpoint text is narrative state and does not count as progress. Workspace
+  evidence prevents label churn, but deterministic checks must still establish
+  semantic correctness.
 - Destructive machine operations, secrets, billing, routing, and provider
   dashboards remain outside implied autonomous authority.
 
