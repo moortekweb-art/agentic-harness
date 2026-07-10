@@ -74,6 +74,8 @@ you need the underlying details.
 
 For a local browser interface:
 
+![Agentic Harness local GUI](docs/assets/agentic-harness-gui.png)
+
 ```bash
 agentic-harness gui
 ```
@@ -111,6 +113,11 @@ hood. It also exposes a readiness gate based on the local agent loop: it shows
 whether the harness is ready, acting, checking, or waiting for review, and it
 keeps new simple-UI starts behind review when the active local-goal run needs a
 human decision.
+
+The public interface decisions and upgrade boundary are documented in
+[GUI Design](docs/GUI_DESIGN.md) and
+[GUI Architecture](docs/GUI_ARCHITECTURE.md). A narrow-screen capture is also
+available in [the GUI assets](docs/assets/agentic-harness-gui-mobile.png).
 
 Keep the default loopback binding unless you have a specific reason to expose
 the GUI beyond this computer. If you bind to a non-loopback host such as

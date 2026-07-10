@@ -4,7 +4,7 @@ const TOKEN_KEY = "agentic-harness-gui-session-token";
 const TOKEN_PARAM = "token";
 
 const state = {
-  mode: "cloud",
+  mode: "guided",
   busy: false,
   modes: [],
   undoStack: [],
@@ -166,7 +166,7 @@ function applyFormSnapshot(snapshot) {
   els.objective.value = snapshot.objective || "";
   els.safeAreas.value = snapshot.safeAreas || "";
   els.checks.value = snapshot.checks || "";
-  state.mode = snapshot.mode || "cloud";
+  state.mode = snapshot.mode || "guided";
   renderModes(state.modes);
   persistLocal();
 }

@@ -49,6 +49,65 @@ def test_task_from_command_result_maps_review_state() -> None:
     assert task["metadata"]["command"] == "local-goal status --json"
 
 
+def test_task_summary_hides_backend_actors_but_preserves_raw_evidence() -> None:
+    backend_summary = (
+        "Worker stopped and says it is done. Hermes watcher will review it "
+        "automatically before any new Node1 goal starts."
+    )
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "needs_review",
+                "capabilities": {
+                    "current_state": {"recommended_action": backend_summary},
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="working")
+
+    assert task["summary"] == (
+        "The work is ready for review. Review it or ask it to continue before "
+        "starting another task."
+    )
+    assert "hermes" not in task["summary"].lower()
+    assert "node1" not in task["summary"].lower()
+    assert task["advanced_details"]["payload"]["capabilities"]["current_state"][
+        "recommended_action"
+    ] == backend_summary
+
+
+def test_task_summary_hides_internal_generated_objective() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "needs_review",
+                "active_goal": {
+                    "awaiting_review": True,
+                    "objective": "Mode 3A: Cloud Long-Horizon Goal",
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="working")
+
+    assert task["summary"] == (
+        "The work is ready for review. Review it or ask it to continue before "
+        "starting another task."
+    )
+    assert task["advanced_details"]["payload"]["active_goal"]["objective"] == (
+        "Mode 3A: Cloud Long-Horizon Goal"
+    )
+
+
 def test_task_from_command_result_does_not_treat_accepted_false_as_done() -> None:
     result = CommandResult(
         args=("local-goal", "status", "--json"),
@@ -237,6 +296,13 @@ def test_gui_frontend_plumbs_token_without_persisting_or_exporting_it() -> None:
     assert "localStorage.setItem(TOKEN" not in app
     assert "localStorage.getItem(TOKEN" not in app
     assert "token:" not in app
+
+
+def test_gui_frontend_defaults_to_guided_mode() -> None:
+    app = Path("agentic_harness/gui/static/app.js").read_text(encoding="utf-8")
+
+    assert 'mode: "guided"' in app
+    assert 'snapshot.mode || "guided"' in app
 
 
 def test_gui_frontend_token_prompt_concurrent_race_regression() -> None:

@@ -11,6 +11,17 @@ from agentic_harness.core.local_goal_bridge import CommandResult, HUMAN_MODES, L
 
 TaskPayload = dict[str, Any]
 
+_TECHNICAL_SUMMARY_TERMS = (
+    "hermes watcher",
+    "node1",
+    "opencode",
+    "vllm",
+    "mode 3a",
+    "executor-worker",
+    "local-goal",
+    "run_dir",
+)
+
 
 def modes_payload() -> list[dict[str, Any]]:
     return [
@@ -416,19 +427,19 @@ def _summary_from_payload(
             return "Previous work is accepted. Ready for the next task."
         recommended = _nested_string(payload, ("capabilities", "current_state", "recommended_action"))
         if recommended:
-            return _clean_summary(recommended)
+            return _human_summary(_clean_summary(recommended), fallback_status)
         for key in ("summary", "message", "status", "classification"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
-                return _clean_summary(value)
+                return _human_summary(_clean_summary(value), fallback_status)
         active_goal = payload.get("active_goal")
         if isinstance(active_goal, dict):
             for key in ("objective", "summary", "status"):
                 value = active_goal.get(key)
                 if isinstance(value, str) and value.strip():
-                    return _clean_summary(value)
+                    return _human_summary(_clean_summary(value), fallback_status)
     if stdout.strip():
-        return _clean_summary(stdout)
+        return _human_summary(_clean_summary(stdout), fallback_status)
     return {
         "ready": "No active work is visible yet.",
         "starting": "The work has been sent to the background worker.",
@@ -485,6 +496,35 @@ def _clean_summary(value: str) -> str:
         return "No detail returned yet."
     summary = " ".join(lines[:4])
     return summary if len(summary) <= 280 else f"{summary[:277]}..."
+
+
+def _human_summary(summary: str, status: str) -> str:
+    normalized = summary.strip().lower().replace("-", "_").replace(" ", "_")
+    status_only = normalized in {
+        "ready",
+        "starting",
+        "working",
+        "checking",
+        "needs_review",
+        "done",
+        "blocked",
+        "stopped",
+    }
+    if not status_only and not any(term in summary.lower() for term in _TECHNICAL_SUMMARY_TERMS):
+        return summary
+    return {
+        "ready": "The assistant is ready for a new task.",
+        "starting": "The task is starting.",
+        "working": "The assistant is working on the task.",
+        "checking": "The work is being checked.",
+        "needs_review": (
+            "The work is ready for review. Review it or ask it to continue before "
+            "starting another task."
+        ),
+        "done": "The work is complete and ready for you.",
+        "blocked": "The task needs attention. Open Advanced details for technical information.",
+        "stopped": "The work has stopped.",
+    }.get(status, "The task status was updated.")
 
 
 def _string_list(value: Any) -> list[str]:

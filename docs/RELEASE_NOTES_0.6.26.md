@@ -19,9 +19,16 @@ This release prepares the packaged local browser GUI for public GitHub use.
   override, and `~` is expanded in configured paths.
 - Missing local-goal backends are reported as optional configuration gaps; the
   Python package does not install that backend.
+- Backend actor names in status output are translated into human language on
+  the main surface while raw evidence remains available in Advanced details.
+- The guided planning mode is selected by default for a fresh browser session;
+  long-task and experimental routes remain explicit choices.
 - README and release checklist now document Linux/Ubuntu GUI usage, the
   Python-backend plus packaged HTML/CSS/JS architecture, package-data shipping,
   and the GUI security model.
+- The repository includes real desktop/mobile GUI captures, a curated design
+  record, implementation architecture, and the three original concept
+  references used to choose the visual direction.
 - GUI static files remain included in the wheel/sdist through package data.
 
 ## Verification
