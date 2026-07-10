@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.state import Goal
 from agentic_harness.core.worker import WorkerResult
 
@@ -62,13 +63,46 @@ class ShellWorker:
         summary = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
         if not summary:
             summary = "shell command completed" if success else "shell command failed"
+        artifacts: list[str] = []
+        try:
+            transcript = self.transcript_for(goal)
+            transcript.parent.mkdir(parents=True, exist_ok=True)
+            transcript.write_text(
+                redact_secrets(
+                    "\n".join(
+                        [
+                            f"$ {' '.join(self.command)}",
+                            f"returncode: {proc.returncode}",
+                            "",
+                            "[stdout]",
+                            proc.stdout,
+                            "[stderr]",
+                            proc.stderr,
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+            artifacts.append(transcript.relative_to(self.cwd.resolve()).as_posix())
+        except OSError as exc:
+            summary = f"{summary} (transcript write failed: {exc})"
         return WorkerResult(
             success=success,
             summary=summary,
+            artifacts=artifacts,
             stdout=proc.stdout,
             stderr=proc.stderr,
             returncode=proc.returncode,
         )
+
+    def transcript_for(self, goal: Goal) -> Path:
+        root = self.cwd.resolve()
+        transcript = (root / ".agentic-harness" / "runs" / goal.id / "shell-worker.log").resolve()
+        try:
+            transcript.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("transcript path is outside project directory") from exc
+        return transcript
 
 
 def _text_or_empty(value: object) -> str:

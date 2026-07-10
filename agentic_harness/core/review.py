@@ -32,9 +32,18 @@ class DeterministicReviewer:
     """Run typed pass/fail criteria without model judgment."""
 
     def __init__(self, criteria: list[ReviewCriterion] | None = None) -> None:
-        self.criteria = criteria or [ReviewCriterion("worker_success", self._worker_success)]
+        self.criteria = (
+            criteria
+            if criteria is not None
+            else [ReviewCriterion("worker_success", self._worker_success)]
+        )
 
     def review(self, goal: Goal) -> ReviewResult:
+        if not self.criteria:
+            raise ValueError(
+                "cannot review with empty criteria list; "
+                "add at least one criterion or use a default reviewer"
+            )
         results: list[dict[str, object]] = []
         for criterion in self.criteria:
             passed, message = criterion.check(goal)
@@ -155,3 +164,26 @@ def git_clean(project_dir: str | Path = ".") -> ReviewCriterion:
         return clean, "git worktree clean" if clean else "git worktree has changes"
 
     return ReviewCriterion("git_clean", check, "Git worktree must be clean")
+
+
+def goal_status_is(status: str) -> ReviewCriterion:
+    """Require the goal to be in a specific status.
+
+    Useful as a post-review sanity check: if you expect the goal to be DONE
+    after review passes, require status == "done" so a buggy transition
+    cannot silently leave the goal in REVIEW.
+    """
+
+    def check(goal: Goal) -> tuple[bool, str]:
+        if goal.status.value == status:
+            return True, f"goal status is {status}"
+        return (
+            False,
+            f"goal status is {goal.status.value}, expected {status}",
+        )
+
+    return ReviewCriterion(
+        "goal_status_is",
+        check,
+        f"Goal must be in status {status}",
+    )

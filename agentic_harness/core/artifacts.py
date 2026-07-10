@@ -11,6 +11,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Iterator, cast
 
 from agentic_harness.core.errors import StateLockError
+from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.state import Goal
 
 fcntl = importlib.import_module("fcntl") if importlib.util.find_spec("fcntl") else None
@@ -58,12 +59,18 @@ class ArtifactStore:
         return state_path
 
     def read_goal(self, goal_id: str) -> Goal:
-        return Goal.from_dict(self._read_json(self.goal_dir(goal_id) / "state.json"))
+        try:
+            return Goal.from_dict(self._read_json(self.goal_dir(goal_id) / "state.json"))
+        except (json.JSONDecodeError, OSError, ValueError):
+            raise StateLockError(f"corrupted or missing goal state for {goal_id}")
 
     def read_current_goal(self) -> Goal | None:
         if not self.current_path.exists():
             return None
-        payload = self._read_json(self.current_path)
+        try:
+            payload = self._read_json(self.current_path)
+        except (json.JSONDecodeError, OSError):
+            return None
         goal_id = payload.get("goal_id")
         if not isinstance(goal_id, str):
             return None
@@ -86,17 +93,33 @@ class ArtifactStore:
         return report_path
 
     def repair_current_marker(self) -> Goal | None:
-        """Restore current.json from the most recently updated run when only marker state is missing."""
+        """Restore current.json from the most recently updated run when only marker state is missing.
+
+        Uses the goal's ``updated_at`` timestamp from the state file to determine
+        recency, not ``st_mtime``. Filesystem modification time can be wrong after
+        copies, restores, or VCS operations, so ``updated_at`` is the authoritative
+        source for which goal was worked on most recently.
+        """
         if self.current_path.exists():
             return self.read_current_goal()
-        candidates = sorted(
-            self.runs_dir.glob("*/state.json"),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
+        candidates: list[tuple[str, Path]] = []
+        for state_path in self.runs_dir.glob("*/state.json"):
+            try:
+                payload = self._read_json(state_path)
+            except (json.JSONDecodeError, OSError):
+                continue
+            updated_at = payload.get("updated_at")
+            goal_id = payload.get("id")
+            if not isinstance(updated_at, str) or not isinstance(goal_id, str):
+                continue
+            candidates.append((updated_at, state_path))
         if not candidates:
             return None
-        goal = Goal.from_dict(self._read_json(candidates[0]))
+        candidates.sort(key=lambda pair: pair[0], reverse=True)
+        try:
+            goal = Goal.from_dict(self._read_json(candidates[0][1]))
+        except (json.JSONDecodeError, OSError, ValueError):
+            return None
         self._write_json(self.current_path, {"goal_id": goal.id})
         return goal
 
@@ -108,12 +131,21 @@ class ArtifactStore:
 
     def _write_text(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with NamedTemporaryFile(
-            "w", encoding="utf-8", dir=str(path.parent), delete=False
-        ) as handle:
-            handle.write(content)
-            tmp = Path(handle.name)
-        tmp.replace(path)
+        tmp: Path | None = None
+        try:
+            with NamedTemporaryFile(
+                "w", encoding="utf-8", dir=str(path.parent), delete=False
+            ) as handle:
+                handle.write(redact_secrets(content))
+                tmp = Path(handle.name)
+            tmp.replace(path)
+        except Exception:
+            if tmp is not None and tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+            raise
 
     def _lock_handle(self, handle: Any) -> None:
         if fcntl is not None:
@@ -132,3 +164,5 @@ class ArtifactStore:
         if msvcrt is not None:
             handle.seek(0)
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            return
+        raise StateLockError("state unlocking is unsupported on this platform")

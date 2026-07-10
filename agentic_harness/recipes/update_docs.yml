@@ -1,0 +1,18 @@
+name: update-docs
+description: Update docs for current behavior without inventing features.
+objective_template: |
+  Update the project documentation so it matches the current CLI behavior and examples.
+
+  Rules:
+  - Do not invent unsupported features.
+  - Keep changes focused.
+  - Preserve unrelated work.
+  - Summarize changed files and what behavior they now document.
+review:
+  command:
+    - python
+    - -m
+    - pytest
+    - tests/
+    - -q
+  command_timeout: 120

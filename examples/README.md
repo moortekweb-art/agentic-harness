@@ -6,8 +6,8 @@ These examples are intentionally small and safe to inspect.
 - [coding-agent](coding-agent/) wraps Codex, Aider, OpenCode, or a similar CLI and
   captures a transcript before deterministic review.
 - [fix-failing-tests-demo](fix-failing-tests-demo/) is a runnable demo of
-  `agentic-harness run "fix failing tests"` with a coding-agent worker and
-  pytest review gate.
+  `agentic-harness fix-tests` auto-configuring the packaged demo worker and
+  passing a pytest review gate.
 - [local-llm](local-llm/) shows the OpenAI-compatible local LLM adapter without calling an endpoint by default.
 - [tmux-worker](tmux-worker/) shows the tmux adapter without starting tmux by default.
 - [real-world-recipes.md](real-world-recipes.md) gives copyable config patterns for shell,

@@ -1,0 +1,18 @@
+name: verify-tests
+description: Run the test suite and report pass/fail status.
+objective_template: |
+  Run the full test suite for this project and report results.
+
+  Rules:
+  - Do not modify tests or source unless a test is clearly wrong.
+  - If tests pass, confirm and summarize.
+  - If tests fail, report the failures and suggest the smallest fix.
+  - Preserve unrelated work.
+review:
+  command:
+    - python
+    - -m
+    - pytest
+    - tests/
+    - -q
+  command_timeout: 120

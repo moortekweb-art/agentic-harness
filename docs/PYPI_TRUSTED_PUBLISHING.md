@@ -8,6 +8,18 @@ The publish workflow is checked in at `.github/workflows/publish.yml`.
 `docs/templates/publish.yml` is retained only as a reference copy. Configure the
 PyPI trusted publisher below before expecting release publishes to succeed.
 
+Before uploading, the workflow installs the project with test extras and runs:
+
+```bash
+python -m agentic_harness.cli release-smoke --dist-dir dist
+```
+
+That command builds the wheel and sdist, runs `twine check`, installs both
+artifacts in fresh virtual environments, runs the packaged demo from each
+artifact, verifies the final demo tests, and writes `SHA256SUMS` beside the
+verified artifacts. The PyPI publish action uploads the same `dist/` artifacts
+only after that gate passes.
+
 ## Name Availability Blocker
 
 As of 2026-07-04, the `agentic-harness` project name on PyPI is already used by
@@ -37,7 +49,8 @@ release attempt were:
 - `environment`: `pypi`
 
 After the external PyPI setup exists, publishing a GitHub release runs the
-`Publish` workflow and uploads the distributions built from that release.
+`Publish` workflow and uploads the release-smoke-verified distributions built
+from that release.
 
 ## Current Publish Status
 
@@ -46,15 +59,33 @@ exchange. PyPI rejected it with `invalid-publisher`, meaning the GitHub workflow
 is active but PyPI does not yet have a matching trusted publisher configured for
 this project.
 
-After configuring the PyPI trusted publisher, rerun the failed `Publish`
-workflow or publish a new release tag.
+After configuring the PyPI trusted publisher, publish a new release tag such as
+`v0.6.25` so the upload includes the release-smoke-gated publish workflow and
+checksum-manifest generation.
 
 ## Manual Verification
 
 ```bash
-python -m build --outdir /tmp/agentic-harness-dist
+python -m pip install -e ".[test]"
+python -m agentic_harness.cli release-smoke --dist-dir /tmp/agentic-harness-dist
 python -m pip index versions local-agentic-harness
 gh release view v0.6.9 --repo moortekweb-art/agentic-harness
+gh release view v0.6.10 --repo moortekweb-art/agentic-harness
+gh release view v0.6.11 --repo moortekweb-art/agentic-harness
+gh release view v0.6.12 --repo moortekweb-art/agentic-harness
+gh release view v0.6.13 --repo moortekweb-art/agentic-harness
+gh release view v0.6.14 --repo moortekweb-art/agentic-harness
+gh release view v0.6.15 --repo moortekweb-art/agentic-harness
+gh release view v0.6.16 --repo moortekweb-art/agentic-harness
+gh release view v0.6.17 --repo moortekweb-art/agentic-harness
+gh release view v0.6.18 --repo moortekweb-art/agentic-harness
+gh release view v0.6.19 --repo moortekweb-art/agentic-harness
+gh release view v0.6.20 --repo moortekweb-art/agentic-harness
+gh release view v0.6.21 --repo moortekweb-art/agentic-harness
+gh release view v0.6.22 --repo moortekweb-art/agentic-harness
+gh release view v0.6.23 --repo moortekweb-art/agentic-harness
+gh release view v0.6.24 --repo moortekweb-art/agentic-harness
+gh release view v0.6.25 --repo moortekweb-art/agentic-harness
 gh run view 28703761225 --repo moortekweb-art/agentic-harness --log-failed
 ```
 

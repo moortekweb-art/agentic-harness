@@ -87,8 +87,13 @@ class GitHubActionsAdapter:
             with urllib.request.urlopen(request, timeout=30) as response:
                 status = response.status
                 response_payload = _read_json_response(response)
-        except Exception as exc:  # network adapter boundary: keep failure structured
-            return WorkerResult(success=False, summary=str(exc), returncode=1)
+        except (
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            OSError,
+            json.JSONDecodeError,
+        ) as exc:
+            return WorkerResult(success=False, summary=str(exc), stderr=str(exc), returncode=1)
         if 200 <= status < 300 and self.wait_for_completion:
             direct_run_url = _dispatch_run_url(response_payload)
             run_id = _dispatch_run_id(response_payload)
@@ -130,12 +135,20 @@ class GitHubActionsAdapter:
             try:
                 with urllib.request.urlopen(request, timeout=30) as response:
                     payload = _read_json_response(response)
-            except Exception as exc:  # network adapter boundary: keep failure structured
-                return WorkerResult(success=False, summary=str(exc), returncode=1)
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:
+                return WorkerResult(success=False, summary=str(exc), stderr=str(exc), returncode=1)
             if payload.get("status") == "completed":
                 return _workflow_result(payload)
             if self.poll_interval > 0:
-                time.sleep(self.poll_interval)
+                remaining = deadline - time.monotonic()
+                sleep_time = min(self.poll_interval, max(0, remaining))
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
         return WorkerResult(
             success=False,
             summary="timed out waiting for GitHub Actions workflow completion",
@@ -158,15 +171,23 @@ class GitHubActionsAdapter:
             try:
                 with urllib.request.urlopen(request, timeout=30) as response:
                     payload = _read_json_response(response)
-            except Exception as exc:  # network adapter boundary: keep failure structured
-                return WorkerResult(success=False, summary=str(exc), returncode=1)
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:
+                return WorkerResult(success=False, summary=str(exc), stderr=str(exc), returncode=1)
             runs_value = payload.get("workflow_runs", [])
             runs = runs_value if isinstance(runs_value, list) else []
             run = runs[0] if runs and isinstance(runs[0], dict) else None
             if run and run.get("status") == "completed":
                 return _workflow_result(run)
             if self.poll_interval > 0:
-                time.sleep(self.poll_interval)
+                remaining = deadline - time.monotonic()
+                sleep_time = min(self.poll_interval, max(0, remaining))
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
         return WorkerResult(
             success=False,
             summary="timed out waiting for GitHub Actions workflow completion",

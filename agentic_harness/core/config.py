@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+import sys
 from typing import Any
 
 import yaml
@@ -28,6 +29,8 @@ ALLOWED_KEYS = {
     "llm_model",
     "llm_api_key",
     "llm_timeout",
+    "llm_retries",
+    "llm_retry_delay",
     "github_owner",
     "github_repo",
     "github_workflow_id",
@@ -42,6 +45,55 @@ ALLOWED_KEYS = {
     "review_artifact",
     "review_file_changed",
     "review_git_clean",
+}
+ALLOWED_WORKER_DICT_KEYS = {
+    "type",
+    "shell_command",
+    "coding_agent_command",
+    "coding_agent_timeout",
+    "coding_agent_transcript",
+    "tmux_command",
+    "tmux_session_prefix",
+    "llm_endpoint",
+    "llm_model",
+    "llm_api_key",
+    "llm_timeout",
+    "llm_retries",
+    "llm_retry_delay",
+    "github_owner",
+    "github_repo",
+    "github_workflow_id",
+    "github_token",
+    "github_ref",
+    "github_wait",
+    "github_poll_interval",
+    "github_timeout",
+    "github_api_version",
+    "allow_noop_success",
+}
+ALLOWED_GITHUB_DICT_KEYS = {
+    "owner",
+    "repo",
+    "workflow_id",
+    "token",
+    "ref",
+    "wait",
+    "poll_interval",
+    "timeout",
+    "api_version",
+}
+ALLOWED_LLM_DICT_KEYS = {
+    "endpoint",
+    "model",
+    "api_key",
+    "timeout",
+}
+ALLOWED_REVIEW_DICT_KEYS = {
+    "command",
+    "command_timeout",
+    "artifact",
+    "file_changed",
+    "git_clean",
 }
 ALLOWED_WORKERS = {"noop", "shell", "coding_agent", "tmux", "local_llm", "github_actions"}
 LIST_KEYS = {"shell_command", "coding_agent_command", "review_command"}
@@ -62,6 +114,8 @@ class HarnessConfig:
     llm_model: str = ""
     llm_api_key: str = "local"
     llm_timeout: int = 120
+    llm_retries: int = 2
+    llm_retry_delay: float = 1.0
     github_owner: str = ""
     github_repo: str = ""
     github_workflow_id: str = ""
@@ -99,6 +153,101 @@ worker: noop
 #   - pytest
 """
 
+TOOL_CONFIGS: dict[str, str] = {
+    "shell": """# agentic-harness shell starter config
+version: 1
+worker: shell
+shell_command:
+  - python
+  - -c
+  - "print('shell worker placeholder: edit .agentic-harness/config.yml to run your own command')"
+review_command:
+  - python
+  - -m
+  - pytest
+  - tests/
+  - -q
+review_command_timeout: 120
+""",
+    "codex": """# agentic-harness Codex starter config
+version: 1
+worker:
+  type: coding_agent
+  coding_agent_command:
+    - codex
+    - exec
+    - --skip-git-repo-check
+    - "{objective}"
+  coding_agent_timeout: 1800
+  coding_agent_transcript: .agentic-harness/runs/{goal_id}/coding-agent.log
+review_command:
+  - python
+  - -m
+  - pytest
+  - tests/
+  - -q
+review_command_timeout: 120
+""",
+    "opencode": """# agentic-harness OpenCode starter config
+version: 1
+worker:
+  type: coding_agent
+  coding_agent_command:
+    - opencode
+    - run
+    - "{objective}"
+  coding_agent_timeout: 1800
+  coding_agent_transcript: .agentic-harness/runs/{goal_id}/coding-agent.log
+review_command:
+  - python
+  - -m
+  - pytest
+  - tests/
+  - -q
+review_command_timeout: 120
+""",
+    "aider": """# agentic-harness Aider starter config
+version: 1
+worker:
+  type: coding_agent
+  coding_agent_command:
+    - aider
+    - --yes-always
+    - --message
+    - "{objective}"
+  coding_agent_timeout: 1800
+  coding_agent_transcript: .agentic-harness/runs/{goal_id}/coding-agent.log
+review_command:
+  - python
+  - -m
+  - pytest
+  - tests/
+  - -q
+review_command_timeout: 120
+""",
+    "codewhale": """# agentic-harness CodeWhale starter config
+version: 1
+worker:
+  type: coding_agent
+  coding_agent_command:
+    - codewhale
+    - exec
+    - --allowed-tools
+    - read_file,exec_shell
+    - --max-turns
+    - "10"
+    - "{objective}"
+  coding_agent_timeout: 1800
+  coding_agent_transcript: .agentic-harness/runs/{goal_id}/codewhale.log
+review_command:
+  - python
+  - -m
+  - pytest
+  - tests/
+  - -q
+review_command_timeout: 120
+""",
+}
 
 def write_default_config(project_dir: str | Path = ".") -> Path:
     root = Path(project_dir)
@@ -108,6 +257,45 @@ def write_default_config(project_dir: str | Path = ".") -> Path:
     if not path.exists():
         path.write_text(DEFAULT_CONFIG, encoding="utf-8")
     return path
+
+
+def write_tool_config(
+    project_dir: str | Path = ".", tool: str = "shell", *, force: bool = False
+) -> Path:
+    try:
+        content = _tool_config_content(Path(project_dir), tool)
+    except KeyError as exc:
+        supported = ", ".join(sorted(TOOL_CONFIGS))
+        raise ConfigError(f"unsupported init tool: {tool}; choose one of: {supported}") from exc
+    root = Path(project_dir)
+    config_dir = root / CONFIG_DIR
+    config_dir.mkdir(parents=True, exist_ok=True)
+    path = config_dir / CONFIG_NAME
+    if path.exists() and not force:
+        raise ConfigError(f"{path} already exists; pass --force to replace it")
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def _tool_config_content(project_dir: Path, tool: str) -> str:
+    if tool == "shell" and (project_dir / "mock_coding_agent.py").exists():
+        return demo_shell_config()
+    return TOOL_CONFIGS[tool]
+
+
+def demo_shell_config(*, python_executable: str | None = None) -> str:
+    executable = python_executable or sys.executable
+    payload = {
+        "version": 1,
+        "worker": "shell",
+        "shell_command": [executable, "mock_coding_agent.py", "{objective}"],
+        "review_command": [executable, "-m", "pytest", "tests/", "-q"],
+        "review_command_timeout": 120,
+    }
+    return "# agentic-harness shell demo config\n" + yaml.safe_dump(
+        payload,
+        sort_keys=False,
+    )
 
 
 def load_config(project_dir: str | Path = ".") -> HarnessConfig:
@@ -132,7 +320,7 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
         raise ConfigError(f"unsupported config version: {version}")
     unknown = sorted(set(values) - ALLOWED_KEYS)
     if unknown:
-        raise ConfigError(f"unknown config key: {unknown[0]}")
+        raise ConfigError(f"unknown config key(s): {', '.join(unknown)}")
     for key, value in values.items():
         if key == "worker":
             config.worker = _parse_str(value, key)
@@ -147,12 +335,13 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
         elif key in {
             "coding_agent_timeout",
             "llm_timeout",
+            "llm_retries",
             "github_timeout",
             "review_command_timeout",
         }:
             setattr(config, key, _parse_int(value, key))
-        elif key == "github_poll_interval":
-            config.github_poll_interval = _parse_float(value, key)
+        elif key in {"llm_retry_delay", "github_poll_interval"}:
+            setattr(config, key, _parse_float(value, key))
         elif key == "github_token":
             config.github_token = _parse_str(value, key) or None
         else:
@@ -180,12 +369,21 @@ def _flatten_config(payload: dict[str, Any]) -> dict[str, Any]:
     values = dict(payload)
     worker = values.get("worker")
     if isinstance(worker, dict):
-        values["worker"] = worker.get("type", "")
+        _check_unknown_keys(worker, ALLOWED_WORKER_DICT_KEYS, "worker")
+        if "type" not in worker:
+            raise ConfigError("worker dict is missing required key: type")
+        values["worker"] = worker["type"]
         for key, value in worker.items():
             if key != "type":
+                if key in values and values[key] is not None:
+                    raise ConfigError(
+                        f"conflicting config: both top-level '{key}' and "
+                        f"worker.{key} are set; pick one"
+                    )
                 values[key] = value
     review = values.pop("review", None)
     if isinstance(review, dict):
+        _check_unknown_keys(review, ALLOWED_REVIEW_DICT_KEYS, "review")
         aliases = {
             "command": "review_command",
             "command_timeout": "review_command_timeout",
@@ -194,29 +392,50 @@ def _flatten_config(payload: dict[str, Any]) -> dict[str, Any]:
             "git_clean": "review_git_clean",
         }
         for key, value in review.items():
-            values[aliases.get(key, f"review_{key}")] = value
+            target = aliases.get(key, f"review_{key}")
+            if target in values:
+                raise ConfigError(
+                    f"conflicting config: both top-level '{target}' and "
+                    f"review.{key} are set; pick one"
+                )
+            values[target] = value
     github = values.pop("github", None)
     if isinstance(github, dict):
+        _check_unknown_keys(github, ALLOWED_GITHUB_DICT_KEYS, "github")
         for key, value in github.items():
-            values[f"github_{key}"] = value
+            target = f"github_{key}"
+            if target in values:
+                raise ConfigError(
+                    f"conflicting config: both top-level '{target}' and "
+                    f"github.{key} are set; pick one"
+                )
+            values[target] = value
     llm = values.pop("llm", None)
     if isinstance(llm, dict):
+        _check_unknown_keys(llm, ALLOWED_LLM_DICT_KEYS, "llm")
         for key, value in llm.items():
-            values[f"llm_{key}"] = value
+            target = f"llm_{key}"
+            if target in values:
+                raise ConfigError(
+                    f"conflicting config: both top-level '{target}' and llm.{key} are set; pick one"
+                )
+            values[target] = value
     return values
 
 
-def _unquote(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
-    return value
+def _check_unknown_keys(payload: dict[str, Any], allowed: set[str], context: str) -> None:
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ConfigError(f"{context} has unknown key(s): {', '.join(unknown)}")
 
 
 def _parse_str(value: object, key: str) -> str:
     if isinstance(value, str):
         return value
-    if isinstance(value, (int, float, bool)):
-        return str(value).lower() if isinstance(value, bool) else str(value)
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        raise ConfigError(f"{key} must be a string, got {type(value).__name__}")
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     if value is None:
@@ -242,7 +461,9 @@ def _parse_bool(value: object, key: str) -> bool:
 
 
 def _parse_int(value: object, key: str) -> int:
-    if isinstance(value, int) and not isinstance(value, bool):
+    if isinstance(value, bool):
+        raise ConfigError(f"{key} must be an integer, got boolean")
+    if isinstance(value, int):
         return value
     try:
         return int(_parse_str(value, key))
@@ -251,7 +472,9 @@ def _parse_int(value: object, key: str) -> int:
 
 
 def _parse_float(value: object, key: str) -> float:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if isinstance(value, bool):
+        raise ConfigError(f"{key} must be a number, got boolean")
+    if isinstance(value, (int, float)):
         return float(value)
     try:
         return float(_parse_str(value, key))

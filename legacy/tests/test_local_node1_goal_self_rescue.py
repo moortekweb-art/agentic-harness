@@ -639,7 +639,7 @@ class TestAutoAccept:
                                 # No error should occur; the monitor should just observe
                                 # and not start a second job
 
-    def test_supervisor_state_includes_self_rescue_fields(self):
+    def test_supervisor_state_includes_self_rescue_fields(self, tmp_path):
         """Supervisor state output includes all required self-rescue status fields."""
         status_data = {
             "verdict": "working",
@@ -669,12 +669,25 @@ class TestAutoAccept:
         with mock.patch.object(
             supervisor, "load_mission", return_value=supervisor.empty_mission()
         ):
-            with mock.patch.object(supervisor, "STATE_DIR"):
-                with mock.patch.object(supervisor, "REPORT_DIR"):
-                    with mock.patch.object(supervisor, "SUPERVISOR_JSON"):
-                        with mock.patch.object(supervisor, "SUPERVISOR_MD"):
-                            with mock.patch.object(Path, "exists", return_value=False):
-                                payload = supervisor.write_supervisor_state(status_data)
+            with mock.patch.object(supervisor, "STATE_DIR", tmp_path / "state"):
+                with mock.patch.object(supervisor, "REPORT_DIR", tmp_path / "reports"):
+                    with mock.patch.object(
+                        supervisor, "SUPERVISOR_JSON", tmp_path / "supervisor.json"
+                    ):
+                        with mock.patch.object(
+                            supervisor, "SUPERVISOR_MD", tmp_path / "supervisor.md"
+                        ):
+                            with mock.patch.object(
+                                supervisor,
+                                "SUPERVISOR_EVENTS_JSONL",
+                                tmp_path / "supervisor-events.jsonl",
+                            ):
+                                with mock.patch.object(
+                                    supervisor,
+                                    "SUPERVISOR_NOTIFY_STATE",
+                                    tmp_path / "supervisor-notify.json",
+                                ):
+                                    payload = supervisor.write_supervisor_state(status_data)
 
         assert "repeated_command_detected" in payload
         assert payload["repeated_command_detected"] is True

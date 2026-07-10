@@ -1,0 +1,16 @@
+name: changelog
+description: Draft concise release notes from visible repo changes.
+objective_template: |
+  Draft concise release notes for recent project changes.
+
+  Rules:
+  - Use the existing docs style.
+  - Do not claim anything that is not visible in the repo.
+  - Keep the release note focused on user-visible behavior and verification.
+  - Preserve unrelated work.
+review:
+  command:
+    - git
+    - diff
+    - --check
+  command_timeout: 120

@@ -42,6 +42,7 @@ jobs:
         run: |
           python -m pip install build
           python -m build
+          python -m twine check dist/*
 
       - name: Install built wheel
         shell: python
@@ -49,6 +50,7 @@ jobs:
           import glob
           import os
           import subprocess
+          import shutil
           import tempfile
           import venv
 
@@ -64,6 +66,50 @@ jobs:
               raise SystemExit(f"expected one built wheel, found {wheels!r}")
           subprocess.check_call([python_bin, "-m", "pip", "install", wheels[0]])
           subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "--help"])
+          subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "--version"])
+          subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "version"])
+          subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "recipes"])
+          subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "lint-fix", "--explain"])
+          subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "typecheck-fix", "--explain"])
+          subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "update-docs", "--explain"])
+          subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "changelog", "--explain"])
+          subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "verify-tests", "--explain"])
+          subprocess.check_call([
+              python_bin,
+              "-c",
+              (
+                  "from agentic_harness.core.recipes import load_recipe, recipe_names; "
+                  "names = recipe_names(); "
+                  "assert 'fix-tests' in names and 'changelog' in names; "
+                  "assert load_recipe('fix-tests').review_command"
+              ),
+          ])
+          demo_dir = os.path.join(tempfile.gettempdir(), "agentic-harness-wheel-demo")
+          if os.path.exists(demo_dir):
+              shutil.rmtree(demo_dir)
+          env = os.environ.copy()
+          env["PATH"] = os.path.dirname(python_bin) + os.pathsep + env.get("PATH", "")
+          subprocess.check_call(
+              [
+                  python_bin,
+                  "-m",
+                  "agentic_harness.cli",
+                  "run-demo",
+                  "fix-tests",
+                  demo_dir,
+              ],
+              env=env,
+          )
+          transcripts = glob.glob(os.path.join(demo_dir, ".agentic-harness", "runs", "*", "shell-worker.log"))
+          if len(transcripts) != 1:
+              raise SystemExit(f"expected one shell worker transcript, found {transcripts!r}")
+          reports = glob.glob(os.path.join(demo_dir, ".agentic-harness", "runs", "*", "report.md"))
+          if len(reports) != 1:
+              raise SystemExit(f"expected one markdown report, found {reports!r}")
+          with open(os.path.join(demo_dir, "requirements-dev.txt"), encoding="utf-8") as handle:
+              if "pytest>=8" not in handle.read():
+                  raise SystemExit("generated demo is missing pytest requirement")
+          subprocess.check_call([python_bin, "-m", "pytest", "tests/", "-q"], cwd=demo_dir, env=env)
 
       - name: Run CLI smoke checks
         shell: python

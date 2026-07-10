@@ -9,9 +9,11 @@ from pathlib import Path
 
 from agentic_harness.core.config import load_config
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def test_real_world_recipes_cover_supported_runtime_paths() -> None:
-    recipes = Path("examples/real-world-recipes.md").read_text(encoding="utf-8")
+    recipes = (REPO_ROOT / "examples/real-world-recipes.md").read_text(encoding="utf-8")
 
     assert "worker:" in recipes
     assert "type: coding_agent" in recipes
@@ -24,9 +26,9 @@ def test_real_world_recipes_cover_supported_runtime_paths() -> None:
 
 def test_documented_harness_yaml_snippets_parse_as_config(tmp_path) -> None:
     docs = [
-        Path("README.md"),
-        Path("examples/real-world-recipes.md"),
-        Path("examples/coding-agent/README.md"),
+        REPO_ROOT / "README.md",
+        REPO_ROOT / "examples/real-world-recipes.md",
+        REPO_ROOT / "examples/coding-agent/README.md",
     ]
     snippets = []
     for doc in docs:
@@ -50,35 +52,67 @@ def test_documented_harness_yaml_snippets_parse_as_config(tmp_path) -> None:
 
 
 def test_killer_demo_contains_runnable_fix_failing_tests_loop() -> None:
-    root = Path("examples/fix-failing-tests-demo")
+    root = REPO_ROOT / "examples/fix-failing-tests-demo"
 
     assert (root / "README.md").exists()
-    assert (root / ".agentic-harness" / "config.yml").exists()
     assert (root / "mock_coding_agent.py").exists()
+    assert (root / "requirements-dev.txt").read_text(encoding="utf-8") == "pytest>=8\n"
     assert (root / "tests" / "test_calculator.py").exists()
 
     readme = (root / "README.md").read_text(encoding="utf-8")
-    config = (root / ".agentic-harness" / "config.yml").read_text(encoding="utf-8")
 
-    assert 'agentic-harness run "fix failing tests"' in readme
-    assert "type: coding_agent" in config
-    assert "mock_coding_agent.py" in config
-    assert "pytest" in config
+    assert "agentic-harness init shell" not in readme
+    assert "agentic-harness fix-tests" in readme
+    assert "auto-creates demo config" in readme
+    assert "agentic-harness report" in readme
+    assert not (root / ".agentic-harness" / "config.yml").exists()
+
+
+def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    quick_start = readme.split("## Quick Start", 1)[1].split("### Recipes", 1)[0]
+
+    assert "agentic-harness selftest" in quick_start
+    assert "agentic-harness quickstart" in quick_start
+    assert "agentic-harness run-demo fix-tests" in quick_start
+    assert "agentic-harness create-demo fix-tests" in quick_start
+    assert "python -m pip install -r requirements-dev.txt" in quick_start
+    assert "agentic-harness fix-tests" in quick_start
+    assert "auto-creates config" in quick_start
+    assert "agentic-harness lint-fix" in readme
+    assert "agentic-harness typecheck-fix" in readme
+    assert "agentic-harness update-docs" in readme
+    assert "agentic-harness changelog" in readme
+    assert "agentic-harness verify-tests" in readme
+    assert "python -m agentic_harness.cli release-smoke" in readme
+    assert ".agentic-harness/runs/<goal-id>/report.md" in readme
+    assert "cat > .agentic-harness/config.yml" not in quick_start
+
+
+def test_terminal_demo_script_uses_packaged_auto_config_path() -> None:
+    script = (REPO_ROOT / "docs" / "demo-script.md").read_text(encoding="utf-8")
+
+    assert "agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force" in script
+    assert "agentic-harness create-demo fix-tests /tmp/agentic-harness-demo" in script
+    assert "agentic-harness fix-tests     # auto-creates demo config" in script
+    assert "agentic-harness status" in script
+    assert "agentic-harness report" in script
+    assert "cat > .agentic-harness/config.yml" not in script
 
 
 def test_killer_demo_readme_says_first_pytest_is_expected_to_fail() -> None:
-    readme = Path("examples/fix-failing-tests-demo/README.md").read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "examples/fix-failing-tests-demo/README.md").read_text(encoding="utf-8")
 
     assert "expected to fail" in readme
 
 
 def test_killer_demo_runs_failure_fix_review_cycle(tmp_path) -> None:
-    source = Path("examples/fix-failing-tests-demo")
+    source = REPO_ROOT / "examples/fix-failing-tests-demo"
     demo = tmp_path / "fix-failing-tests-demo"
     shutil.copytree(source, demo)
-    repo_root = Path.cwd()
+    shutil.rmtree(demo / ".agentic-harness", ignore_errors=True)
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(repo_root)
+    env["PYTHONPATH"] = str(REPO_ROOT)
 
     before = subprocess.run(
         [sys.executable, "-m", "pytest", "tests/", "-q"],
@@ -93,7 +127,7 @@ def test_killer_demo_runs_failure_fix_review_cycle(tmp_path) -> None:
     assert "assert 6 == 5" in before.stdout
 
     run = subprocess.run(
-        [sys.executable, "-m", "agentic_harness.cli", "run", "fix failing tests"],
+        [sys.executable, "-m", "agentic_harness.cli", "fix-tests"],
         cwd=demo,
         text=True,
         capture_output=True,
@@ -102,7 +136,112 @@ def test_killer_demo_runs_failure_fix_review_cycle(tmp_path) -> None:
     )
 
     assert run.returncode == 0, run.stderr
-    assert '"status": "done"' in run.stdout
+    assert "Result: done" in run.stdout
+    assert "Review: passed" in run.stdout
+    config = (demo / ".agentic-harness" / "config.yml").read_text(encoding="utf-8")
+    assert "mock_coding_agent.py" in config
+    assert sys.executable in config
+
+    status = subprocess.run(
+        [sys.executable, "-m", "agentic_harness.cli", "status"],
+        cwd=demo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert status.returncode == 0, status.stderr
+    assert "Status: done" in status.stdout
+
+    report = subprocess.run(
+        [sys.executable, "-m", "agentic_harness.cli", "report"],
+        cwd=demo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert report.returncode == 0, report.stderr
+    assert "Result: done" in report.stdout
+    assert "Review: passed" in report.stdout
+    assert "Report: .agentic-harness/runs/" in report.stdout
+    report_paths = list((demo / ".agentic-harness" / "runs").glob("*/report.md"))
+    assert report_paths
+    assert "Report: .agentic-harness/runs/" in report_paths[0].read_text(encoding="utf-8")
+    assert list((demo / ".agentic-harness" / "runs").glob("*/shell-worker.log"))
+
+    after = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/", "-q"],
+        cwd=demo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert after.returncode == 0
+
+
+def test_packaged_demo_generator_runs_failure_fix_review_cycle(tmp_path) -> None:
+    demo = tmp_path / "generated-demo"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT)
+
+    create = subprocess.run(
+        [sys.executable, "-m", "agentic_harness.cli", "create-demo", "fix-tests", str(demo)],
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert create.returncode == 0, create.stderr
+    assert "Created demo:" in create.stdout
+    assert (demo / "requirements-dev.txt").read_text(encoding="utf-8") == "pytest>=8\n"
+
+    before = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/", "-q"],
+        cwd=demo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert before.returncode != 0
+    assert "assert 6 == 5" in before.stdout
+
+    run = subprocess.run(
+        [sys.executable, "-m", "agentic_harness.cli", "fix-tests"],
+        cwd=demo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert run.returncode == 0, run.stderr
+    assert "Result: done" in run.stdout
+    assert "Review: passed" in run.stdout
+    config = (demo / ".agentic-harness" / "config.yml").read_text(encoding="utf-8")
+    assert "mock_coding_agent.py" in config
+    assert sys.executable in config
+
+    report = subprocess.run(
+        [sys.executable, "-m", "agentic_harness.cli", "report"],
+        cwd=demo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert report.returncode == 0, report.stderr
+    assert "Report: .agentic-harness/runs/" in report.stdout
+    assert list((demo / ".agentic-harness" / "runs").glob("*/shell-worker.log"))
+    assert list((demo / ".agentic-harness" / "runs").glob("*/report.md"))
 
     after = subprocess.run(
         [sys.executable, "-m", "pytest", "tests/", "-q"],
@@ -117,8 +256,8 @@ def test_killer_demo_runs_failure_fix_review_cycle(tmp_path) -> None:
 
 
 def test_repo_artwork_assets_exist() -> None:
-    social = Path("docs/assets/agentic-harness-social-preview.png")
-    icon = Path("docs/assets/agentic-harness-icon.png")
+    social = REPO_ROOT / "docs/assets/agentic-harness-social-preview.png"
+    icon = REPO_ROOT / "docs/assets/agentic-harness-icon.png"
 
     assert social.exists()
     assert icon.exists()
@@ -127,8 +266,8 @@ def test_repo_artwork_assets_exist() -> None:
 
 
 def test_license_and_authors_credit_michael_moortekweb() -> None:
-    license_text = Path("LICENSE").read_text(encoding="utf-8")
-    authors = Path("AUTHORS.md").read_text(encoding="utf-8")
+    license_text = (REPO_ROOT / "LICENSE").read_text(encoding="utf-8")
+    authors = (REPO_ROOT / "AUTHORS.md").read_text(encoding="utf-8")
 
     assert "Copyright (c) 2026 Michael / Moortekweb" in license_text
     assert "Agentic Harness was created by Michael / Moortekweb." in authors

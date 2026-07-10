@@ -13,6 +13,7 @@ build/
 .coverage
 htmlcov/
 examples/shell-worker/output/
+*.backup
 
 # State / runtime artifacts
 .agentic-harness/
