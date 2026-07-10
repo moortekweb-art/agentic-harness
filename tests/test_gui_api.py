@@ -82,6 +82,36 @@ def test_task_summary_hides_backend_actors_but_preserves_raw_evidence() -> None:
     ] == backend_summary
 
 
+def test_ready_summary_hides_backend_control_language() -> None:
+    backend_summary = (
+        "No local goal is running. Hermes may start one only on explicit "
+        "operator/Codex request."
+    )
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "idle",
+                "capabilities": {
+                    "current_state": {"recommended_action": backend_summary},
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="ready")
+
+    assert task["status"] == "ready"
+    assert task["summary"] == "The assistant is ready for a new task."
+    for term in ("local goal", "hermes", "operator", "codex"):
+        assert term not in task["summary"].lower()
+    assert task["advanced_details"]["payload"]["capabilities"]["current_state"][
+        "recommended_action"
+    ] == backend_summary
+
+
 def test_task_summary_hides_internal_generated_objective() -> None:
     result = CommandResult(
         args=("local-goal", "status", "--json"),

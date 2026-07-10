@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for a v0.6.26 release.
+Use this checklist for a v0.6.27 release.
 
 ## Before Tagging
 
@@ -57,21 +57,22 @@ Use this checklist for a v0.6.26 release.
 Create and push the tag:
 
 ```bash
-git tag v0.6.26
-git push origin v0.6.26
+git tag v0.6.27
+git push origin v0.6.27
 ```
 
 Create the GitHub release:
 
 ```bash
-gh release create v0.6.26 --title "v0.6.26" --notes-file docs/RELEASE_NOTES_0.6.26.md
+gh release create v0.6.27 --title "v0.6.27" --notes-file docs/RELEASE_NOTES_0.6.27.md
 ```
 
 ## PyPI Publishing
 
 PyPI publishing has an active trusted-publishing workflow at
 `.github/workflows/publish.yml` for the `local-agentic-harness` distribution.
-The publish job runs `agentic-harness release-smoke --dist-dir dist` and uploads
-the same verified `dist/` artifacts only if release-smoke passes.
-Complete the external trusted publisher setup documented in
+The publish job runs `agentic-harness release-smoke --dist-dir dist`, keeps the
+checksum manifest with the release evidence, and copies only the verified wheel
+and sdist into `pypi-dist/` for upload after release-smoke passes.
+Verify the trusted-publisher identity and current status documented in
 `docs/PYPI_TRUSTED_PUBLISHING.md` before relying on release-triggered uploads.

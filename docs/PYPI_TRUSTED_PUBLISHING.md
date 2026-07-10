@@ -5,8 +5,8 @@ and source distributions. PyPI publishing should use GitHub Actions trusted
 publishing, which avoids storing a PyPI token in repository secrets.
 
 The publish workflow is checked in at `.github/workflows/publish.yml`.
-`docs/templates/publish.yml` is retained only as a reference copy. Configure the
-PyPI trusted publisher below before expecting release publishes to succeed.
+`docs/templates/publish.yml` is retained only as a reference copy. The trusted
+publisher described below is configured and was verified by the v0.6.26 upload.
 
 Before uploading, the workflow installs the project with test extras and runs:
 
@@ -17,8 +17,9 @@ python -m agentic_harness.cli release-smoke --dist-dir dist
 That command builds the wheel and sdist, runs `twine check`, installs both
 artifacts in fresh virtual environments, runs the packaged demo from each
 artifact, verifies the final demo tests, and writes `SHA256SUMS` beside the
-verified artifacts. The PyPI publish action uploads the same `dist/` artifacts
-only after that gate passes.
+verified artifacts. The workflow then copies only `*.whl` and `*.tar.gz` into
+`pypi-dist/` for PyPI; `SHA256SUMS` remains release evidence and is not passed to
+the PyPI upload action.
 
 ## Name Availability Blocker
 
@@ -31,37 +32,37 @@ name while keeping the installed CLI command as `agentic-harness`.
 
 ## Required External Setup
 
-Configure a PyPI trusted publisher for:
+The configured PyPI trusted publisher uses:
 
 - PyPI project: `local-agentic-harness`
 - Owner/repository: `moortekweb-art/agentic-harness`
 - Workflow: `.github/workflows/publish.yml`
 - Environment: `pypi`
 
-The observed GitHub/PyPI trusted-publishing claims from the first `v0.6.9`
-release attempt were:
+The observed GitHub/PyPI trusted-publishing claims use:
 
 - `sub`: `repo:moortekweb-art/agentic-harness:environment:pypi`
 - `repository`: `moortekweb-art/agentic-harness`
 - `repository_owner`: `moortekweb-art`
-- `workflow_ref`: `moortekweb-art/agentic-harness/.github/workflows/publish.yml@refs/tags/v0.6.9`
-- `ref`: `refs/tags/v0.6.9`
+- `workflow_ref`: `moortekweb-art/agentic-harness/.github/workflows/publish.yml@<release-ref>`
+- `ref`: the selected release tag or explicitly dispatched branch
 - `environment`: `pypi`
 
-After the external PyPI setup exists, publishing a GitHub release runs the
-`Publish` workflow and uploads the release-smoke-verified distributions built
-from that release.
+Publishing a GitHub release runs the `Publish` workflow and uploads the
+release-smoke-verified distributions built from that release. The workflow can
+also be dispatched manually for a controlled recovery after a workflow-only
+fix.
 
 ## Current Publish Status
 
-The active workflow ran on `v0.6.9` and reached the PyPI trusted-publishing
-exchange. PyPI rejected it with `invalid-publisher`, meaning the GitHub workflow
-is active but PyPI does not yet have a matching trusted publisher configured for
-this project.
+`local-agentic-harness` v0.6.26 is public on PyPI. Workflow run `29074514346`
+completed the build, wheel/sdist smoke tests, trusted-publishing exchange,
+upload, and digital attestations successfully.
 
-After configuring the PyPI trusted publisher, publish a new release tag such as
-`v0.6.25` so the upload includes the release-smoke-gated publish workflow and
-checksum-manifest generation.
+The first v0.6.26 release-triggered run failed before the trusted-publishing
+exchange because the upload action tried to parse `dist/SHA256SUMS` as a Python
+distribution. PR #4 added the dedicated `pypi-dist/` staging directory; the
+successful recovery run verified that only the wheel and sdist are uploaded.
 
 ## Manual Verification
 
@@ -69,24 +70,8 @@ checksum-manifest generation.
 python -m pip install -e ".[test]"
 python -m agentic_harness.cli release-smoke --dist-dir /tmp/agentic-harness-dist
 python -m pip index versions local-agentic-harness
-gh release view v0.6.9 --repo moortekweb-art/agentic-harness
-gh release view v0.6.10 --repo moortekweb-art/agentic-harness
-gh release view v0.6.11 --repo moortekweb-art/agentic-harness
-gh release view v0.6.12 --repo moortekweb-art/agentic-harness
-gh release view v0.6.13 --repo moortekweb-art/agentic-harness
-gh release view v0.6.14 --repo moortekweb-art/agentic-harness
-gh release view v0.6.15 --repo moortekweb-art/agentic-harness
-gh release view v0.6.16 --repo moortekweb-art/agentic-harness
-gh release view v0.6.17 --repo moortekweb-art/agentic-harness
-gh release view v0.6.18 --repo moortekweb-art/agentic-harness
-gh release view v0.6.19 --repo moortekweb-art/agentic-harness
-gh release view v0.6.20 --repo moortekweb-art/agentic-harness
-gh release view v0.6.21 --repo moortekweb-art/agentic-harness
-gh release view v0.6.22 --repo moortekweb-art/agentic-harness
-gh release view v0.6.23 --repo moortekweb-art/agentic-harness
-gh release view v0.6.24 --repo moortekweb-art/agentic-harness
-gh release view v0.6.25 --repo moortekweb-art/agentic-harness
-gh run view 28703761225 --repo moortekweb-art/agentic-harness --log-failed
+gh release view v0.6.26 --repo moortekweb-art/agentic-harness
+gh run view 29074514346 --repo moortekweb-art/agentic-harness
 ```
 
 The publish workflow should not use `PYPI_TOKEN`, `username`, or `password`.
