@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agentic Harness</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Local assistant control</p>
+          <h1>Agentic Harness</h1>
+        </div>
+        <div class="top-actions">
+          <button id="themeButton" title="Toggle dark or light theme">Theme</button>
+          <button id="shortcutsButton" title="Show keyboard shortcuts">Shortcuts</button>
+          <div class="health" id="health">Checking...</div>
+        </div>
+      </header>
+
+      <section class="workbench">
+        <div class="start-panel">
+          <div class="section-heading">
+            <p class="eyebrow">Start work</p>
+            <h2>What should the assistant do?</h2>
+          </div>
+
+          <label class="field-label" for="objective">Task</label>
+          <textarea
+            id="objective"
+            rows="7"
+            placeholder="Example: make Jarvis voice startup more reliable"
+          ></textarea>
+
+          <div class="mode-grid" id="modes"></div>
+
+          <details class="boundaries">
+            <summary>Add boundaries</summary>
+            <label class="field-label" for="safeAreas">Safe places to work</label>
+            <textarea id="safeAreas" rows="3" placeholder="One per line"></textarea>
+            <label class="field-label" for="checks">Checks to run</label>
+            <textarea id="checks" rows="3" placeholder="One per line"></textarea>
+          </details>
+
+          <div class="actions">
+            <button class="primary" id="startButton" title="Start the task">Start</button>
+            <button id="checkButton" title="Refresh current status">Check now</button>
+            <button id="undoButton" title="Undo the last form edit">Undo</button>
+            <button id="redoButton" title="Redo the last undone form edit">Redo</button>
+          </div>
+        </div>
+
+        <aside class="status-panel">
+          <div class="status-head">
+            <div>
+              <p class="eyebrow">Current work</p>
+              <h2 id="statusLabel">Ready</h2>
+            </div>
+            <span class="status-dot" id="statusDot"></span>
+          </div>
+
+          <div class="progress-track" aria-label="Task progress">
+            <div class="progress-bar" id="progressBar"></div>
+          </div>
+          <p class="summary" id="summary">No active work is visible yet.</p>
+
+          <div class="readiness-card" id="readinessCard">
+            <div>
+              <h3>Readiness gate</h3>
+              <p id="readinessStatus">Checking...</p>
+              <p id="readinessSummary">Waiting for local status.</p>
+            </div>
+            <div>
+              <h3>Local loop</h3>
+              <ol id="agentLoop"></ol>
+            </div>
+          </div>
+
+          <div class="quick-actions">
+            <button id="watchButton">Move forward</button>
+            <button id="continueButton">Ask to continue</button>
+            <button id="acceptButton">Accept</button>
+            <button class="danger" id="stopButton">Stop</button>
+          </div>
+
+          <div class="evidence">
+            <h3>Changed files</h3>
+            <ul id="changedFiles"></ul>
+            <h3>Checks</h3>
+            <ul id="verification"></ul>
+            <h3>Artifacts</h3>
+            <ul id="artifacts"></ul>
+          </div>
+
+          <div class="history-tools">
+            <label class="field-label" for="historySearch">History search</label>
+            <input id="historySearch" type="search" placeholder="Search previous tasks" />
+            <div class="actions compact">
+              <button id="exportButton" title="Export GUI session history">Export</button>
+              <button id="importButton" title="Import GUI session history">Import</button>
+            </div>
+            <ul class="history-list" id="historyList"></ul>
+          </div>
+
+          <details class="advanced">
+            <summary>Advanced details</summary>
+            <pre id="advancedDetails">{}</pre>
+          </details>
+        </aside>
+      </section>
+    </main>
+    <dialog id="shortcutsDialog">
+      <form method="dialog">
+        <div class="dialog-head">
+          <h2>Keyboard shortcuts</h2>
+          <button value="close" title="Close shortcuts">Close</button>
+        </div>
+        <dl class="shortcut-list">
+          <dt>Ctrl Enter</dt><dd>Start work</dd>
+          <dt>Ctrl R</dt><dd>Check now</dd>
+          <dt>Ctrl M</dt><dd>Move forward</dd>
+          <dt>Ctrl K</dt><dd>Search history</dd>
+          <dt>Ctrl /</dt><dd>Show shortcuts</dd>
+          <dt>Ctrl Z</dt><dd>Undo form edit</dd>
+          <dt>Ctrl Shift Z</dt><dd>Redo form edit</dd>
+        </dl>
+      </form>
+    </dialog>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

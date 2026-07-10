@@ -46,6 +46,85 @@ agentic-harness selftest
 agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
 ```
 
+## Human Mode
+
+On a Linux/Ubuntu machine that has the optional local-goal/Mode 3A backend
+installed, you do not need to write goal packets or remember planner names:
+
+```bash
+agentic-harness setup
+agentic-harness do "make Jarvis voice startup more reliable"
+agentic-harness check
+agentic-harness watch
+```
+
+The Python package does not install that optional backend. Commands that use it
+look for `scripts/local-goal` under the configured document root. Pass
+`--doc-root /path/to/compatible/checkout` for a single command, set
+`AGENTIC_HARNESS_DOC_ROOT` for a shell session, or launch from the compatible
+checkout and let the current directory be used. For a standalone executable,
+set `AGENTIC_HARNESS_LOCAL_GOAL=/path/to/local-goal`; that executable override
+wins over the document-root lookup. `~` is expanded in configured paths.
+
+`do` accepts plain English, wraps it in the safe Mode 3A GLM cloud-lane format,
+queues it, and prints a work ticket. `check` shows what is happening. `watch`
+asks the harness to move the current work forward once. Advanced commands such
+as `mode3a-run`, `mode3a-status`, and `mode3a-monitor` remain available when
+you need the underlying details.
+
+For a local browser interface:
+
+```bash
+agentic-harness gui
+```
+
+The GUI binds to `127.0.0.1` by default and asks the OS for a free local port.
+Use the exact URL printed at startup. For scripts or operators that need a
+stable URL, pass an explicit port:
+
+```bash
+agentic-harness gui --port 8765
+```
+
+Use `--no-open` for headless terminals, SSH sessions, and automation:
+
+```bash
+agentic-harness gui --no-open
+```
+
+Use `agentic-harness gui --doc-root /path/to/compatible/checkout` or
+`AGENTIC_HARNESS_DOC_ROOT=/path/to/compatible/checkout agentic-harness gui` when
+the optional local-goal backend lives outside the directory where you launch the
+GUI. Without that backend, the GUI still serves, but backend task actions report
+the missing optional executable and how to configure it.
+
+Agentic Harness is a Python application. Its GUI is rendered by packaged
+HTML/CSS/JS files served by the Python backend; there is no Node, Electron,
+Tauri, or native widget runtime in the v0.6.26 GUI. The packaged browser app
+includes live status updates over WebSocket, progress indicators, task history
+search, dark/light theme switching, keyboard shortcuts, session export/import,
+and local form undo/redo.
+
+The GUI presents the same four human modes as plain choices, keeps technical
+details in an advanced drawer, and uses the local background worker under the
+hood. It also exposes a readiness gate based on the local agent loop: it shows
+whether the harness is ready, acting, checking, or waiting for review, and it
+keeps new simple-UI starts behind review when the active local-goal run needs a
+human decision.
+
+Keep the default loopback binding unless you have a specific reason to expose
+the GUI beyond this computer. If you bind to a non-loopback host such as
+`0.0.0.0`, set `AGENTIC_HARNESS_GUI_TOKEN` before launch to require a bearer
+token for API actions and the WebSocket status stream, and still treat the
+server as a local control surface. The static browser shell remains visible so
+the app can load; API calls, task controls, session import/export, and the
+status stream remain gated. In token mode, enter the configured token when the
+browser asks for it, or append it once as a `token` query parameter when opening
+the page. The browser removes that query parameter from visible history
+immediately and keeps the token only for the current tab session. Bearer tokens
+are a basic access gate; they are not a complete browser-origin or CSRF security
+model.
+
 To inspect the demo files instead of running them immediately:
 
 ```bash
@@ -114,7 +193,7 @@ transcripts, artifacts, loop limits, and review gates.
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.25 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.26 release checks.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active publish workflow and external PyPI setup required for tokenless publishing.
 - [Repo artwork](docs/assets/) includes a social preview banner and square icon.
 - [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
@@ -216,6 +295,11 @@ python -m venv .venv
 python -m pip install -e ".[test]"
 python -m pytest tests/ -q
 ```
+
+On Ubuntu or other Debian-family Linux systems, install Python 3.11+ and
+`pipx` from your package manager first if they are not already present. The v1
+GUI ships inside the Python wheel/sdist as package data, so no frontend build
+step is required.
 
 ## Usage Examples
 

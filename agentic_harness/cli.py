@@ -31,6 +31,19 @@ from agentic_harness.core.config import (
 from agentic_harness.core.demos import create_demo, demo_names
 from agentic_harness.core.errors import ConfigError, HarnessError
 from agentic_harness.core.errors import GoalConflictError, NoActiveGoalError
+from agentic_harness.core.local_goal_bridge import (
+    CommandResult,
+    DOC_ROOT_ENV,
+    HUMAN_MODES,
+    LocalGoalBridge,
+    Mode3AGoalOptions,
+    format_command_result,
+    format_human_modes,
+    format_popos_setup,
+    human_mode_by_key,
+    resolve_doc_root,
+)
+from agentic_harness.gui.server import run_server_from_args
 from agentic_harness.core.recipes import Recipe, explain_recipe, list_recipes, load_recipe
 from agentic_harness.core.review import (
     DeterministicReviewer,
@@ -57,6 +70,11 @@ RECIPE_COMMANDS = {
 
 DIST_NAME = "local-agentic-harness"
 REPO_ROOT = Path(__file__).resolve().parent.parent
+DOC_ROOT_HELP = (
+    "Path to optional local-goal/Mode 3A backend checkout root. Explicit value wins; "
+    f"otherwise {DOC_ROOT_ENV} is used when non-empty; otherwise the current "
+    "directory is used. The Python package does not install local-goal."
+)
 
 
 class HarnessParser(argparse.ArgumentParser):
@@ -89,6 +107,56 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start-here", help="Show the beginner command guide")
     sub.add_parser("guide", help="Show the beginner command guide")
     sub.add_parser("version", help="Print the installed agentic-harness version")
+    easy_do = sub.add_parser("do", help="Start useful background work from plain English")
+    easy_do.add_argument("objective")
+    easy_do.add_argument(
+        "--mode",
+        choices=[mode.key for mode in HUMAN_MODES],
+        default="cloud",
+        help="Human mode to use. Default: cloud.",
+    )
+    easy_do.add_argument("--safe-area", action="append", default=[])
+    easy_do.add_argument("--check", action="append", default=[])
+    easy_do.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    easy_do.add_argument("--watch", action="store_true", help="Run one follow-up check after starting.")
+    work = sub.add_parser("work", help="Interactive no-jargon mode picker")
+    work.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    gui = sub.add_parser("gui", help="Open the local browser app")
+    gui.add_argument("--host", default="127.0.0.1")
+    gui.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to bind. Default: ask the OS for a free local port.",
+    )
+    gui.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    gui.add_argument("--no-open", action="store_true", help="Do not open a browser automatically.")
+    sub.add_parser("modes", help="Explain the four human work modes")
+    easy_check = sub.add_parser("check", help="Show what the background worker is doing")
+    easy_check.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    easy_watch = sub.add_parser("watch", help="Ask the harness to move current work forward once")
+    easy_watch.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    popos = sub.add_parser("setup", help="Show simple Linux/Ubuntu setup and runtime checks")
+    popos.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    popos_advanced = sub.add_parser("popos-setup", help="Show Linux/Ubuntu install and runtime checks")
+    popos_advanced.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    mode3a_run = sub.add_parser(
+        "mode3a-run",
+        help="Run a plain-English task through the GLM-backed Mode 3A cloud lane",
+    )
+    mode3a_run.add_argument("objective")
+    mode3a_run.add_argument("--allowed", action="append", default=[])
+    mode3a_run.add_argument("--verify", action="append", default=[])
+    mode3a_run.add_argument("--guardrail", action="append", default=[])
+    mode3a_run.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    mode3a_run.add_argument("--monitor", action="store_true", help="Run one monitor pass after queueing.")
+    mode3a_run.add_argument("--json", action="store_true", help="Print raw local-goal JSON output.")
+    mode3a_status = sub.add_parser("mode3a-status", help="Show Mode 3A/local-goal status")
+    mode3a_status.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    mode3a_status.add_argument("--json", action="store_true")
+    mode3a_monitor = sub.add_parser("mode3a-monitor", help="Run one Mode 3A/local-goal monitor pass")
+    mode3a_monitor.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    mode3a_monitor.add_argument("--json", action="store_true")
     sub.add_parser("agents", help="Show supported backend tools found on PATH")
     create_demo_cmd = sub.add_parser("create-demo", help="Create a runnable example project")
     create_demo_cmd.add_argument("demo", choices=demo_names())
@@ -223,6 +291,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in {"start-here", "guide"}:
         print(format_start_here_text())
         return 0
+    if args.command in {"setup", "popos-setup"}:
+        print(format_popos_setup(LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))))
+        return 0
+    if args.command == "modes":
+        print(format_human_modes())
+        return 0
+    if args.command == "work":
+        return run_interactive_work_command(args)
+    if args.command == "gui":
+        return run_server_from_args(args)
+    if args.command == "do":
+        return run_easy_do_command(args)
+    if args.command == "check":
+        return run_easy_check_command(args)
+    if args.command == "watch":
+        return run_easy_watch_command(args)
+    if args.command == "mode3a-run":
+        return run_mode3a_command(args)
+    if args.command == "mode3a-status":
+        return run_mode3a_status(args)
+    if args.command == "mode3a-monitor":
+        return run_mode3a_monitor(args)
     if args.command == "create-demo":
         try:
             demo_path = create_demo(args.demo, args.path, force=args.force)
@@ -430,6 +520,203 @@ def run_until_done(
         if goal.status is GoalStatus.DONE:
             return goal
     return goal
+
+
+def run_mode3a_command(args: argparse.Namespace) -> int:
+    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
+    if not bridge.available():
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "local-goal backend not found or not executable",
+                    "path": str(bridge.local_goal),
+                    "next": local_goal_setup_hint(),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+    try:
+        result = bridge.enqueue_mode3a(
+            Mode3AGoalOptions(
+                objective=args.objective,
+                allowed_paths=tuple(args.allowed),
+                verification=tuple(args.verify),
+                guardrails=tuple(args.guardrail),
+            )
+        )
+    except ValueError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
+        return 2
+
+    if args.json:
+        print(format_command_result(result))
+    else:
+        print("Mode 3A task queued.")
+        print(format_command_result(result))
+        print("Next: agentic-harness mode3a-status")
+        print("Monitor: agentic-harness mode3a-monitor")
+    if result.returncode != 0:
+        return result.returncode
+    if args.monitor:
+        monitor_result = bridge.monitor(json_output=args.json)
+        print(format_command_result(monitor_result))
+        return monitor_result.returncode
+    return 0
+
+
+def run_easy_do_command(args: argparse.Namespace) -> int:
+    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
+    if not bridge.available():
+        print("I cannot find the background worker on this machine.")
+        print(f"Expected: {bridge.local_goal}")
+        print(f"Next: {local_goal_setup_hint()}")
+        return 2
+    try:
+        result = start_human_mode(
+            bridge,
+            mode_key=args.mode,
+            objective=args.objective,
+            safe_areas=tuple(args.safe_area),
+            checks=tuple(args.check),
+        )
+    except ValueError as exc:
+        print(f"Could not start work: {exc}")
+        return 2
+    if result.returncode != 0:
+        print("The background worker refused the task.")
+        print(format_command_result(result))
+        return result.returncode
+    print("Started background work.")
+    print(_friendly_queue_summary(result.stdout))
+    print("Check it: agentic-harness check")
+    print("Move it forward: agentic-harness watch")
+    if args.watch:
+        watch_result = bridge.monitor()
+        print(format_command_result(watch_result))
+        return watch_result.returncode
+    return 0
+
+
+def run_interactive_work_command(args: argparse.Namespace) -> int:
+    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
+    if not bridge.available():
+        print("I cannot find the background worker on this machine.")
+        print(f"Expected: {bridge.local_goal}")
+        print(f"Next: {local_goal_setup_hint()}")
+        return 2
+    print(format_human_modes())
+    print("")
+    selected = input("Choose a mode [2]: ").strip() or "2"
+    objective = input("What do you want done? ").strip()
+    if not objective:
+        print("No task entered. Nothing started.")
+        return 2
+    try:
+        mode = human_mode_by_key(selected)
+        result = start_human_mode(
+            bridge,
+            mode_key=mode.key,
+            objective=objective,
+            safe_areas=(),
+            checks=(),
+        )
+    except ValueError as exc:
+        print(f"Could not start work: {exc}")
+        return 2
+    if result.returncode != 0:
+        print("The background worker refused the task.")
+        print(format_command_result(result))
+        return result.returncode
+    print("")
+    print(f"Started: {mode.title}")
+    print(_friendly_queue_summary(result.stdout))
+    print("Check it: agentic-harness check")
+    print("Move it forward: agentic-harness watch")
+    return 0
+
+
+def start_human_mode(
+    bridge: LocalGoalBridge,
+    *,
+    mode_key: str,
+    objective: str,
+    safe_areas: tuple[str, ...],
+    checks: tuple[str, ...],
+) -> CommandResult:
+    mode = human_mode_by_key(mode_key)
+    return bridge.start_human_goal(
+        mode_key=mode.key,
+        objective=objective,
+        safe_areas=safe_areas,
+        checks=checks,
+    )
+
+
+def local_goal_setup_hint() -> str:
+    return (
+        "install or expose the optional local-goal/Mode 3A backend, then pass "
+        f"--doc-root, set {DOC_ROOT_ENV}, or set AGENTIC_HARNESS_LOCAL_GOAL; "
+        "run agentic-harness setup for detected paths"
+    )
+
+
+def run_easy_check_command(args: argparse.Namespace) -> int:
+    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
+    if not bridge.available():
+        print("I cannot find the background worker on this machine.")
+        print(f"Next: {local_goal_setup_hint()}")
+        return 2
+    result = bridge.status(json_output=False)
+    print(format_command_result(result))
+    return result.returncode
+
+
+def run_easy_watch_command(args: argparse.Namespace) -> int:
+    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
+    if not bridge.available():
+        print("I cannot find the background worker on this machine.")
+        print(f"Next: {local_goal_setup_hint()}")
+        return 2
+    result = bridge.monitor(json_output=False)
+    print(format_command_result(result))
+    return result.returncode
+
+
+def _friendly_queue_summary(stdout: str) -> str:
+    queue_id = ""
+    for line in stdout.splitlines():
+        if line.startswith("queued_id="):
+            queue_id = line.split("=", 1)[1].strip()
+            break
+    if queue_id:
+        return f"Work ticket: {queue_id}"
+    cleaned = stdout.strip()
+    return cleaned if cleaned else "Work ticket created."
+
+
+def run_mode3a_status(args: argparse.Namespace) -> int:
+    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
+    if not bridge.available():
+        print(f"local-goal backend not found or not executable: {bridge.local_goal}")
+        print(f"Next: {local_goal_setup_hint()}")
+        return 2
+    result = bridge.status(json_output=args.json)
+    print(format_command_result(result))
+    return result.returncode
+
+
+def run_mode3a_monitor(args: argparse.Namespace) -> int:
+    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
+    if not bridge.available():
+        print(f"local-goal backend not found or not executable: {bridge.local_goal}")
+        print(f"Next: {local_goal_setup_hint()}")
+        return 2
+    result = bridge.monitor(json_output=args.json)
+    print(format_command_result(result))
+    return result.returncode
 
 
 def run_recipe(

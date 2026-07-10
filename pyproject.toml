@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-agentic-harness"
-version = "0.6.25"
+version = "0.6.26"
 description = "A local-first goal execution harness with deterministic review gates."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -43,3 +43,4 @@ include = ["agentic_harness*"]
 
 [tool.setuptools.package-data]
 agentic_harness = ["recipes/*.yml"]
+"agentic_harness.gui" = ["static/*"]

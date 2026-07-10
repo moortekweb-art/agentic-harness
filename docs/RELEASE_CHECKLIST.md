@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for a v0.6.25 release.
+Use this checklist for a v0.6.26 release.
 
 ## Before Tagging
 
@@ -44,6 +44,9 @@ Use this checklist for a v0.6.25 release.
   ```
 
 - Check README links to examples, docs, license, and CI status.
+- For GUI releases, confirm `agentic-harness gui --no-open` prints a
+  loopback URL with an OS-selected port when `--port` is omitted, and confirm
+  an explicit `--port` still binds the requested stable port.
 - Confirm GitHub Actions CI is green on `main`.
 
 ## Tag and GitHub Release
@@ -51,14 +54,14 @@ Use this checklist for a v0.6.25 release.
 Create and push the tag:
 
 ```bash
-git tag v0.6.25
-git push origin v0.6.25
+git tag v0.6.26
+git push origin v0.6.26
 ```
 
 Create the GitHub release:
 
 ```bash
-gh release create v0.6.25 --title "v0.6.25" --notes-file docs/RELEASE_NOTES_0.6.25.md
+gh release create v0.6.26 --title "v0.6.26" --notes-file docs/RELEASE_NOTES_0.6.26.md
 ```
 
 ## PyPI Publishing

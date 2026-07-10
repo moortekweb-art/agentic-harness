@@ -452,6 +452,21 @@ def test_release_smoke_help_is_available() -> None:
     assert "--dist-dir" in proc.stdout
 
 
+def test_gui_help_documents_optional_doc_root_backend() -> None:
+    proc = subprocess.run(
+        [sys.executable, "-m", "agentic_harness.cli", "gui", "--help"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0
+    assert "--doc-root" in proc.stdout
+    assert "AGENTIC_HARNESS_DOC_ROOT" in proc.stdout
+    assert "current directory" in proc.stdout
+    assert "optional" in proc.stdout
+
+
 def test_release_smoke_requires_project_root(tmp_path, capsys) -> None:
     rc = main(["--project-dir", str(tmp_path), "release-smoke"])
 
