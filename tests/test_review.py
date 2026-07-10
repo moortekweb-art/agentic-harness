@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -214,7 +215,7 @@ class TestArtifactExists:
         assert "does not exist" in result.criteria[0]["message"]
 
     def test_fails_when_artifact_is_outside_project(self, tmp_path):
-        outside = Path("/tmp/outside_artifact.txt")
+        outside = tmp_path.with_name(f"{tmp_path.name}-outside-artifact.txt")
         outside.write_text("data")
         reviewer = DeterministicReviewer(criteria=[artifact_exists(tmp_path, str(outside))])
         goal = _make_goal(artifacts=[str(outside)])
@@ -256,10 +257,18 @@ class TestCommandPasses:
 
     def test_cwd_is_respected(self):
         with tempfile.TemporaryDirectory() as td:
-            script = Path(td) / "run.sh"
-            script.write_text("#!/bin/sh\necho done\n")
-            script.chmod(0o755)
-            criterion = command_passes(["./run.sh"], cwd=td)
+            (Path(td) / "marker.txt").write_text("done")
+            criterion = command_passes(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "from pathlib import Path; "
+                        "raise SystemExit(0 if Path('marker.txt').exists() else 1)"
+                    ),
+                ],
+                cwd=td,
+            )
             result = criterion.check(_make_goal())
             assert result[0] is True
 

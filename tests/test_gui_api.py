@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -160,7 +161,7 @@ def test_start_task_uses_bridge_human_goal() -> None:
 
     bridge = LocalGoalBridge(
         doc_root=Path("/tmp/docs"),
-        local_goal=Path("/bin/sh"),
+        local_goal=Path(sys.executable),
         runner=fake_runner,
     )
 
@@ -408,6 +409,7 @@ def test_run_server_expands_explicit_doc_root(monkeypatch, tmp_path) -> None:
     calls: list[dict[str, object]] = []
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
 
     def fake_serve_gui(**kwargs: object) -> None:
         calls.append(kwargs)

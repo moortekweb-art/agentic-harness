@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -61,6 +60,7 @@ def test_local_goal_bridge_explicit_doc_root_wins_over_environment(tmp_path, mon
 def test_local_goal_bridge_expands_user_in_configured_paths(tmp_path, monkeypatch) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("AGENTIC_HARNESS_DOC_ROOT", "~/docs")
 
     bridge = LocalGoalBridge()
@@ -72,6 +72,7 @@ def test_local_goal_bridge_expands_user_in_configured_paths(tmp_path, monkeypatc
 def test_local_goal_bridge_local_goal_executable_override_wins(tmp_path, monkeypatch) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("AGENTIC_HARNESS_DOC_ROOT", str(tmp_path / "docs"))
     monkeypatch.setenv("AGENTIC_HARNESS_LOCAL_GOAL", "~/bin/local-goal")
 
@@ -98,7 +99,7 @@ def test_build_mode3a_goal_hides_worker_details_behind_plain_objective() -> None
     assert "Do not expose or modify secrets" in goal
 
 
-def test_local_goal_bridge_enqueue_mode3a_calls_local_goal() -> None:
+def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
     calls: list[list[str]] = []
 
     def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -106,11 +107,9 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal() -> None:
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, "queued_id=abc123\n", "")
 
-    bridge = LocalGoalBridge(
-        doc_root=Path("/tmp/docs"),
-        local_goal=Path("/tmp/docs/scripts/local-goal"),
-        runner=fake_runner,
-    )
+    doc_root = tmp_path / "docs"
+    local_goal = doc_root / "scripts/local-goal"
+    bridge = LocalGoalBridge(doc_root=doc_root, local_goal=local_goal, runner=fake_runner)
 
     result = bridge.enqueue_mode3a(Mode3AGoalOptions(objective="fix one thing"))
 
@@ -118,7 +117,7 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal() -> None:
     assert calls
     command = calls[0]
     assert command[:8] == [
-        "/tmp/docs/scripts/local-goal",
+        str(local_goal),
         "enqueue",
         "--planner",
         "glm-5.2",

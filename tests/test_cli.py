@@ -20,6 +20,7 @@ from agentic_harness.core.config import load_config
 from agentic_harness.core.errors import ConfigError
 from agentic_harness.core.recipes import list_recipes, load_recipe
 from agentic_harness.core.state import GoalStatus
+from agentic_harness.core.worker import WorkerResult
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -69,12 +70,31 @@ def test_init_auto_selects_detected_backend(tmp_path, capsys, monkeypatch) -> No
 
 
 def test_run_auto_configures_detected_backend(tmp_path, capsys, monkeypatch) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    codex = bin_dir / "codex"
-    codex.write_text("#!/bin/sh\necho fake codex \"$@\"\n", encoding="utf-8")
-    codex.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(
+        cli,
+        "available_agent_tools",
+        lambda: {
+            "aider": False,
+            "codewhale": False,
+            "codex": True,
+            "opencode": False,
+            "shell": False,
+        },
+    )
+
+    def fake_run(worker: CodingAgentWorker, goal: Goal) -> WorkerResult:
+        transcript = worker.transcript_for(goal)
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("fake codex\n", encoding="utf-8")
+        return WorkerResult(
+            success=True,
+            summary="fake codex",
+            artifacts=[transcript.relative_to(worker.cwd.resolve()).as_posix()],
+            stdout="fake codex\n",
+            returncode=0,
+        )
+
+    monkeypatch.setattr(CodingAgentWorker, "run", fake_run)
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_ok.py").write_text(
         "def test_ok():\n    assert True\n",
