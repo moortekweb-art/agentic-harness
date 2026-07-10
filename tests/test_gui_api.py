@@ -51,6 +51,89 @@ def test_default_gui_surface_has_no_manual_babysitting_control() -> None:
     assert 'id="acceptButton" hidden' in html
 
 
+def test_gui_uses_local_lucide_icons_across_primary_controls() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    html = (static_root / "index.html").read_text(encoding="utf-8")
+    css = (static_root / "styles.css").read_text(encoding="utf-8")
+    javascript = (static_root / "app.js").read_text(encoding="utf-8")
+    icons = (static_root / "icons.svg").read_text(encoding="utf-8")
+    favicon = (static_root / "favicon.svg").read_text(encoding="utf-8")
+    license_text = (static_root / "LUCIDE_LICENSE.txt").read_text(encoding="utf-8")
+
+    assert "Lucide" in icons
+    assert "Lucide" in favicon
+    assert "ISC License" in license_text
+    assert "The MIT License (MIT)" in license_text
+    assert '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />' in html
+    assert 'id="monitor"' in icons
+    assert 'id="route"' in icons
+    assert 'id="cloud-cog"' in icons
+    assert 'id="flask-conical"' in icons
+    assert html.count('href="/static/icons.svg#') >= 12
+    assert 'local: "monitor"' in javascript
+    assert 'guided: "route"' in javascript
+    assert 'cloud: "cloud-cog"' in javascript
+    assert 'experimental: "flask-conical"' in javascript
+    assert ".mode-card .mode-card-title" in css
+    assert ".mode-card .mode-card-note" in css
+
+
+def test_gui_desktop_task_area_absorbs_column_height_difference() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    html = (static_root / "index.html").read_text(encoding="utf-8")
+    css = (static_root / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="objective"' in html
+    assert ".workbench {" in css
+    assert "align-items: stretch" in css
+    assert "#objective" in css
+    assert "flex: 1 1 220px" in css
+    assert "min-height: 220px" in css
+
+
+def test_gui_status_encodings_are_labeled_and_idle_progress_is_hidden() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    html = (static_root / "index.html").read_text(encoding="utf-8")
+    css = (static_root / "styles.css").read_text(encoding="utf-8")
+    javascript = (static_root / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="statusIndicator"' in html
+    assert 'aria-label="Status: Ready"' in html
+    assert 'title="Status: Ready"' in html
+    assert 'id="progressGroup" class="progress-group" hidden' in html
+    assert 'role="progressbar"' in html
+    assert 'id="progressValue"' in html
+    assert 'class="loop-legend"' in html
+    assert "Current step" in html
+    assert "els.progressGroup.hidden = progress <= 0" in javascript
+    assert 'els.statusIndicator.setAttribute("aria-label", statusDescription)' in javascript
+    assert "[hidden] {" in css
+    assert "display: none !important" in css
+
+
+def test_gui_microcopy_and_footer_use_distinct_status_metadata() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    html = (static_root / "index.html").read_text(encoding="utf-8")
+    javascript = (static_root / "app.js").read_text(encoding="utf-8")
+
+    assert "Check now" not in html
+    assert "Refresh status" in html
+    assert 'class="status-footer"' in html
+    assert 'id="statusUpdated"' in html
+    assert 'id="statusContext"' in html
+    assert "formatUpdatedAt" in javascript
+    assert "renderStatusFooter" in javascript
+
+
+def test_gui_cards_use_subtle_depth_tokens() -> None:
+    css = Path("agentic_harness/gui/static/styles.css").read_text(encoding="utf-8")
+
+    assert "--panel-shadow:" in css
+    assert "--card-shadow:" in css
+    assert "box-shadow: var(--panel-shadow)" in css
+    assert "box-shadow: var(--card-shadow)" in css
+
+
 def test_task_from_command_result_maps_review_state() -> None:
     result = CommandResult(
         args=("local-goal", "status", "--json"),

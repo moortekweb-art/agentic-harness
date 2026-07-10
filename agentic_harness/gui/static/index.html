@@ -4,19 +4,34 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agentic Harness</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <main class="app-shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">Local assistant control</p>
-          <h1>Agentic Harness</h1>
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">
+            <svg class="icon"><use href="/static/icons.svg#workflow"></use></svg>
+          </span>
+          <div>
+            <p class="eyebrow">Local assistant control</p>
+            <h1>Agentic Harness</h1>
+          </div>
         </div>
         <div class="top-actions">
-          <button id="themeButton" title="Toggle dark or light theme">Theme</button>
-          <button id="shortcutsButton" title="Show keyboard shortcuts">Shortcuts</button>
-          <div class="health" id="health">Checking...</div>
+          <button id="themeButton" title="Use dark theme">
+            <svg class="icon" aria-hidden="true"><use id="themeIcon" href="/static/icons.svg#moon"></use></svg>
+            <span>Theme</span>
+          </button>
+          <button id="shortcutsButton" title="Show keyboard shortcuts">
+            <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#keyboard"></use></svg>
+            <span>Shortcuts</span>
+          </button>
+          <div class="health" id="health" role="status">
+            <svg class="icon" aria-hidden="true"><use id="healthIcon" href="/static/icons.svg#loader-circle"></use></svg>
+            <span id="healthText">Checking...</span>
+          </div>
         </div>
       </header>
 
@@ -45,10 +60,22 @@
           </details>
 
           <div class="actions">
-            <button class="primary" id="startButton" title="Start the task" disabled>Start</button>
-            <button id="checkButton" title="Refresh current status">Check now</button>
-            <button id="undoButton" title="Undo the last form edit">Undo</button>
-            <button id="redoButton" title="Redo the last undone form edit">Redo</button>
+            <button class="primary" id="startButton" title="Start the task" disabled>
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#play"></use></svg>
+              <span>Start</span>
+            </button>
+            <button id="checkButton" title="Get the latest task status">
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#refresh-cw"></use></svg>
+              <span>Refresh status</span>
+            </button>
+            <button id="undoButton" title="Undo the last form edit">
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#undo-2"></use></svg>
+              <span>Undo</span>
+            </button>
+            <button id="redoButton" title="Redo the last undone form edit">
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#redo-2"></use></svg>
+              <span>Redo</span>
+            </button>
           </div>
         </div>
 
@@ -58,55 +85,122 @@
               <p class="eyebrow">Current work</p>
               <h2 id="statusLabel">Ready</h2>
             </div>
-            <span class="status-dot" id="statusDot"></span>
+            <span
+              class="status-indicator ready"
+              id="statusIndicator"
+              role="img"
+              aria-label="Status: Ready"
+              title="Status: Ready"
+            >
+              <svg class="icon" aria-hidden="true"><use id="statusIcon" href="/static/icons.svg#circle-check"></use></svg>
+            </span>
           </div>
 
-          <div class="progress-track" aria-label="Task progress">
-            <div class="progress-bar" id="progressBar"></div>
+          <div id="progressGroup" class="progress-group" hidden>
+            <div class="progress-meta">
+              <span>Progress</span>
+              <span id="progressValue">0%</span>
+            </div>
+            <div
+              class="progress-track"
+              id="progressTrack"
+              role="progressbar"
+              aria-label="Task progress"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            >
+              <div class="progress-bar" id="progressBar"></div>
+            </div>
           </div>
           <p class="summary" id="summary">No active work is visible yet.</p>
 
           <div class="readiness-card" id="readinessCard">
             <div>
-              <h3>Readiness gate</h3>
+              <h3 class="icon-heading">
+                <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#shield-check"></use></svg>
+                <span>Readiness gate</span>
+              </h3>
               <p id="readinessStatus">Checking...</p>
               <p id="readinessSummary">Waiting for local status.</p>
             </div>
             <div>
-              <h3>Local loop</h3>
+              <h3 class="icon-heading">
+                <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#workflow"></use></svg>
+                <span>Local loop</span>
+              </h3>
+              <p class="loop-legend"><span class="loop-marker" aria-hidden="true"></span>Current step</p>
               <ol id="agentLoop"></ol>
             </div>
           </div>
 
           <div class="quick-actions">
-            <button id="continueButton" hidden>Ask to continue</button>
-            <button id="acceptButton" hidden>Accept</button>
-            <button class="danger" id="stopButton" hidden>Stop</button>
+            <button id="continueButton" hidden>
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#arrow-right"></use></svg>
+              <span>Ask to continue</span>
+            </button>
+            <button id="acceptButton" hidden>
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#check"></use></svg>
+              <span>Accept</span>
+            </button>
+            <button class="danger" id="stopButton" hidden>
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#square"></use></svg>
+              <span>Stop</span>
+            </button>
           </div>
 
           <div class="evidence">
-            <h3>Changed files</h3>
+            <h3 class="icon-heading">
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#file-text"></use></svg>
+              <span>Changed files</span>
+            </h3>
             <ul id="changedFiles"></ul>
-            <h3>Checks</h3>
+            <h3 class="icon-heading">
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#list-checks"></use></svg>
+              <span>Checks</span>
+            </h3>
             <ul id="verification"></ul>
-            <h3>Artifacts</h3>
+            <h3 class="icon-heading">
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#package"></use></svg>
+              <span>Artifacts</span>
+            </h3>
             <ul id="artifacts"></ul>
           </div>
 
           <div class="history-tools">
-            <label class="field-label" for="historySearch">History search</label>
+            <label class="field-label icon-heading" for="historySearch">
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg>
+              <span>History search</span>
+            </label>
             <input id="historySearch" type="search" placeholder="Search previous tasks" />
             <div class="actions compact">
-              <button id="exportButton" title="Export GUI session history">Export</button>
-              <button id="importButton" title="Import GUI session history">Import</button>
+              <button id="exportButton" title="Copy GUI session history">
+                <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#download"></use></svg>
+                <span id="exportButtonLabel">Export</span>
+              </button>
+              <button id="importButton" title="Import GUI session history">
+                <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#upload"></use></svg>
+                <span>Import</span>
+              </button>
             </div>
             <ul class="history-list" id="historyList"></ul>
           </div>
 
           <details class="advanced">
-            <summary>Advanced details</summary>
+            <summary>
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#braces"></use></svg>
+              <span>Advanced details</span>
+            </summary>
             <pre id="advancedDetails">{}</pre>
           </details>
+
+          <footer class="status-footer" aria-label="Task status metadata">
+            <span>
+              <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#clock"></use></svg>
+              <span id="statusUpdated">Awaiting first update</span>
+            </span>
+            <span id="statusContext">Local task state</span>
+          </footer>
         </aside>
       </section>
     </main>
@@ -114,11 +208,14 @@
       <form method="dialog">
         <div class="dialog-head">
           <h2>Keyboard shortcuts</h2>
-          <button value="close" title="Close shortcuts">Close</button>
+          <button value="close" title="Close shortcuts">
+            <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#x"></use></svg>
+            <span>Close</span>
+          </button>
         </div>
         <dl class="shortcut-list">
           <dt>Ctrl Enter</dt><dd>Start work</dd>
-          <dt>Ctrl R</dt><dd>Check now</dd>
+          <dt>Ctrl R</dt><dd>Refresh status</dd>
           <dt>Ctrl K</dt><dd>Search history</dd>
           <dt>Ctrl /</dt><dd>Show shortcuts</dd>
           <dt>Ctrl Z</dt><dd>Undo form edit</dd>

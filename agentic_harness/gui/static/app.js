@@ -2,6 +2,25 @@ const STORAGE_KEY = "agentic-harness-gui-session";
 const THEME_KEY = "agentic-harness-theme";
 const TOKEN_KEY = "agentic-harness-gui-session-token";
 const TOKEN_PARAM = "token";
+const ICON_SPRITE = "/static/icons.svg";
+
+const MODE_ICONS = Object.freeze({
+  local: "monitor",
+  guided: "route",
+  cloud: "cloud-cog",
+  experimental: "flask-conical",
+});
+
+const STATUS_ICONS = Object.freeze({
+  ready: "circle-check",
+  starting: "loader-circle",
+  working: "loader-circle",
+  checking: "loader-circle",
+  needs_review: "circle-alert",
+  done: "circle-check",
+  blocked: "octagon-alert",
+  stopped: "circle-stop",
+});
 
 const state = {
   mode: "guided",
@@ -15,10 +34,13 @@ const state = {
   readiness: {},
   supervisorActive: false,
   canStart: false,
+  currentTask: null,
 };
 
 const els = {
   health: document.getElementById("health"),
+  healthText: document.getElementById("healthText"),
+  healthIcon: document.getElementById("healthIcon"),
   modes: document.getElementById("modes"),
   objective: document.getElementById("objective"),
   safeAreas: document.getElementById("safeAreas"),
@@ -31,10 +53,15 @@ const els = {
   undoButton: document.getElementById("undoButton"),
   redoButton: document.getElementById("redoButton"),
   themeButton: document.getElementById("themeButton"),
+  themeIcon: document.getElementById("themeIcon"),
   shortcutsButton: document.getElementById("shortcutsButton"),
   shortcutsDialog: document.getElementById("shortcutsDialog"),
   statusLabel: document.getElementById("statusLabel"),
-  statusDot: document.getElementById("statusDot"),
+  statusIndicator: document.getElementById("statusIndicator"),
+  statusIcon: document.getElementById("statusIcon"),
+  progressGroup: document.getElementById("progressGroup"),
+  progressTrack: document.getElementById("progressTrack"),
+  progressValue: document.getElementById("progressValue"),
   progressBar: document.getElementById("progressBar"),
   summary: document.getElementById("summary"),
   readinessCard: document.getElementById("readinessCard"),
@@ -48,8 +75,19 @@ const els = {
   historySearch: document.getElementById("historySearch"),
   historyList: document.getElementById("historyList"),
   exportButton: document.getElementById("exportButton"),
+  exportButtonLabel: document.getElementById("exportButtonLabel"),
   importButton: document.getElementById("importButton"),
+  statusUpdated: document.getElementById("statusUpdated"),
+  statusContext: document.getElementById("statusContext"),
 };
+
+function iconHref(name) {
+  return `${ICON_SPRITE}#${name}`;
+}
+
+function iconMarkup(name) {
+  return `<svg class="icon" aria-hidden="true"><use href="${iconHref(name)}"></use></svg>`;
+}
 
 function captureTokenFromUrl() {
   const params = new URLSearchParams(window.location.search);
@@ -106,12 +144,12 @@ function showTokenDialog() {
       <form method="dialog">
         <div class="dialog-head">
           <h2>Access token required</h2>
-          <button value="cancel" title="Cancel">Cancel</button>
+          <button value="cancel" title="Cancel">${iconMarkup("x")}<span>Cancel</span></button>
         </div>
         <label class="field-label" for="authTokenInput">Token</label>
         <input id="authTokenInput" name="authTokenInput" type="password" autocomplete="off" />
         <div class="actions compact">
-          <button class="primary" value="confirm">Continue</button>
+          <button class="primary" value="confirm">${iconMarkup("arrow-right")}<span>Continue</span></button>
         </div>
       </form>
     `;
@@ -207,9 +245,15 @@ function renderModes(modes) {
     card.setAttribute("aria-pressed", String(mode.key === state.mode));
     card.title = mode.caution || mode.best_for || mode.label;
     card.innerHTML = `
-      <strong>${escapeHtml(mode.label)}</strong>
+      <span class="mode-card-title">
+        <span class="mode-card-icon">${iconMarkup(MODE_ICONS[mode.key] || "workflow")}</span>
+        <strong>${escapeHtml(mode.label)}</strong>
+      </span>
       <span>${escapeHtml(mode.best_for)}</span>
-      <small>${escapeHtml(mode.caution)}</small>
+      <span class="mode-card-note">
+        ${iconMarkup("shield-check")}
+        <small>${escapeHtml(mode.caution)}</small>
+      </span>
     `;
     card.addEventListener("click", () => {
       pushUndo();
@@ -219,14 +263,25 @@ function renderModes(modes) {
     });
     els.modes.appendChild(card);
   });
+  if (state.currentTask) renderStatusFooter(state.currentTask);
 }
 
 function renderTask(task) {
   const status = task.status || "working";
-  const progress = Number(task.progress || 0);
-  els.statusLabel.textContent = task.status_label || "Working";
-  els.statusDot.className = `status-dot ${status}`;
-  els.progressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  const rawProgress = Number(task.progress || 0);
+  const progress = Number.isFinite(rawProgress) ? Math.max(0, Math.min(100, rawProgress)) : 0;
+  const statusLabel = task.status_label || "Working";
+  const statusDescription = `Status: ${statusLabel}`;
+  state.currentTask = task;
+  els.statusLabel.textContent = statusLabel;
+  els.statusIndicator.className = `status-indicator ${status}`;
+  els.statusIndicator.setAttribute("aria-label", statusDescription);
+  els.statusIndicator.title = statusDescription;
+  els.statusIcon.setAttribute("href", iconHref(STATUS_ICONS[status] || "circle-alert"));
+  els.progressGroup.hidden = progress <= 0;
+  els.progressTrack.setAttribute("aria-valuenow", String(progress));
+  els.progressValue.textContent = `${progress}%`;
+  els.progressBar.style.width = `${progress}%`;
   els.summary.textContent = task.summary || "No detail returned yet.";
   renderReadiness({
     ...(task.readiness_gate || {}),
@@ -239,6 +294,7 @@ function renderTask(task) {
   els.continueButton.hidden = !["needs_review", "blocked"].includes(status);
   els.acceptButton.hidden = status !== "needs_review";
   els.stopButton.hidden = !["starting", "working", "checking"].includes(status);
+  renderStatusFooter(task);
 }
 
 function renderReadiness(readiness = {}) {
@@ -260,7 +316,10 @@ function renderReadiness(readiness = {}) {
   steps.forEach((step) => {
     const item = document.createElement("li");
     item.textContent = step;
-    if (step === current) item.className = "active";
+    if (step === current) {
+      item.className = "active";
+      item.setAttribute("aria-current", "step");
+    }
     els.agentLoop.appendChild(item);
   });
 }
@@ -306,9 +365,19 @@ function renderHistory(tasks) {
   tasks.forEach((task) => {
     const item = document.createElement("li");
     const button = document.createElement("button");
+    const title = task.human_title || task.summary || "Untitled task";
+    const status = task.status_label || task.status || "Task";
+    const updatedAt = task.metadata && task.metadata.updated_at;
     button.type = "button";
-    button.textContent = task.summary || task.human_title || "Untitled task";
-    button.title = task.status_label || task.status || "Task";
+    button.className = "history-entry";
+    button.innerHTML = `
+      ${iconMarkup("clock")}
+      <span>
+        <strong>${escapeHtml(title)}</strong>
+        <small>${escapeHtml(`${status} · ${formatUpdatedAt(updatedAt)}`)}</small>
+      </span>
+    `;
+    button.title = status;
     button.addEventListener("click", () => renderTask(task));
     item.appendChild(button);
     els.historyList.appendChild(item);
@@ -320,16 +389,25 @@ async function refreshHealth() {
   const readiness = health.readiness || {};
   const supervised = health.no_babysitting?.enabled === true;
   state.supervisorActive = supervised;
-  els.health.textContent = readiness.requires_review
+  const healthLabel = readiness.requires_review
     ? "Needs review"
     : supervised
       ? "Supervisor active"
       : "Supervisor unavailable";
+  els.healthText.textContent = healthLabel;
   els.health.className = readiness.requires_review
     ? "health review"
     : supervised && health.local_goal_available
       ? "health ok"
       : "health blocked";
+  const healthIcon = readiness.requires_review
+    ? "circle-alert"
+    : supervised && health.local_goal_available
+      ? "shield-check"
+      : "octagon-alert";
+  els.healthIcon.setAttribute("href", iconHref(healthIcon));
+  els.health.setAttribute("aria-label", healthLabel);
+  els.health.title = healthLabel;
   renderReadiness(readiness);
 }
 
@@ -418,6 +496,9 @@ function connectStatusStream() {
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem(THEME_KEY, theme);
+  const useLightTheme = theme === "dark";
+  els.themeIcon.setAttribute("href", iconHref(useLightTheme ? "sun" : "moon"));
+  els.themeButton.title = useLightTheme ? "Use light theme" : "Use dark theme";
 }
 
 function toggleTheme() {
@@ -456,9 +537,9 @@ function restoreLocal() {
 async function exportSession() {
   const session = await api("/api/session");
   await navigator.clipboard.writeText(JSON.stringify(session, null, 2));
-  els.exportButton.textContent = "Copied";
+  els.exportButtonLabel.textContent = "Copied";
   window.setTimeout(() => {
-    els.exportButton.textContent = "Export";
+    els.exportButtonLabel.textContent = "Export";
   }, 1200);
 }
 
@@ -503,6 +584,19 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function formatUpdatedAt(value) {
+  const timestamp = value ? new Date(value) : new Date();
+  if (Number.isNaN(timestamp.getTime())) return "Updated recently";
+  return `Updated ${timestamp.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function renderStatusFooter(task) {
+  const metadata = task.metadata && typeof task.metadata === "object" ? task.metadata : {};
+  const mode = state.modes.find((candidate) => candidate.key === metadata.mode);
+  els.statusUpdated.textContent = formatUpdatedAt(metadata.updated_at);
+  els.statusContext.textContent = mode ? `Mode: ${mode.label}` : "Local task state";
 }
 
 els.startButton.addEventListener("click", startWork);
