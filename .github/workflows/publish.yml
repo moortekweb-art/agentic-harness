@@ -30,5 +30,12 @@ jobs:
           python -m pip install -e ".[test]"
           python -m agentic_harness.cli release-smoke --dist-dir dist
 
+      - name: Prepare PyPI distributions
+        run: |
+          mkdir -p pypi-dist
+          cp dist/*.whl dist/*.tar.gz pypi-dist/
+
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: pypi-dist/
