@@ -51,19 +51,24 @@ def test_default_gui_surface_has_no_manual_babysitting_control() -> None:
     assert 'id="acceptButton" hidden' in html
 
 
-def test_gui_uses_local_lucide_icons_across_primary_controls() -> None:
+def test_gui_uses_local_custom_icons_across_primary_controls() -> None:
     static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
     html = (static_root / "index.html").read_text(encoding="utf-8")
     css = (static_root / "styles.css").read_text(encoding="utf-8")
     javascript = (static_root / "app.js").read_text(encoding="utf-8")
-    favicon = (static_root / "favicon.svg").read_text(encoding="utf-8")
-    license_text = (static_root / "LUCIDE_LICENSE.txt").read_text(encoding="utf-8")
+    sprite_path = static_root / "icons-custom.svg"
+    license_path = static_root / "icons-custom.LICENSE"
+    sprite = sprite_path.read_text(encoding="utf-8")
+    license_text = license_path.read_text(encoding="utf-8")
 
+    assert sprite_path.is_file()
+    assert sprite.count('<symbol id="icon-') == 31
+    assert license_path.is_file()
+    assert license_text.startswith("MIT License")
     assert 'class="icon-sprite"' in html
-    assert "Lucide" in html
-    assert "Lucide" in favicon
-    assert "ISC License" in license_text
-    assert "The MIT License (MIT)" in license_text
+    assert "lucide" not in html.lower()
+    assert "unpkg.com/lucide" not in html
+    assert "cdn.jsdelivr.net/npm/lucide" not in html
     assert '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />' in html
     assert not (static_root / "icons.svg").exists()
     assert 'id="icon-zap"' in html
@@ -129,12 +134,29 @@ def test_gui_microcopy_and_footer_use_distinct_status_metadata() -> None:
 
 
 def test_gui_cards_use_subtle_depth_tokens() -> None:
-    css = Path("agentic_harness/gui/static/styles.css").read_text(encoding="utf-8")
-    expected_shadow = "0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)"
+    import re
 
-    assert "--panel-shadow:" in css
-    assert "--card-shadow:" in css
-    assert css.count(expected_shadow) >= 2
+    css = Path("agentic_harness/gui/static/styles.css").read_text(encoding="utf-8")
+    token_values = {
+        token: re.search(rf"--{token}-shadow:\s*([^;]+);", css)
+        for token in ("panel", "card")
+    }
+    shadow_pattern = re.compile(
+        r"(-?\d+(?:\.\d+)?)(?:px)?\s+(-?\d+(?:\.\d+)?)(?:px)?\s+"
+        r"(\d+(?:\.\d+)?)px\s+rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*"
+        r"(\d*\.?\d+)\s*\)"
+    )
+
+    for token, match in token_values.items():
+        assert match is not None, f"missing --{token}-shadow token"
+        shadows = shadow_pattern.findall(match.group(1))
+        assert shadows, f"--{token}-shadow must contain an rgba shadow"
+        for _x_offset, y_offset, blur, red, green, blue, alpha in shadows:
+            assert all(0 <= int(channel) <= 255 for channel in (red, green, blue))
+            assert float(y_offset) != 0
+            assert float(blur) != 0
+            assert 0 < float(alpha) <= 0.5
+
     assert "box-shadow: var(--panel-shadow)" in css
     assert "box-shadow: var(--card-shadow)" in css
 

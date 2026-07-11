@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  agentic-harness custom icon sprite
+  ===================================
+  Design language: "Modern soft outline"
+    - Stroke-only with currentColor
+    - 1.75 stroke-width (slightly softer than Lucide's 2.0)
+    - Round line caps and joins (friendly, hand-drawn feel)
+    - fill="none" default; small currentColor accents for character
+    - 24x24 viewBox, ~2px effective padding (content in 2-22 box)
+    - Generous rounded corners (rx=2) — friendlier than sharp edges
+    - Cohesive visual weight across the set
+
+  Each symbol below is referenced via:
+    <svg class="icon"><use href="#icon-{name}"></use></svg>
+
+  License: MIT (matches agentic-harness project license)
+  Copyright (c) 2026 Michael / Moortekweb
+  See LICENSE alongside this file.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <defs>
+
+    <!-- Brand mark: agentic loop (two squares + connector) -->
+    <symbol id="icon-workflow" viewBox="0 0 24 24">
+      <rect x="3" y="3" width="8" height="8" rx="1.5"></rect>
+      <rect x="13" y="13" width="8" height="8" rx="1.5"></rect>
+      <path d="M7 11v2a2 2 0 0 0 2 2h2"></path>
+    </symbol>
+
+    <!-- Lightning bolt — local mode -->
+    <symbol id="icon-zap" viewBox="0 0 24 24">
+      <path d="M13.5 2 L4.5 13.5 H10.5 L9.5 22 L19.5 10.5 H13.5 L13.5 2 Z"></path>
+    </symbol>
+
+    <!-- Folded map with creases — guided mode -->
+    <symbol id="icon-map" viewBox="0 0 24 24">
+      <path d="M3 6 L9 4 L15 6 L21 4 V19 L15 21 L9 19 L3 21 Z"></path>
+      <path d="M9 4 V19"></path>
+      <path d="M15 6 V21"></path>
+    </symbol>
+
+    <!-- Rocket with flame — cloud mode -->
+    <symbol id="icon-rocket" viewBox="0 0 24 24">
+      <path d="M12 2.5 C 15.5 5.5, 17.5 9.5, 17.5 14 V18 H6.5 V14 C 6.5 9.5, 8.5 5.5, 12 2.5 Z"></path>
+      <circle cx="12" cy="10.5" r="1.5"></circle>
+      <path d="M6.5 15.5 L4 19 L7 19"></path>
+      <path d="M17.5 15.5 L20 19 L17 19"></path>
+      <path d="M10 21 L12 23.5 L14 21"></path>
+    </symbol>
+
+    <!-- Conical flask with bubble — experimental mode -->
+    <symbol id="icon-flask" viewBox="0 0 24 24">
+      <path d="M9.5 2.5 V8.5 L5.5 17 A2 2 0 0 0 7.3 20 H16.7 A2 2 0 0 0 18.5 17 L14.5 8.5 V2.5"></path>
+      <path d="M8 2.5 H16"></path>
+      <circle cx="11.5" cy="16" r="0.6" fill="currentColor" stroke="none"></circle>
+      <circle cx="14" cy="17.5" r="0.4" fill="currentColor" stroke="none"></circle>
+      <path d="M7.5 14.5 H16.5"></path>
+    </symbol>
+
+    <!-- Sun — light theme -->
+    <symbol id="icon-sun" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4"></circle>
+      <path d="M12 2.5 V4.5"></path>
+      <path d="M12 19.5 V21.5"></path>
+      <path d="M2.5 12 H4.5"></path>
+      <path d="M19.5 12 H21.5"></path>
+      <path d="M4.9 4.9 L6.3 6.3"></path>
+      <path d="M17.7 17.7 L19.1 19.1"></path>
+      <path d="M4.9 19.1 L6.3 17.7"></path>
+      <path d="M17.7 6.3 L19.1 4.9"></path>
+    </symbol>
+
+    <!-- Crescent moon — dark theme -->
+    <symbol id="icon-moon" viewBox="0 0 24 24">
+      <path d="M20.8 12.6 a9 9 0 1 1 -9.4 -9.5 a0.6 0.6 0 0 1 0.5 1 a6 6 0 0 0 8 8 a0.6 0.6 0 0 1 0.9 0.5 Z"></path>
+    </symbol>
+
+    <!-- Keyboard with keys — shortcuts button -->
+    <symbol id="icon-keyboard" viewBox="0 0 24 24">
+      <rect x="2.5" y="5.5" width="19" height="13" rx="2"></rect>
+      <circle cx="6" cy="9.5" r="0.5" fill="currentColor" stroke="none"></circle>
+      <circle cx="9" cy="9.5" r="0.5" fill="currentColor" stroke="none"></circle>
+      <circle cx="12" cy="9.5" r="0.5" fill="currentColor" stroke="none"></circle>
+      <circle cx="15" cy="9.5" r="0.5" fill="currentColor" stroke="none"></circle>
+      <circle cx="18" cy="9.5" r="0.5" fill="currentColor" stroke="none"></circle>
+      <circle cx="6" cy="12.5" r="0.5" fill="currentColor" stroke="none"></circle>
+      <circle cx="9" cy="12.5" r="0.5" fill="currentColor" stroke="none"></circle>
+      <circle cx="12" cy="12.5" r="0.5" fill="currentColor" stroke="none"></circle>
+      <circle cx="15" cy="12.5" r="0.5" fill="currentColor" stroke="none"></circle>
+      <circle cx="18" cy="12.5" r="0.5" fill="currentColor" stroke="none"></circle>
+      <path d="M7.5 15.5 H16.5"></path>
+    </symbol>
+
+    <!-- Play triangle — start button -->
+    <symbol id="icon-play" viewBox="0 0 24 24">
+      <path d="M6.5 4.5 A1.5 1.5 0 0 1 9 4.5 L18.5 11 A1.5 1.5 0 0 1 18.5 13 L9 19.5 A1.5 1.5 0 0 1 6.5 18 Z"></path>
+    </symbol>
+
+    <!-- Circular refresh arrow — run checks -->
+    <symbol id="icon-refresh-cw" viewBox="0 0 24 24">
+      <path d="M3.5 12 a8.5 8.5 0 0 1 14.5 -6 L21 8.5"></path>
+      <path d="M21 3.5 V8.5 H16"></path>
+      <path d="M20.5 12 a8.5 8.5 0 0 1 -14.5 6 L3 15.5"></path>
+      <path d="M3 20.5 V15.5 H8"></path>
+    </symbol>
+
+    <!-- Curved arrow back — undo -->
+    <symbol id="icon-undo-2" viewBox="0 0 24 24">
+      <path d="M9 14 L4 9 L9 4"></path>
+      <path d="M4 9 H14.5 a5.5 5.5 0 0 1 5.5 5.5 V19.5"></path>
+    </symbol>
+
+    <!-- Curved arrow forward — redo -->
+    <symbol id="icon-redo-2" viewBox="0 0 24 24">
+      <path d="M15 14 L20 9 L15 4"></path>
+      <path d="M20 9 H9.5 a5.5 5.5 0 0 0 -5.5 5.5 V19.5"></path>
+    </symbol>
+
+    <!-- Shield with check — supervisor active / readiness -->
+    <symbol id="icon-shield-check" viewBox="0 0 24 24">
+      <path d="M12 2.5 L4 5.5 V11.5 C4 16.2 7.3 19.7 12 22 C16.7 19.7 20 16.2 20 11.5 V5.5 Z"></path>
+      <path d="M8.5 12 L11 14.5 L15.5 10"></path>
+    </symbol>
+
+    <!-- Spinner arc — loading state -->
+    <symbol id="icon-loader-circle" viewBox="0 0 24 24">
+      <path d="M21 12 a9 9 0 1 1 -6.2 -8.6"></path>
+    </symbol>
+
+    <!-- Circle with check — ready / done -->
+    <symbol id="icon-circle-check" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9.5"></circle>
+      <path d="M8 12 L11 15 L16 9.5"></path>
+    </symbol>
+
+    <!-- Circle with exclamation — needs review -->
+    <symbol id="icon-circle-alert" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9.5"></circle>
+      <path d="M12 7.5 V13"></path>
+      <circle cx="12" cy="16.3" r="0.7" fill="currentColor" stroke="none"></circle>
+    </symbol>
+
+    <!-- Octagon with exclamation — blocked -->
+    <symbol id="icon-octagon-alert" viewBox="0 0 24 24">
+      <path d="M8.5 2.5 H15.5 L21.5 8.5 V15.5 L15.5 21.5 H8.5 L2.5 15.5 V8.5 Z"></path>
+      <path d="M12 7.5 V13"></path>
+      <circle cx="12" cy="16.3" r="0.7" fill="currentColor" stroke="none"></circle>
+    </symbol>
+
+    <!-- Circle with square — stopped -->
+    <symbol id="icon-circle-stop" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9.5"></circle>
+      <rect x="9" y="9" width="6" height="6" rx="1"></rect>
+    </symbol>
+
+    <!-- Right arrow — continue -->
+    <symbol id="icon-arrow-right" viewBox="0 0 24 24">
+      <path d="M5 12 H19"></path>
+      <path d="M13 6 L19 12 L13 18"></path>
+    </symbol>
+
+    <!-- Checkmark — accept -->
+    <symbol id="icon-check" viewBox="0 0 24 24">
+      <path d="M4.5 12 L10 17.5 L19.5 6.5"></path>
+    </symbol>
+
+    <!-- Stop square — stop button glyph -->
+    <symbol id="icon-square" viewBox="0 0 24 24">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="2.5"></rect>
+    </symbol>
+
+    <!-- Document with lines — changed files -->
+    <symbol id="icon-file-text" viewBox="0 0 24 24">
+      <path d="M13.5 2.5 H6.5 a2 2 0 0 0 -2 2 V19.5 a2 2 0 0 0 2 2 H17.5 a2 2 0 0 0 2 -2 V8.5 Z"></path>
+      <path d="M13.5 2.5 V8.5 H19.5"></path>
+      <path d="M8 13 H16"></path>
+      <path d="M8 16.5 H16"></path>
+      <path d="M8 9.5 H11"></path>
+    </symbol>
+
+    <!-- List with checks — checks section -->
+    <symbol id="icon-list-checks" viewBox="0 0 24 24">
+      <path d="M3 5.5 L4.5 7 L7.5 4"></path>
+      <path d="M3 12 L4.5 13.5 L7.5 10.5"></path>
+      <path d="M3 18.5 L4.5 20 L7.5 17"></path>
+      <path d="M11 5.5 H21"></path>
+      <path d="M11 12 H21"></path>
+      <path d="M11 18.5 H21"></path>
+    </symbol>
+
+    <!-- 3D package / cube — artifacts -->
+    <symbol id="icon-package" viewBox="0 0 24 24">
+      <path d="M12 2.5 L21 7 V17 L12 21.5 L3 17 V7 Z"></path>
+      <path d="M3 7 L12 12 L21 7"></path>
+      <path d="M12 12 V21.5"></path>
+      <path d="M7.5 4.5 L16.5 9.5"></path>
+    </symbol>
+
+    <!-- Magnifier — history search -->
+    <symbol id="icon-search" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="7"></circle>
+      <path d="M16.5 16.5 L21 21"></path>
+    </symbol>
+
+    <!-- Down arrow + tray — export -->
+    <symbol id="icon-download" viewBox="0 0 24 24">
+      <path d="M12 3.5 V15.5"></path>
+      <path d="M7 10.5 L12 15.5 L17 10.5"></path>
+      <path d="M3.5 18 H20.5 a0 0 0 0 1 0 0 V19.5 a1.5 1.5 0 0 1 -1.5 1.5 H5 a1.5 1.5 0 0 1 -1.5 -1.5 V18 a0 0 0 0 1 0 0 Z"></path>
+    </symbol>
+
+    <!-- Up arrow + tray — import -->
+    <symbol id="icon-upload" viewBox="0 0 24 24">
+      <path d="M12 15.5 V3.5"></path>
+      <path d="M7 8.5 L12 3.5 L17 8.5"></path>
+      <path d="M3.5 18 H20.5 a0 0 0 0 1 0 0 V19.5 a1.5 1.5 0 0 1 -1.5 1.5 H5 a1.5 1.5 0 0 1 -1.5 -1.5 V18 a0 0 0 0 1 0 0 Z"></path>
+    </symbol>
+
+    <!-- Curly braces — advanced details -->
+    <symbol id="icon-braces" viewBox="0 0 24 24">
+      <path d="M8 3 H6.5 a2 2 0 0 0 -2 2 V8 a2 2 0 0 1 -2 2 a2 2 0 0 1 2 2 V17 a2 2 0 0 0 2 2 H8"></path>
+      <path d="M16 3 H17.5 a2 2 0 0 1 2 2 V8 a2 2 0 0 0 2 2 a2 2 0 0 0 -2 2 V17 a2 2 0 0 1 -2 2 H16"></path>
+    </symbol>
+
+    <!-- Clock — footer timestamp / history entry -->
+    <symbol id="icon-clock" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="M12 6.5 V12 L15.5 14"></path>
+    </symbol>
+
+    <!-- Close X — dialogs -->
+    <symbol id="icon-x" viewBox="0 0 24 24">
+      <path d="M6 6 L18 18"></path>
+      <path d="M18 6 L6 18"></path>
+    </symbol>
+
+    <!-- Plus — add boundaries disclosure indicator -->
+    <symbol id="icon-plus" viewBox="0 0 24 24">
+      <path d="M12 5 V19"></path>
+      <path d="M5 12 H19"></path>
+    </symbol>
+
+  </defs>
+</svg>
