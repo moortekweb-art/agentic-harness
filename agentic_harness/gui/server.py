@@ -31,6 +31,9 @@ from agentic_harness.gui.api import (
 )
 
 
+MAX_REQUEST_BYTES = 1_048_576
+
+
 def serve_gui(
     *,
     host: str = "127.0.0.1",
@@ -104,6 +107,8 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
             parsed = urlparse(self.path)
             route = parsed.path
             if route == "/api/tasks/stream":
+                if not self._same_origin():
+                    return
                 if not self._allowed(parsed.query):
                     return
                 self._websocket_status()
@@ -140,9 +145,13 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             route = parsed.path
+            if not self._same_origin():
+                return
             if route.startswith("/api/") and not self._allowed(parsed.query):
                 return
             body = self._read_json()
+            if body is None:
+                return
             if route == "/api/tasks":
                 task = session.enrich(start_task(bridge, body), body)
                 session.record(task)
@@ -180,16 +189,59 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
         def log_message(self, format: str, *args: object) -> None:
             return
 
-        def _read_json(self) -> dict[str, Any]:
-            length = int(self.headers.get("Content-Length", "0") or "0")
+        def _read_json(self) -> dict[str, Any] | None:
+            content_type = self.headers.get("Content-Type", "").partition(";")[0].strip().lower()
+            if content_type != "application/json":
+                self._json(
+                    {"ok": False, "error": "application/json required"},
+                    status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                )
+                return None
+            try:
+                length = int(self.headers.get("Content-Length", ""))
+            except ValueError:
+                self._json(
+                    {"ok": False, "error": "valid Content-Length required"},
+                    status=HTTPStatus.LENGTH_REQUIRED,
+                )
+                return None
+            if length < 0:
+                self._json(
+                    {"ok": False, "error": "valid Content-Length required"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return None
+            if length > MAX_REQUEST_BYTES:
+                self._json(
+                    {"ok": False, "error": "request body too large"},
+                    status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                )
+                return None
             if length == 0:
                 return {}
-            raw = self.rfile.read(length).decode("utf-8")
+            try:
+                raw = self.rfile.read(length).decode("utf-8")
+            except UnicodeDecodeError:
+                self._json(
+                    {"ok": False, "error": "request body must be UTF-8 JSON"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return None
             try:
                 value = json.loads(raw)
             except json.JSONDecodeError:
-                return {}
-            return value if isinstance(value, dict) else {}
+                self._json(
+                    {"ok": False, "error": "request body must be valid JSON"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return None
+            if not isinstance(value, dict):
+                self._json(
+                    {"ok": False, "error": "request body must be a JSON object"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return None
+            return value
 
         def _json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
             encoded = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
@@ -212,6 +264,27 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
             if _token_matches(bearer, auth_token) or _token_matches(query_token, auth_token):
                 return True
             self._json({"ok": False, "error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+            return False
+
+        def _same_origin(self) -> bool:
+            fetch_site = self.headers.get("Sec-Fetch-Site", "").strip().lower()
+            if fetch_site and fetch_site not in {"same-origin", "none"}:
+                self._json(
+                    {"ok": False, "error": "cross-origin request rejected"},
+                    status=HTTPStatus.FORBIDDEN,
+                )
+                return False
+            origin = self.headers.get("Origin", "").strip()
+            if not origin:
+                return True
+            parsed = urlparse(origin)
+            host = self.headers.get("Host", "").strip().lower()
+            if parsed.scheme in {"http", "https"} and parsed.netloc.lower() == host:
+                return True
+            self._json(
+                {"ok": False, "error": "cross-origin request rejected"},
+                status=HTTPStatus.FORBIDDEN,
+            )
             return False
 
         def _websocket_status(self) -> None:
@@ -354,8 +427,8 @@ def _print_non_loopback_warning() -> None:
     print(
         "WARNING: non-loopback GUI binding exposes the local control API to other "
         "machines that can reach this host. Set AGENTIC_HARNESS_GUI_TOKEN before "
-        "launch when binding beyond 127.0.0.1, and do not treat bearer tokens as "
-        "complete browser-origin or CSRF protection."
+        "launch when binding beyond 127.0.0.1, and keep a firewall or private "
+        "network as the primary access boundary."
     )
 
 

@@ -22,6 +22,7 @@ _TECHNICAL_SUMMARY_TERMS = (
     "local-goal",
     "run_dir",
 )
+_PERMANENT_COMMAND_FAILURES = frozenset({2, 126, 127})
 
 
 def modes_payload() -> list[dict[str, Any]]:
@@ -38,26 +39,42 @@ def modes_payload() -> list[dict[str, Any]]:
 
 
 def health_payload(bridge: LocalGoalBridge) -> dict[str, Any]:
+    supervision = bridge.background_supervision()
     return {
         "ok": True,
         "app": "agentic-harness",
         "local_goal_available": bridge.available(),
         "local_goal_path": str(bridge.local_goal),
-        "readiness": readiness_payload(bridge),
+        "readiness": readiness_payload(bridge, supervision=supervision),
         "no_babysitting": {
-            "enabled": True,
+            "enabled": supervision.get("active") is True,
             "policy": "The worker should move safe work forward without repeated check-ins.",
             "human_review_statuses": ["needs_review", "blocked"],
+            "supervision": supervision,
         },
     }
 
 
-def readiness_payload(bridge: LocalGoalBridge) -> dict[str, Any]:
+def readiness_payload(
+    bridge: LocalGoalBridge,
+    *,
+    supervision: dict[str, object] | None = None,
+) -> dict[str, Any]:
     if not bridge.available():
         return _readiness_gate(
             "blocked",
             "The background worker is not installed or is not executable on this machine.",
             {"local_goal_path": str(bridge.local_goal)},
+        )
+    supervision = supervision or bridge.background_supervision()
+    if supervision.get("active") is not True:
+        return _readiness_gate(
+            "blocked",
+            str(
+                supervision.get("summary")
+                or "Background supervision could not be verified."
+            ),
+            {"background_supervision": supervision},
         )
     task = task_from_command_result(bridge.status(json_output=True), fallback_status="ready")
     gate = dict(task.get("readiness_gate", {}))
@@ -88,10 +105,15 @@ def start_task(
             advanced_details=health_payload(bridge),
         )
     readiness = readiness_payload(bridge)
-    if readiness.get("requires_review") is True:
+    if readiness.get("can_queue") is not True:
+        status = "needs_review" if readiness.get("requires_review") is True else "blocked"
         return _task(
-            status="needs_review",
-            summary=str(readiness.get("next_action") or "Review current work before starting another task."),
+            status=status,
+            summary=str(
+                readiness.get("summary")
+                or readiness.get("next_action")
+                or "Review current work before starting another task."
+            ),
             needs_human=True,
             advanced_details={"readiness": readiness},
         )
@@ -172,11 +194,16 @@ def task_from_command_result(result: CommandResult, *, fallback_status: str) -> 
     if parsed is not None:
         advanced_details["payload"] = parsed
     if result.returncode != 0:
+        permanent = result.returncode in _PERMANENT_COMMAND_FAILURES
         return _task(
-            status="blocked",
+            status="blocked" if permanent else "checking",
             summary=_clean_summary(result.stderr or result.stdout or "The task could not move forward."),
-            needs_human=True,
-            advanced_details=advanced_details,
+            needs_human=permanent,
+            advanced_details={
+                **advanced_details,
+                "permanent_error": permanent,
+                "transient_error": not permanent,
+            },
         )
     status = _status_from_payload(parsed, fallback_status=fallback_status)
     summary = _summary_from_payload(parsed, result.stdout, fallback_status=status)
@@ -288,19 +315,21 @@ def _readiness_gate(status: str, summary: str, details: dict[str, Any]) -> dict[
             run_dir = active_goal.get("run_dir")
             active_run_dir = run_dir if isinstance(run_dir, str) else ""
     requires_review = status == "needs_review"
-    can_start = status not in {"needs_review", "blocked"}
+    can_start = status in {"ready", "done", "stopped"}
+    can_queue = status not in {"needs_review", "blocked"}
     if requires_review:
         next_action = "Review or continue the current work before starting another task."
     elif status == "blocked":
         next_action = "Resolve the blocker before starting another task."
     elif status in {"working", "checking", "starting"}:
-        next_action = "Work is already active. You can check now or move it forward."
+        next_action = "Background supervisor owns the active work; no routine action is needed."
     else:
         next_action = "Ready to start a task."
     return {
         "state": status,
         "label": _label_for_status(status),
         "can_start": can_start,
+        "can_queue": can_queue,
         "requires_review": requires_review,
         "production_ready": status in {"ready", "done"},
         "summary": summary,
@@ -353,6 +382,10 @@ def _status_from_payload(payload: dict[str, Any] | None, *, fallback_status: str
     if payload.get("active") is False or payload.get("active_goal") is None and "active_goal" in payload:
         return "ready"
 
+    recovery_status = _recovery_status(payload)
+    if recovery_status:
+        return recovery_status
+
     classification = _payload_classification(payload)
     if classification:
         return classification
@@ -381,6 +414,22 @@ def _status_from_payload(payload: dict[str, Any] | None, *, fallback_status: str
     if any(marker in text for marker in ('"done"', '"complete"', '"completed"')):
         return "done"
     return "working"
+
+
+def _recovery_status(payload: dict[str, Any]) -> str:
+    recovery = payload.get("recovery_block")
+    recovery = recovery if isinstance(recovery, dict) else {}
+    if payload.get("hard_blocked") is True or recovery.get("operator_intervention_required") is True:
+        return "blocked"
+    runtime = payload.get("runtime")
+    loop_state = runtime.get("loop_state") if isinstance(runtime, dict) else None
+    loop_state = loop_state if isinstance(loop_state, dict) else {}
+    loop_status = str(loop_state.get("status") or "").strip().lower()
+    active_goal = payload.get("active_goal")
+    accepted = active_goal.get("accepted") if isinstance(active_goal, dict) else None
+    if loop_status in {"stopped_incomplete", "needs_attention"} and accepted is not True:
+        return "checking"
+    return ""
 
 
 def _payload_classification(payload: dict[str, Any]) -> str:
@@ -426,6 +475,19 @@ def _summary_from_payload(
     if payload:
         if _payload_is_accepted(payload):
             return "Previous work is accepted. Ready for the next task."
+        recovery_status = _recovery_status(payload)
+        if recovery_status == "checking":
+            return (
+                "The previous run stopped before completion. Background supervision is "
+                "continuing recovery; no routine action is needed."
+            )
+        if recovery_status == "blocked":
+            recovery = payload.get("recovery_block")
+            if isinstance(recovery, dict):
+                reason = recovery.get("recovery_block_reason")
+                if isinstance(reason, str) and reason.strip():
+                    return _human_summary(_clean_summary(reason), "blocked")
+            return "The same blocker repeated without progress and now needs a decision."
         recommended = _nested_string(payload, ("capabilities", "current_state", "recommended_action"))
         if recommended:
             return _human_summary(_clean_summary(recommended), fallback_status)

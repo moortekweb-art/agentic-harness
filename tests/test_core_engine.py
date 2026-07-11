@@ -345,6 +345,7 @@ def test_deterministic_reviewer_reports_typed_criteria() -> None:
             "description": "Goal must have text.",
             "passed": True,
             "message": "objective is present",
+            "independent": True,
         }
     ]
 

@@ -19,6 +19,7 @@ from agentic_harness.adapters.github_actions import GitHubActionsAdapter
 from agentic_harness.adapters.local_llm import LocalLLMAdapter
 from agentic_harness.adapters.shell import ShellWorker
 from agentic_harness.adapters.tmux import TmuxWorker
+from agentic_harness.core.autonomy import AutonomousRunner, AutonomyPolicy
 from agentic_harness.core.config import (
     CONFIG_DIR,
     CONFIG_NAME,
@@ -30,7 +31,6 @@ from agentic_harness.core.config import (
 )
 from agentic_harness.core.demos import create_demo, demo_names
 from agentic_harness.core.errors import ConfigError, HarnessError
-from agentic_harness.core.errors import GoalConflictError, NoActiveGoalError
 from agentic_harness.core.local_goal_bridge import (
     CommandResult,
     DOC_ROOT_ENV,
@@ -118,7 +118,11 @@ def build_parser() -> argparse.ArgumentParser:
     easy_do.add_argument("--safe-area", action="append", default=[])
     easy_do.add_argument("--check", action="append", default=[])
     easy_do.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
-    easy_do.add_argument("--watch", action="store_true", help="Run one follow-up check after starting.")
+    easy_do.add_argument(
+        "--watch",
+        action="store_true",
+        help="Run one immediate diagnostic monitor pass after starting.",
+    )
     work = sub.add_parser("work", help="Interactive no-jargon mode picker")
     work.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
     gui = sub.add_parser("gui", help="Open the local browser app")
@@ -134,7 +138,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("modes", help="Explain the four human work modes")
     easy_check = sub.add_parser("check", help="Show what the background worker is doing")
     easy_check.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
-    easy_watch = sub.add_parser("watch", help="Ask the harness to move current work forward once")
+    easy_watch = sub.add_parser(
+        "watch",
+        help="Run one diagnostic monitor pass; background supervision normally owns this",
+    )
     easy_watch.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
     popos = sub.add_parser("setup", help="Show simple Linux/Ubuntu setup and runtime checks")
     popos.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
@@ -149,7 +156,11 @@ def build_parser() -> argparse.ArgumentParser:
     mode3a_run.add_argument("--verify", action="append", default=[])
     mode3a_run.add_argument("--guardrail", action="append", default=[])
     mode3a_run.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
-    mode3a_run.add_argument("--monitor", action="store_true", help="Run one monitor pass after queueing.")
+    mode3a_run.add_argument(
+        "--monitor",
+        action="store_true",
+        help="Run one immediate diagnostic monitor pass after queueing.",
+    )
     mode3a_run.add_argument("--json", action="store_true", help="Print raw local-goal JSON output.")
     mode3a_status = sub.add_parser("mode3a-status", help="Show Mode 3A/local-goal status")
     mode3a_status.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
@@ -191,13 +202,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_recipe.add_argument(
         "--until-done",
         action="store_true",
-        help="Retry failed worker attempts up to --max-attempts.",
+        help="Continue until done or one no-progress blocker repeats --max-attempts times.",
     )
     run_recipe.add_argument(
         "--max-attempts",
         type=int,
         default=3,
-        help="Maximum worker attempts with --until-done. Default: 3.",
+        help="Consecutive identical no-progress blockers before stopping. Default: 3.",
     )
     for recipe_name in sorted(RECIPE_COMMANDS):
         recipe_cmd = sub.add_parser(recipe_name, help=f"Run the built-in {recipe_name} recipe")
@@ -206,13 +217,13 @@ def build_parser() -> argparse.ArgumentParser:
         recipe_cmd.add_argument(
             "--until-done",
             action="store_true",
-            help="Retry failed worker attempts up to --max-attempts.",
+            help="Continue until done or one no-progress blocker repeats --max-attempts times.",
         )
         recipe_cmd.add_argument(
             "--max-attempts",
             type=int,
             default=3,
-            help="Maximum worker attempts with --until-done. Default: 3.",
+            help="Consecutive identical no-progress blockers before stopping. Default: 3.",
         )
     sub.add_parser("report", help="Show a plain-language status report")
     start = sub.add_parser("start", help="Start a goal")
@@ -222,16 +233,28 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--json", action="store_true", help="Print the final goal JSON.")
     drive = sub.add_parser(
         "run-until-done",
-        help="Start or resume a goal and keep retrying failed attempts up to a limit",
+        help="Start or resume a goal and continue while meaningful progress is possible",
     )
     drive.add_argument("objective", nargs="?", help="Objective to start if no goal exists.")
     drive.add_argument(
         "--max-attempts",
         type=int,
         default=3,
-        help="Maximum worker attempts before stopping. Default: 3.",
+        help="Consecutive identical no-progress blockers before stopping. Default: 3.",
     )
     drive.add_argument("--json", action="store_true", help="Print the final goal JSON.")
+    goal_cmd = sub.add_parser(
+        "goal",
+        help="Start or resume an evidence-driven autonomous goal",
+    )
+    goal_cmd.add_argument("objective", nargs="?", help="Full objective to start, or omit to resume.")
+    goal_cmd.add_argument(
+        "--blocker-limit",
+        type=int,
+        default=3,
+        help="Consecutive identical no-progress blockers before human review. Default: 3.",
+    )
+    goal_cmd.add_argument("--json", action="store_true", help="Print the final goal JSON.")
     status = sub.add_parser("status", help="Show current goal state")
     status.add_argument(
         "--format",
@@ -368,7 +391,9 @@ def main(argv: list[str] | None = None) -> int:
 
     initialized_config: tuple[Path, str] | None = None
     try:
-        if args.command == "run" or (args.command == "run-until-done" and args.objective):
+        if args.command == "run" or (
+            args.command in {"run-until-done", "goal"} and args.objective
+        ):
             initialized_config = ensure_execution_config(project_dir)
         supervisor = build_supervisor(project_dir)
     except ConfigError as exc:
@@ -403,6 +428,28 @@ def main(argv: list[str] | None = None) -> int:
                 objective=args.objective,
                 max_attempts=args.max_attempts,
             )
+            goal, report_path = write_goal_report(supervisor, project_dir, goal)
+            if args.json:
+                print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            else:
+                if initialized_config is not None:
+                    path, tool = initialized_config
+                    print(format_init_text(path, tool))
+                changes = workspace_change_summary(
+                    project_dir,
+                    goal.metadata.get("workspace_snapshot"),
+                )
+                print(format_report_text(goal, report_path=report_path, workspace_changes=changes))
+            return 0 if goal.status is GoalStatus.DONE else 1
+        if args.command == "goal":
+            try:
+                policy = AutonomyPolicy(
+                    repeated_blocker_limit=args.blocker_limit,
+                    require_completion_claim=True,
+                )
+            except ValueError as exc:
+                raise ConfigError(str(exc)) from exc
+            goal = AutonomousRunner(supervisor, policy=policy).run(args.objective)
             goal, report_path = write_goal_report(supervisor, project_dir, goal)
             if args.json:
                 print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
@@ -490,36 +537,11 @@ def run_until_done(
 ) -> Goal:
     if max_attempts < 1:
         raise ConfigError("--max-attempts must be at least 1")
-    goal = supervisor.status()
-    if goal is None:
-        if not objective:
-            raise NoActiveGoalError("no active goal; provide an objective to start one")
-        goal = supervisor.start(objective)
-    elif objective and goal.status not in {GoalStatus.DONE, GoalStatus.FAILED}:
-        raise GoalConflictError(
-            f"active goal {goal.id} is {goal.status}; finish it before starting another"
-        )
-    elif objective and goal.status in {GoalStatus.DONE, GoalStatus.FAILED}:
-        goal = supervisor.start(objective)
-
-    attempts = 0
-    while attempts < max_attempts:
-        if goal.status is GoalStatus.DONE:
-            return goal
-        if goal.status is GoalStatus.FAILED:
-            goal = supervisor.restart()
-        if goal.status in {GoalStatus.PLANNING, GoalStatus.IN_PROGRESS}:
-            attempts += 1
-            goal = supervisor.continue_goal()
-            if goal.status is GoalStatus.FAILED:
-                continue
-        if goal.status is GoalStatus.REVIEW:
-            goal = supervisor.review()
-            if goal.status is GoalStatus.FAILED:
-                continue
-        if goal.status is GoalStatus.DONE:
-            return goal
-    return goal
+    policy = AutonomyPolicy(
+        repeated_blocker_limit=max_attempts,
+        require_completion_claim=False,
+    )
+    return AutonomousRunner(supervisor, policy=policy).run(objective)
 
 
 def run_mode3a_command(args: argparse.Namespace) -> int:
@@ -537,6 +559,11 @@ def run_mode3a_command(args: argparse.Namespace) -> int:
                 sort_keys=True,
             )
         )
+        return 2
+    supervision = bridge.background_supervision()
+    if supervision.get("active") is not True:
+        print("Mode 3A task was not queued because unattended supervision is unavailable.")
+        print(str(supervision.get("summary") or "Background watcher could not be verified."))
         return 2
     try:
         result = bridge.enqueue_mode3a(
@@ -556,8 +583,8 @@ def run_mode3a_command(args: argparse.Namespace) -> int:
     else:
         print("Mode 3A task queued.")
         print(format_command_result(result))
-        print("Next: agentic-harness mode3a-status")
-        print("Monitor: agentic-harness mode3a-monitor")
+        print("Background supervisor owns continuation, repair, review, and acceptance.")
+        print("You can close this. Status is available with agentic-harness check.")
     if result.returncode != 0:
         return result.returncode
     if args.monitor:
@@ -572,6 +599,12 @@ def run_easy_do_command(args: argparse.Namespace) -> int:
     if not bridge.available():
         print("I cannot find the background worker on this machine.")
         print(f"Expected: {bridge.local_goal}")
+        print(f"Next: {local_goal_setup_hint()}")
+        return 2
+    supervision = bridge.background_supervision()
+    if supervision.get("active") is not True:
+        print("I did not start the task because unattended supervision is unavailable.")
+        print(str(supervision.get("summary") or "Background watcher could not be verified."))
         print(f"Next: {local_goal_setup_hint()}")
         return 2
     try:
@@ -591,8 +624,8 @@ def run_easy_do_command(args: argparse.Namespace) -> int:
         return result.returncode
     print("Started background work.")
     print(_friendly_queue_summary(result.stdout))
-    print("Check it: agentic-harness check")
-    print("Move it forward: agentic-harness watch")
+    print("Background supervisor owns this task through completion or a true blocker.")
+    print("You can close this. Status is available any time with agentic-harness check.")
     if args.watch:
         watch_result = bridge.monitor()
         print(format_command_result(watch_result))
@@ -606,6 +639,11 @@ def run_interactive_work_command(args: argparse.Namespace) -> int:
         print("I cannot find the background worker on this machine.")
         print(f"Expected: {bridge.local_goal}")
         print(f"Next: {local_goal_setup_hint()}")
+        return 2
+    supervision = bridge.background_supervision()
+    if supervision.get("active") is not True:
+        print("I did not start work because unattended supervision is unavailable.")
+        print(str(supervision.get("summary") or "Background watcher could not be verified."))
         return 2
     print(format_human_modes())
     print("")
@@ -633,8 +671,8 @@ def run_interactive_work_command(args: argparse.Namespace) -> int:
     print("")
     print(f"Started: {mode.title}")
     print(_friendly_queue_summary(result.stdout))
-    print("Check it: agentic-harness check")
-    print("Move it forward: agentic-harness watch")
+    print("Background supervisor owns this task through completion or a true blocker.")
+    print("You can close this. Status is available any time with agentic-harness check.")
     return 0
 
 
@@ -1056,6 +1094,66 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
         return False
     if len(list((driver_project / CONFIG_DIR / "runs").glob("*/report.md"))) != 1:
         print(f"{stem} smoke failed: run-until-done did not write one report artifact")
+        return False
+    strict_project = smoke_root / "strict-goal"
+    strict_config_dir = strict_project / CONFIG_DIR
+    strict_config_dir.mkdir(parents=True)
+    strict_worker = strict_project / "worker.py"
+    strict_outcome = {
+        "status": "complete",
+        "summary": "installed strict goal verified",
+        "current_subgoal": "final audit",
+        "checkpoint": "verified",
+        "plan": [{"step": "smoke installed goal", "status": "done"}],
+        "requirements": [
+            {
+                "id": "installed-goal",
+                "status": "satisfied",
+                "evidence": ["independent review command passed"],
+            }
+        ],
+        "blockers": [],
+    }
+    strict_worker.write_text(
+        "import json\n"
+        f"outcome = {strict_outcome!r}\n"
+        'print("HARNESS_RESULT_JSON=" + json.dumps(outcome))\n',
+        encoding="utf-8",
+    )
+    (strict_config_dir / CONFIG_NAME).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "worker": {
+                    "type": "coding_agent",
+                    "coding_agent_command": [str(python_bin), str(strict_worker)],
+                },
+                "review": {
+                    "command": [
+                        str(python_bin),
+                        "-c",
+                        "print('independent review passed')",
+                    ]
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if not _run_release_step(
+        f"Smoke {stem} strict goal",
+        [
+            str(harness_bin),
+            "--project-dir",
+            str(strict_project),
+            "goal",
+            "verify the installed strict goal path",
+            "--json",
+        ],
+        cwd=tmp_root,
+        required_stdout='"accepted": true',
+    ):
         return False
     recipe_project = smoke_root / "recipe-until-done"
     recipe_config_dir = recipe_project / CONFIG_DIR
@@ -1599,17 +1697,21 @@ def format_start_here_text() -> str:
             "1. Check the install:",
             "   agentic-harness selftest",
             "",
-            "2. Run the packaged demo end to end:",
+            "2. Give the autonomous runner a complete plain-English objective:",
+            '   agentic-harness goal "fix the failing tests and verify the result"',
+            "   # It continues through progress and repair without routine prompts.",
+            "",
+            "3. Run the packaged demo end to end:",
             "   agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force",
             "",
-            "3. See what to do in this project:",
+            "4. See what to do in this project:",
             "   agentic-harness quickstart",
             "",
-            "4. Set up a backend and run a useful recipe:",
+            "5. Set up a backend and run a useful recipe:",
             "   agentic-harness fix-tests",
             "   # Creates config automatically if a supported backend is available.",
             "",
-            "5. Read the result:",
+            "6. Read the result:",
             "   agentic-harness status",
             "   agentic-harness report",
             "",
@@ -1617,7 +1719,7 @@ def format_start_here_text() -> str:
             "   agentic-harness run-recipe fix-tests --explain",
             "   agentic-harness recipes",
             "",
-            "No prompt design. No YAML editing. Beginners usually only need selftest, run-demo, quickstart, init, fix-tests, status, and report.",
+            "No prompt design or YAML editing. For long work, use goal; for the Pop-OS background lane, use do and check.",
         ]
     )
 

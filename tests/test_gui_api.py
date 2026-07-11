@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import socket
 import subprocess
@@ -19,6 +20,9 @@ from agentic_harness.gui.api import modes_payload, start_task, task_from_command
 from agentic_harness.gui.server import GuiPortUnavailable, create_gui_server, make_handler
 
 
+MAX_REQUEST_BYTES = 1_048_576
+
+
 GUI_TOKEN_ENV = "AGENTIC_HARNESS_GUI_TOKEN"
 
 
@@ -31,6 +35,108 @@ def test_gui_modes_use_human_labels() -> None:
         "Let GLM carry a long task",
         "Try experimental GLM",
     ]
+
+
+def test_default_gui_surface_has_no_manual_babysitting_control() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    html = (static_root / "index.html").read_text(encoding="utf-8")
+    javascript = (static_root / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="watchButton"' not in html
+    assert "Move forward" not in html
+    assert "Ctrl M" not in html
+    assert "watchButton.addEventListener" not in javascript
+    assert 'id="startButton" title="Start the task" disabled' in html
+    assert 'id="continueButton" hidden' in html
+    assert 'id="acceptButton" hidden' in html
+
+
+def test_gui_uses_local_lucide_icons_across_primary_controls() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    html = (static_root / "index.html").read_text(encoding="utf-8")
+    css = (static_root / "styles.css").read_text(encoding="utf-8")
+    javascript = (static_root / "app.js").read_text(encoding="utf-8")
+    favicon = (static_root / "favicon.svg").read_text(encoding="utf-8")
+    license_text = (static_root / "LUCIDE_LICENSE.txt").read_text(encoding="utf-8")
+
+    assert 'class="icon-sprite"' in html
+    assert "Lucide" in html
+    assert "Lucide" in favicon
+    assert "ISC License" in license_text
+    assert "The MIT License (MIT)" in license_text
+    assert '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />' in html
+    assert not (static_root / "icons.svg").exists()
+    assert 'id="icon-zap"' in html
+    assert 'id="icon-map"' in html
+    assert 'id="icon-rocket"' in html
+    assert 'id="icon-flask"' in html
+    assert html.count('href="#icon-') >= 12
+    assert 'local: "zap"' in javascript
+    assert 'guided: "map"' in javascript
+    assert 'cloud: "rocket"' in javascript
+    assert 'experimental: "flask"' in javascript
+    assert ".mode-card .mode-card-title" in css
+    assert ".mode-card .mode-card-note" in css
+
+
+def test_gui_desktop_task_area_absorbs_column_height_difference() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    html = (static_root / "index.html").read_text(encoding="utf-8")
+    css = (static_root / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="objective"' in html
+    assert ".workbench {" in css
+    assert "align-items: stretch" in css
+    assert "#objective" in css
+    assert "flex: 1 1 220px" in css
+    assert "min-height: 220px" in css
+
+
+def test_gui_status_encodings_are_labeled_and_idle_progress_is_hidden() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    html = (static_root / "index.html").read_text(encoding="utf-8")
+    css = (static_root / "styles.css").read_text(encoding="utf-8")
+    javascript = (static_root / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="statusIndicator"' in html
+    assert 'aria-label="Supervisor is running"' in html
+    assert 'title="Supervisor is running"' in html
+    assert 'id="progressGroup" class="progress-group" hidden' in html
+    assert 'role="progressbar"' in html
+    assert 'id="progressValue"' in html
+    assert 'class="loop-legend"' in html
+    assert "Current step" in html
+    assert "els.progressGroup.hidden = progress <= 0" in javascript
+    assert 'const statusDescription = status === "ready" ? "Supervisor is running"' in javascript
+    assert "[hidden] {" in css
+    assert "display: none !important" in css
+
+
+def test_gui_microcopy_and_footer_use_distinct_status_metadata() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    html = (static_root / "index.html").read_text(encoding="utf-8")
+    javascript = (static_root / "app.js").read_text(encoding="utf-8")
+
+    assert "Check now" not in html
+    assert "Refresh status" not in html
+    assert "Run checks" in html
+    assert 'class="status-footer"' in html
+    assert 'id="statusUpdated"' in html
+    assert 'id="statusContext"' not in html
+    assert "Last checked" in html
+    assert "formatLastCheckedAt" in javascript
+    assert "renderStatusFooter" in javascript
+
+
+def test_gui_cards_use_subtle_depth_tokens() -> None:
+    css = Path("agentic_harness/gui/static/styles.css").read_text(encoding="utf-8")
+    expected_shadow = "0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)"
+
+    assert "--panel-shadow:" in css
+    assert "--card-shadow:" in css
+    assert css.count(expected_shadow) >= 2
+    assert "box-shadow: var(--panel-shadow)" in css
+    assert "box-shadow: var(--card-shadow)" in css
 
 
 def test_task_from_command_result_maps_review_state() -> None:
@@ -166,19 +272,103 @@ def test_task_from_command_result_does_not_treat_accepted_false_as_done() -> Non
     assert task["agent_loop"]["stage"] == "Review"
 
 
-def test_task_from_command_result_maps_failed_command_to_blocked() -> None:
+def test_task_from_command_result_treats_retryable_failure_as_recoverable() -> None:
     result = CommandResult(
         args=("local-goal", "status"),
-        returncode=1,
+        returncode=124,
         stdout="",
-        stderr="missing backend",
+        stderr="backend timed out",
     )
 
     task = task_from_command_result(result, fallback_status="working")
 
+    assert task["status"] == "checking"
+    assert task["needs_human"] is False
+    assert task["summary"] == "backend timed out"
+    assert task["progress"] == 60
+
+
+def test_task_from_command_result_blocks_permanent_command_failures() -> None:
+    for returncode, error in ((2, "invalid request"), (127, "executable missing")):
+        result = CommandResult(
+            args=("local-goal", "status"),
+            returncode=returncode,
+            stdout="",
+            stderr=error,
+        )
+
+        task = task_from_command_result(result, fallback_status="working")
+
+        assert task["status"] == "blocked"
+        assert task["needs_human"] is True
+        assert task["readiness_gate"]["can_start"] is False
+        assert task["advanced_details"]["permanent_error"] is True
+
+
+def test_stopped_incomplete_run_remains_under_background_recovery() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "idle",
+                "active_goal": {"accepted": False, "objective": "finish the task"},
+                "runtime": {"loop_state": {"status": "stopped_incomplete"}},
+                "recovery_block": {
+                    "recovery_attempt_count": 1,
+                    "operator_intervention_required": False,
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="ready")
+
+    assert task["status"] == "checking"
+    assert task["needs_human"] is False
+    assert task["readiness_gate"]["can_start"] is False
+    assert "stopped before completion" in task["summary"]
+
+
+def test_repeated_hard_block_requires_human_after_recovery_threshold() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "idle",
+                "active_goal": {"accepted": False, "objective": "finish the task"},
+                "runtime": {"loop_state": {"status": "stopped_incomplete"}},
+                "recovery_block": {
+                    "recovery_attempt_count": 3,
+                    "operator_intervention_required": True,
+                    "recovery_block_reason": "provider unavailable",
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="ready")
+
     assert task["status"] == "blocked"
-    assert task["summary"] == "missing backend"
-    assert task["progress"] == 0
+    assert task["needs_human"] is True
+
+
+def test_working_task_is_owned_by_background_supervisor_not_startable() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout='{"active_goal": {"status": "running", "objective": "active work"}}',
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="ready")
+
+    assert task["status"] == "working"
+    assert task["readiness_gate"]["can_start"] is False
+    assert "Background supervisor" in task["readiness_gate"]["next_action"]
 
 
 def test_start_task_uses_bridge_human_goal() -> None:
@@ -187,6 +377,13 @@ def test_start_task_uses_bridge_human_goal() -> None:
     def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         command = args[0]
         calls.append(command)
+        if command[1:3] == ["capabilities", "--json"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                '{"supervision":{"watcher":{"timer_active":true,"state":"active"}}}',
+                "",
+            )
         return subprocess.CompletedProcess(command, 0, "queued_id=abc123\n", "")
 
     bridge = LocalGoalBridge(
@@ -207,7 +404,8 @@ def test_start_task_uses_bridge_human_goal() -> None:
 
     assert task["status"] == "starting"
     assert calls
-    assert calls[0][1] == "status"
+    assert calls[0][1] == "capabilities"
+    assert calls[1][1] == "status"
     assert calls[-1][1] == "enqueue"
 
 
@@ -218,6 +416,17 @@ def test_start_task_blocks_when_current_work_needs_review() -> None:
 
     assert task["status"] == "needs_review"
     assert task["readiness_gate"]["requires_review"] is True
+    assert bridge.commands == []
+
+
+def test_start_task_refuses_unowned_background_work() -> None:
+    bridge = InactiveSupervisionBridge()
+
+    task = start_task(bridge, {"mode": "cloud", "objective": "unowned task"})
+
+    assert task["status"] == "blocked"
+    assert task["needs_human"] is True
+    assert "supervision" in task["summary"].lower()
     assert bridge.commands == []
 
 
@@ -520,6 +729,78 @@ def test_gui_server_post_task_workflow_routes() -> None:
     ]
 
 
+def test_gui_server_accepts_same_origin_json_post() -> None:
+    bridge = FakeBridge()
+    with gui_server(bridge) as base_url:
+        created = post_json(
+            base_url,
+            "/api/tasks",
+            {"mode": "local", "objective": "same-origin task"},
+            origin=base_url,
+        )
+
+    assert created["status"] == "starting"
+    assert bridge.commands[0][:1] == ["quick-start"]
+
+
+def test_gui_server_rejects_cross_origin_task_post() -> None:
+    bridge = FakeBridge()
+    with gui_server(bridge) as base_url:
+        error = post_error(
+            base_url,
+            "/api/tasks",
+            b'{"mode":"local","objective":"cross-origin task"}',
+            headers={
+                "Content-Type": "text/plain",
+                "Origin": "https://attacker.example",
+            },
+        )
+
+    assert error.code == 403
+    assert error.payload == {"ok": False, "error": "cross-origin request rejected"}
+    assert bridge.commands == []
+
+
+def test_gui_server_rejects_non_json_task_post() -> None:
+    bridge = FakeBridge()
+    with gui_server(bridge) as base_url:
+        error = post_error(
+            base_url,
+            "/api/tasks",
+            b'{"mode":"local","objective":"wrong content type"}',
+            headers={"Content-Type": "text/plain"},
+        )
+
+    assert error.code == 415
+    assert error.payload == {"ok": False, "error": "application/json required"}
+    assert bridge.commands == []
+
+
+def test_gui_server_rejects_oversized_task_post() -> None:
+    bridge = FakeBridge()
+    with gui_server(bridge) as base_url:
+        host, port = base_url.removeprefix("http://").split(":")
+        with socket.create_connection((host, int(port)), timeout=3) as client:
+            client.sendall(
+                (
+                    "POST /api/tasks HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Content-Type: application/json\r\n"
+                    f"Content-Length: {MAX_REQUEST_BYTES + 1}\r\n"
+                    "Connection: close\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            client.shutdown(socket.SHUT_WR)
+            response = b""
+            while chunk := client.recv(4096):
+                response += chunk
+
+    assert b"413 Request Entity Too Large" in response
+    assert b"request body too large" in response
+    assert bridge.commands == []
+
+
 def test_gui_server_keeps_task_history_and_searches() -> None:
     bridge = FakeBridge()
     with gui_server(bridge) as base_url:
@@ -585,6 +866,30 @@ def test_gui_server_websocket_status_upgrade_sends_json_frame() -> None:
     assert b'"status": "working"' in response
 
 
+def test_gui_server_rejects_cross_origin_websocket() -> None:
+    websocket_key = base64.b64encode(b"cross-origin test nonce").decode("ascii")
+    with gui_server(FakeBridge()) as base_url:
+        host, port = base_url.removeprefix("http://").split(":")
+        with socket.create_connection((host, int(port)), timeout=3) as client:
+            client.sendall(
+                (
+                    "GET /api/tasks/stream HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Origin: https://attacker.example\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    f"Sec-WebSocket-Key: {websocket_key}\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            response = client.recv(4096)
+            response += client.recv(4096)
+
+    assert b"403 Forbidden" in response
+    assert b"cross-origin request rejected" in response
+
+
 
 class FakeBridge:
     local_goal = Path("/tmp/local-goal")
@@ -594,6 +899,14 @@ class FakeBridge:
 
     def available(self) -> bool:
         return True
+
+    def background_supervision(self) -> dict[str, object]:
+        return {
+            "active": True,
+            "timer_active": True,
+            "state": "active",
+            "summary": "Background watcher active",
+        }
 
     def start_human_goal(
         self,
@@ -658,6 +971,16 @@ class ReviewBridge(FakeBridge):
         )
 
 
+class InactiveSupervisionBridge(FakeBridge):
+    def background_supervision(self) -> dict[str, object]:
+        return {
+            "active": False,
+            "timer_active": False,
+            "state": "inactive",
+            "summary": "Background supervision is not active",
+        }
+
+
 @contextmanager
 def gui_server(bridge: FakeBridge) -> Iterator[str]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(bridge))  # type: ignore[arg-type]
@@ -703,16 +1026,46 @@ def get_http_error(base_url: str, path: str, *, token: str | None = None) -> Htt
     raise AssertionError("request should have failed")
 
 
-def post_json(base_url: str, path: str, payload: dict[str, object]) -> dict[str, object]:
+def post_json(
+    base_url: str,
+    path: str,
+    payload: dict[str, object],
+    *,
+    origin: str | None = None,
+) -> dict[str, object]:
+    headers = {"Content-Type": "application/json"}
+    if origin is not None:
+        headers["Origin"] = origin
     request = urllib.request.Request(
         base_url + path,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=3) as response:
         assert response.headers["Content-Type"].startswith("application/json")
         return json.loads(response.read().decode("utf-8"))
+
+
+def post_error(
+    base_url: str,
+    path: str,
+    body: bytes,
+    *,
+    headers: dict[str, str],
+) -> HttpErrorResult:
+    request = urllib.request.Request(
+        base_url + path,
+        data=body,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(request, timeout=3)
+    except urllib.error.HTTPError as exc:
+        payload = json.loads(exc.read().decode("utf-8"))
+        return HttpErrorResult(exc.code, payload)
+    raise AssertionError("request should have failed")
 
 
 

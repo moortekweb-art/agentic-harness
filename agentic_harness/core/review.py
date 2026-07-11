@@ -17,6 +17,7 @@ class ReviewCriterion:
     name: str
     check: CriterionCheck
     description: str = ""
+    independent: bool = True
 
 
 @dataclass
@@ -35,7 +36,13 @@ class DeterministicReviewer:
         self.criteria = (
             criteria
             if criteria is not None
-            else [ReviewCriterion("worker_success", self._worker_success)]
+            else [
+                ReviewCriterion(
+                    "worker_success",
+                    self._worker_success,
+                    independent=False,
+                )
+            ]
         )
 
     def review(self, goal: Goal) -> ReviewResult:
@@ -53,6 +60,7 @@ class DeterministicReviewer:
                     "description": criterion.description,
                     "passed": bool(passed),
                     "message": message,
+                    "independent": criterion.independent,
                 }
             )
         return ReviewResult(

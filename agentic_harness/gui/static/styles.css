@@ -9,7 +9,8 @@
   --accent-strong: #174d44;
   --warn: #a75322;
   --danger: #9a2f2f;
-  --shadow: 0 18px 50px rgba(31, 37, 40, 0.11);
+  --panel-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
 }
 
 :root[data-theme="dark"] {
@@ -23,11 +24,23 @@
   --accent-strong: #91d3c5;
   --warn: #d49a5c;
   --danger: #e07878;
-  --shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  --panel-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
 }
 
 * {
   box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
 }
 
 body {
@@ -44,6 +57,18 @@ input {
   font: inherit;
 }
 
+.icon {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .app-shell {
   width: min(1180px, calc(100vw - 32px));
   margin: 0 auto;
@@ -56,6 +81,30 @@ input {
   justify-content: space-between;
   gap: 18px;
   margin-bottom: 24px;
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  place-items: center;
+  border: 1px solid rgba(39, 105, 93, 0.25);
+  border-radius: 8px;
+  background: rgba(39, 105, 93, 0.08);
+  color: var(--accent-strong);
+  box-shadow: var(--card-shadow);
+}
+
+.brand-mark .icon {
+  width: 22px;
+  height: 22px;
 }
 
 .eyebrow {
@@ -89,6 +138,10 @@ h3 {
 }
 
 .health {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-width: 160px;
   padding: 9px 12px;
   border: 1px solid var(--line);
@@ -96,6 +149,7 @@ h3 {
   background: rgba(255, 255, 255, 0.72);
   color: var(--muted);
   text-align: center;
+  box-shadow: var(--card-shadow);
 }
 
 .top-actions {
@@ -119,7 +173,7 @@ h3 {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .start-panel,
@@ -127,10 +181,12 @@ h3 {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--panel-shadow);
 }
 
 .start-panel {
+  display: flex;
+  flex-direction: column;
   padding: 22px;
 }
 
@@ -164,6 +220,11 @@ textarea {
   outline: none;
 }
 
+#objective {
+  min-height: 220px;
+  flex: 1 1 220px;
+}
+
 input[type="search"] {
   width: 100%;
   min-height: 40px;
@@ -183,7 +244,8 @@ input[type="search"] {
   background: #252c30;
 }
 
-textarea:focus {
+textarea:focus,
+input[type="search"]:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(39, 105, 93, 0.14);
 }
@@ -196,6 +258,7 @@ textarea:focus {
 }
 
 .mode-card {
+  display: block;
   min-height: 138px;
   padding: 14px;
   border: 1px solid var(--line);
@@ -203,21 +266,50 @@ textarea:focus {
   background: #fbfbf8;
   cursor: pointer;
   text-align: left;
+  box-shadow: var(--card-shadow);
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.mode-card:hover {
+  box-shadow: var(--card-shadow);
 }
 
 .mode-card[aria-pressed="true"] {
   border-color: var(--accent);
   background: #eef7f3;
-  box-shadow: inset 0 0 0 1px var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent), var(--card-shadow);
 }
 
 :root[data-theme="dark"] .mode-card[aria-pressed="true"] {
   background: #203832;
 }
 
+.mode-card .mode-card-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 8px;
+  color: var(--ink);
+}
+
+.mode-card-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border-radius: 7px;
+  background: rgba(39, 105, 93, 0.09);
+  color: var(--accent-strong);
+}
+
+.mode-card-icon .icon {
+  width: 17px;
+  height: 17px;
+}
+
 .mode-card strong {
   display: block;
-  margin-bottom: 8px;
   font-size: 1rem;
 }
 
@@ -228,7 +320,21 @@ textarea:focus {
 }
 
 .mode-card small {
+  margin-top: 0;
+}
+
+.mode-card .mode-card-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   margin-top: 8px;
+}
+
+.mode-card-note .icon {
+  width: 13px;
+  height: 13px;
+  margin-top: 3px;
+  color: var(--accent-strong);
 }
 
 details {
@@ -241,6 +347,12 @@ summary {
   cursor: pointer;
   color: var(--accent-strong);
   font-weight: 700;
+}
+
+summary .icon {
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -3px;
 }
 
 .actions,
@@ -256,6 +368,10 @@ summary {
 }
 
 button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-height: 40px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -292,6 +408,7 @@ button.danger {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(39, 105, 93, 0.06);
+  box-shadow: var(--card-shadow);
 }
 
 .readiness-card.needs_review {
@@ -307,6 +424,37 @@ button.danger {
 .readiness-card p {
   margin: 6px 0 0;
   color: var(--muted);
+}
+
+.readiness-card h3 {
+  margin-top: 0;
+}
+
+.icon-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.icon-heading .icon {
+  color: var(--accent-strong);
+}
+
+.readiness-card .loop-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  font-size: 0.76rem;
+}
+
+.loop-marker {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(39, 105, 93, 0.13);
 }
 
 .readiness-card ol {
@@ -334,45 +482,75 @@ button:disabled {
   gap: 12px;
 }
 
-.status-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  background: var(--muted);
+.status-indicator {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(105, 113, 118, 0.1);
+  color: var(--muted);
 }
 
-.status-dot.ready {
-  background: var(--muted);
+.status-indicator .icon {
+  width: 19px;
+  height: 19px;
 }
 
-.status-dot.working,
-.status-dot.starting,
-.status-dot.checking {
-  background: var(--accent);
+.status-indicator.ready,
+.status-indicator.done {
+  background: rgba(59, 127, 57, 0.1);
+  color: #3b7f39;
 }
 
-.status-dot.needs_review {
-  background: var(--warn);
+.status-indicator.working,
+.status-indicator.starting,
+.status-indicator.checking {
+  background: rgba(39, 105, 93, 0.1);
+  color: var(--accent-strong);
 }
 
-.status-dot.blocked,
-.status-dot.stopped {
-  background: var(--danger);
+.status-indicator.needs_review {
+  background: rgba(167, 83, 34, 0.1);
+  color: var(--warn);
 }
 
-.status-dot.done {
-  background: #3b7f39;
+.status-indicator.blocked,
+.status-indicator.stopped {
+  background: rgba(154, 47, 47, 0.1);
+  color: var(--danger);
+}
+
+.status-indicator.working .icon,
+.status-indicator.starting .icon,
+.status-indicator.checking .icon,
+.health:not(.ok):not(.blocked):not(.review) .icon {
+  animation: spin 1.2s linear infinite;
 }
 
 .summary {
-  min-height: 90px;
+  min-height: 72px;
   margin: 18px 0 0;
   color: var(--muted);
 }
 
+.progress-group {
+  margin-top: 16px;
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .progress-track {
   height: 10px;
-  margin-top: 16px;
+  margin-top: 6px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -416,6 +594,24 @@ button:disabled {
   text-align: left;
 }
 
+.history-entry {
+  align-items: flex-start;
+}
+
+.history-entry > span {
+  display: grid;
+  gap: 2px;
+}
+
+.history-entry strong,
+.history-entry small {
+  display: block;
+}
+
+.history-entry small {
+  color: var(--muted);
+}
+
 .advanced pre {
   max-height: 300px;
   overflow: auto;
@@ -432,7 +628,7 @@ dialog {
   border-radius: 8px;
   background: var(--panel);
   color: var(--ink);
-  box-shadow: var(--shadow);
+  box-shadow: var(--panel-shadow);
 }
 
 dialog::backdrop {
@@ -464,6 +660,41 @@ dialog::backdrop {
   color: var(--muted);
 }
 
+.status-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.status-footer > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
 @media (max-width: 860px) {
   .topbar,
   .workbench {
@@ -478,6 +709,14 @@ dialog::backdrop {
 
   .health {
     text-align: left;
+  }
+
+  .start-panel {
+    display: block;
+  }
+
+  #objective {
+    min-height: 180px;
   }
 
   .status-panel {
@@ -499,5 +738,15 @@ dialog::backdrop {
   .start-panel,
   .status-panel {
     padding: 16px;
+  }
+
+  .actions:not(.compact) > button,
+  .quick-actions > button {
+    flex: 1 1 calc(50% - 5px);
+  }
+
+  .status-footer {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

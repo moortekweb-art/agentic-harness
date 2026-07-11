@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -88,6 +89,7 @@ class LocalGoalBridge:
     doc_root: str | Path | None = None
     local_goal: str | Path | None = None
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
+    timeout_seconds: int = 120
 
     def __post_init__(self) -> None:
         resolved_doc_root = resolve_doc_root(self.doc_root)
@@ -106,13 +108,29 @@ class LocalGoalBridge:
     def run(self, args: Sequence[str]) -> CommandResult:
         assert self.local_goal is not None
         command = [str(self.local_goal), *args]
-        completed = self.runner(
-            command,
-            cwd=str(self.doc_root),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        try:
+            completed = self.runner(
+                command,
+                cwd=str(self.doc_root),
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=self.timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return CommandResult(
+                args=tuple(command),
+                returncode=124,
+                stdout=str(exc.stdout or ""),
+                stderr=f"background worker command timed out after {self.timeout_seconds}s",
+            )
+        except OSError as exc:
+            return CommandResult(
+                args=tuple(command),
+                returncode=127,
+                stdout="",
+                stderr=str(exc),
+            )
         return CommandResult(
             args=tuple(command),
             returncode=completed.returncode,
@@ -199,6 +217,42 @@ class LocalGoalBridge:
             args.append("--json")
         return self.run(args)
 
+    def background_supervision(self) -> dict[str, object]:
+        result = self.run(["capabilities", "--json"])
+        payload: dict[str, object] = {}
+        if result.returncode == 0:
+            try:
+                parsed = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                payload = parsed
+        capabilities = payload.get("capabilities")
+        if not isinstance(capabilities, dict):
+            capabilities = payload
+        supervision = capabilities.get("supervision")
+        watcher = supervision.get("watcher") if isinstance(supervision, dict) else None
+        watcher = watcher if isinstance(watcher, dict) else {}
+        active = (
+            result.returncode == 0
+            and watcher.get("timer_active") is True
+            and str(watcher.get("state") or "").lower() == "active"
+        )
+        return {
+            "active": active,
+            "timer_active": watcher.get("timer_active") is True,
+            "state": str(watcher.get("state") or "unknown"),
+            "summary": str(
+                watcher.get("summary")
+                or (
+                    "Background supervisor is active."
+                    if active
+                    else "Background supervisor could not be verified."
+                )
+            ),
+            "returncode": result.returncode,
+        }
+
 
 def build_mode3a_goal(options: Mode3AGoalOptions) -> str:
     objective = options.objective.strip()
@@ -230,6 +284,14 @@ def build_mode3a_goal(options: Mode3AGoalOptions) -> str:
             "Executor worker: opencode-glm-build",
             "Boundary: bounded cloud goal, reviewable artifacts, deterministic review/acceptance gates.",
             "",
+            "Autonomy contract:",
+            "- Preserve the full original objective across every continuation and recovery.",
+            "- Derive and persist a concrete plan, current subgoal, checkpoints, and requirement list.",
+            "- Inspect current files and external state before relying on an earlier claim.",
+            "- Treat failed checks and review findings as repair input while meaningful progress is possible.",
+            "- Ask for human input only when the same blocking condition repeats in three consecutive supervisor cycles without progress.",
+            "- Do not mark the goal complete because time, attempts, context, or a budget was consumed.",
+            "",
             "Goal:",
             objective,
             "",
@@ -237,10 +299,12 @@ def build_mode3a_goal(options: Mode3AGoalOptions) -> str:
             *[f"- {path}" for path in allowed_paths],
             "",
             "Done when:",
-            "- The requested task is implemented or an honest blocked report explains exactly why it cannot be.",
+            "- The requested task is fully implemented, not narrowed to an easier substitute.",
+            "- A requirement-by-requirement completion audit proves the original objective.",
             "- Changed files are listed.",
             "- Verification commands and results are recorded.",
-            "- The local supervisor can review and accept the result.",
+            "- The local supervisor independently reviews and accepts the result.",
+            "- A blocked outcome remains blocked and is never reported as successful completion.",
             "",
             "Verification:",
             *[f"- {command}" for command in verification],
@@ -327,6 +391,7 @@ def format_command_result(result: CommandResult) -> str:
 
 
 def format_popos_setup(bridge: LocalGoalBridge) -> str:
+    supervision = bridge.background_supervision()
     lines = [
         "Agentic Harness Linux/Ubuntu setup",
         "",
@@ -340,11 +405,10 @@ def format_popos_setup(bridge: LocalGoalBridge) -> str:
         "  agentic-harness selftest",
         "",
         "Run a GLM long-horizon task:",
-        '  agentic-harness mode3a-run "fix one small verified issue"',
+        '  agentic-harness do --mode cloud "fix one small verified issue"',
         "",
         "Useful commands:",
-        "  agentic-harness mode3a-status",
-        "  agentic-harness mode3a-monitor",
+        "  agentic-harness check",
         "  agentic-harness doctor",
         "",
         "Optional local-goal backend override:",
@@ -359,5 +423,7 @@ def format_popos_setup(bridge: LocalGoalBridge) -> str:
         "",
         f"Detected local-goal: {bridge.local_goal}",
         f"Detected local-goal usable: {bridge.available()}",
+        f"Background supervisor active: {supervision.get('active') is True}",
+        f"Background supervisor: {supervision.get('summary')}",
     ]
     return "\n".join(lines)

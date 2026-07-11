@@ -2,6 +2,25 @@ const STORAGE_KEY = "agentic-harness-gui-session";
 const THEME_KEY = "agentic-harness-theme";
 const TOKEN_KEY = "agentic-harness-gui-session-token";
 const TOKEN_PARAM = "token";
+const ICON_PREFIX = "#icon-";
+
+const MODE_ICONS = Object.freeze({
+  local: "zap",
+  guided: "map",
+  cloud: "rocket",
+  experimental: "flask",
+});
+
+const STATUS_ICONS = Object.freeze({
+  ready: "circle-check",
+  starting: "loader-circle",
+  working: "loader-circle",
+  checking: "loader-circle",
+  needs_review: "circle-alert",
+  done: "circle-check",
+  blocked: "octagon-alert",
+  stopped: "circle-stop",
+});
 
 const state = {
   mode: "guided",
@@ -12,27 +31,37 @@ const state = {
   socket: null,
   authToken: "",
   authPromptPromise: null,
+  readiness: {},
+  supervisorActive: false,
+  canStart: false,
+  currentTask: null,
 };
 
 const els = {
   health: document.getElementById("health"),
+  healthText: document.getElementById("healthText"),
+  healthIcon: document.getElementById("healthIcon"),
   modes: document.getElementById("modes"),
   objective: document.getElementById("objective"),
   safeAreas: document.getElementById("safeAreas"),
   checks: document.getElementById("checks"),
   startButton: document.getElementById("startButton"),
   checkButton: document.getElementById("checkButton"),
-  watchButton: document.getElementById("watchButton"),
   continueButton: document.getElementById("continueButton"),
   acceptButton: document.getElementById("acceptButton"),
   stopButton: document.getElementById("stopButton"),
   undoButton: document.getElementById("undoButton"),
   redoButton: document.getElementById("redoButton"),
   themeButton: document.getElementById("themeButton"),
+  themeIcon: document.getElementById("themeIcon"),
   shortcutsButton: document.getElementById("shortcutsButton"),
   shortcutsDialog: document.getElementById("shortcutsDialog"),
   statusLabel: document.getElementById("statusLabel"),
-  statusDot: document.getElementById("statusDot"),
+  statusIndicator: document.getElementById("statusIndicator"),
+  statusIcon: document.getElementById("statusIcon"),
+  progressGroup: document.getElementById("progressGroup"),
+  progressTrack: document.getElementById("progressTrack"),
+  progressValue: document.getElementById("progressValue"),
   progressBar: document.getElementById("progressBar"),
   summary: document.getElementById("summary"),
   readinessCard: document.getElementById("readinessCard"),
@@ -46,8 +75,18 @@ const els = {
   historySearch: document.getElementById("historySearch"),
   historyList: document.getElementById("historyList"),
   exportButton: document.getElementById("exportButton"),
+  exportButtonLabel: document.getElementById("exportButtonLabel"),
   importButton: document.getElementById("importButton"),
+  statusUpdated: document.getElementById("statusUpdated"),
 };
+
+function iconHref(name) {
+  return `${ICON_PREFIX}${name}`;
+}
+
+function iconMarkup(name) {
+  return `<svg class="icon" aria-hidden="true"><use href="${iconHref(name)}"></use></svg>`;
+}
 
 function captureTokenFromUrl() {
   const params = new URLSearchParams(window.location.search);
@@ -104,12 +143,12 @@ function showTokenDialog() {
       <form method="dialog">
         <div class="dialog-head">
           <h2>Access token required</h2>
-          <button value="cancel" title="Cancel">Cancel</button>
+          <button value="cancel" title="Cancel">${iconMarkup("x")}<span>Cancel</span></button>
         </div>
         <label class="field-label" for="authTokenInput">Token</label>
         <input id="authTokenInput" name="authTokenInput" type="password" autocomplete="off" />
         <div class="actions compact">
-          <button class="primary" value="confirm">Continue</button>
+          <button class="primary" value="confirm">${iconMarkup("arrow-right")}<span>Continue</span></button>
         </div>
       </form>
     `;
@@ -144,13 +183,13 @@ function setBusy(isBusy) {
   [
     els.startButton,
     els.checkButton,
-    els.watchButton,
     els.continueButton,
     els.acceptButton,
     els.stopButton,
   ].forEach((button) => {
     button.disabled = isBusy;
   });
+  els.startButton.disabled = isBusy || !state.canStart;
 }
 
 function formSnapshot() {
@@ -205,9 +244,15 @@ function renderModes(modes) {
     card.setAttribute("aria-pressed", String(mode.key === state.mode));
     card.title = mode.caution || mode.best_for || mode.label;
     card.innerHTML = `
-      <strong>${escapeHtml(mode.label)}</strong>
+      <span class="mode-card-title">
+        <span class="mode-card-icon">${iconMarkup(MODE_ICONS[mode.key] || "workflow")}</span>
+        <strong>${escapeHtml(mode.label)}</strong>
+      </span>
       <span>${escapeHtml(mode.best_for)}</span>
-      <small>${escapeHtml(mode.caution)}</small>
+      <span class="mode-card-note">
+        ${iconMarkup("shield-check")}
+        <small>${escapeHtml(mode.caution)}</small>
+      </span>
     `;
     card.addEventListener("click", () => {
       pushUndo();
@@ -217,14 +262,25 @@ function renderModes(modes) {
     });
     els.modes.appendChild(card);
   });
+  if (state.currentTask) renderStatusFooter(state.currentTask);
 }
 
 function renderTask(task) {
   const status = task.status || "working";
-  const progress = Number(task.progress || 0);
-  els.statusLabel.textContent = task.status_label || "Working";
-  els.statusDot.className = `status-dot ${status}`;
-  els.progressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  const rawProgress = Number(task.progress || 0);
+  const progress = Number.isFinite(rawProgress) ? Math.max(0, Math.min(100, rawProgress)) : 0;
+  const statusLabel = task.status_label || "Working";
+  const statusDescription = status === "ready" ? "Supervisor is running" : `Status: ${statusLabel}`;
+  state.currentTask = task;
+  els.statusLabel.textContent = statusLabel;
+  els.statusIndicator.className = `status-indicator ${status}`;
+  els.statusIndicator.setAttribute("aria-label", statusDescription);
+  els.statusIndicator.title = statusDescription;
+  els.statusIcon.setAttribute("href", iconHref(STATUS_ICONS[status] || "circle-alert"));
+  els.progressGroup.hidden = progress <= 0;
+  els.progressTrack.setAttribute("aria-valuenow", String(progress));
+  els.progressValue.textContent = `${progress}%`;
+  els.progressBar.style.width = `${progress}%`;
   els.summary.textContent = task.summary || "No detail returned yet.";
   renderReadiness({
     ...(task.readiness_gate || {}),
@@ -234,9 +290,16 @@ function renderTask(task) {
   renderList(els.verification, task.verification || []);
   renderArtifacts(task.artifacts || []);
   els.advancedDetails.textContent = JSON.stringify(task.advanced_details || task, null, 2);
+  els.continueButton.hidden = !["needs_review", "blocked"].includes(status);
+  els.acceptButton.hidden = status !== "needs_review";
+  els.stopButton.hidden = !["starting", "working", "checking"].includes(status);
+  renderStatusFooter(task);
 }
 
 function renderReadiness(readiness = {}) {
+  state.readiness = readiness;
+  state.canStart = state.supervisorActive && readiness.can_start !== false;
+  els.startButton.disabled = state.busy || !state.canStart;
   const stateName = readiness.state || "ready";
   els.readinessCard.className = `readiness-card ${stateName}`;
   els.readinessStatus.textContent = readiness.requires_review
@@ -252,7 +315,10 @@ function renderReadiness(readiness = {}) {
   steps.forEach((step) => {
     const item = document.createElement("li");
     item.textContent = step;
-    if (step === current) item.className = "active";
+    if (step === current) {
+      item.className = "active";
+      item.setAttribute("aria-current", "step");
+    }
     els.agentLoop.appendChild(item);
   });
 }
@@ -298,9 +364,19 @@ function renderHistory(tasks) {
   tasks.forEach((task) => {
     const item = document.createElement("li");
     const button = document.createElement("button");
+    const title = task.human_title || task.summary || "Untitled task";
+    const status = task.status_label || task.status || "Task";
+    const updatedAt = task.metadata && task.metadata.updated_at;
     button.type = "button";
-    button.textContent = task.summary || task.human_title || "Untitled task";
-    button.title = task.status_label || task.status || "Task";
+    button.className = "history-entry";
+    button.innerHTML = `
+      ${iconMarkup("clock")}
+      <span>
+        <strong>${escapeHtml(title)}</strong>
+        <small>${escapeHtml(`${status} · ${formatLastCheckedAt(updatedAt)}`)}</small>
+      </span>
+    `;
+    button.title = status;
     button.addEventListener("click", () => renderTask(task));
     item.appendChild(button);
     els.historyList.appendChild(item);
@@ -310,16 +386,27 @@ function renderHistory(tasks) {
 async function refreshHealth() {
   const health = await api("/api/health");
   const readiness = health.readiness || {};
-  els.health.textContent = readiness.requires_review
+  const supervised = health.no_babysitting?.enabled === true;
+  state.supervisorActive = supervised;
+  const healthLabel = readiness.requires_review
     ? "Needs review"
-    : health.local_goal_available
-      ? "Worker ready"
-      : "Worker missing";
+    : supervised
+      ? "Supervisor active"
+      : "Supervisor unavailable";
+  els.healthText.textContent = healthLabel;
   els.health.className = readiness.requires_review
     ? "health review"
-    : health.local_goal_available
+    : supervised && health.local_goal_available
       ? "health ok"
       : "health blocked";
+  const healthIcon = readiness.requires_review
+    ? "circle-alert"
+    : supervised && health.local_goal_available
+      ? "shield-check"
+      : "octagon-alert";
+  els.healthIcon.setAttribute("href", iconHref(healthIcon));
+  els.health.setAttribute("aria-label", healthLabel);
+  els.health.title = healthLabel;
   renderReadiness(readiness);
 }
 
@@ -340,6 +427,7 @@ async function refreshHistory() {
 }
 
 async function startWork() {
+  if (!state.canStart) return;
   const objective = els.objective.value.trim();
   await runAction(async () => {
     const task = await api("/api/tasks", {
@@ -407,6 +495,9 @@ function connectStatusStream() {
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem(THEME_KEY, theme);
+  const useLightTheme = theme === "dark";
+  els.themeIcon.setAttribute("href", iconHref(useLightTheme ? "sun" : "moon"));
+  els.themeButton.title = useLightTheme ? "Use light theme" : "Use dark theme";
 }
 
 function toggleTheme() {
@@ -445,9 +536,9 @@ function restoreLocal() {
 async function exportSession() {
   const session = await api("/api/session");
   await navigator.clipboard.writeText(JSON.stringify(session, null, 2));
-  els.exportButton.textContent = "Copied";
+  els.exportButtonLabel.textContent = "Copied";
   window.setTimeout(() => {
-    els.exportButton.textContent = "Export";
+    els.exportButtonLabel.textContent = "Export";
   }, 1200);
 }
 
@@ -470,9 +561,6 @@ function handleShortcut(event) {
   } else if (event.key.toLowerCase() === "r") {
     event.preventDefault();
     runAction(refreshTask);
-  } else if (event.key.toLowerCase() === "m") {
-    event.preventDefault();
-    postAction("/api/tasks/current/watch");
   } else if (event.key.toLowerCase() === "k") {
     event.preventDefault();
     els.historySearch.focus();
@@ -497,9 +585,19 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function formatLastCheckedAt(value) {
+  const timestamp = value ? new Date(value) : new Date();
+  if (Number.isNaN(timestamp.getTime())) return "Last checked recently";
+  return `Last checked ${timestamp.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function renderStatusFooter(task) {
+  const metadata = task.metadata && typeof task.metadata === "object" ? task.metadata : {};
+  els.statusUpdated.textContent = formatLastCheckedAt(metadata.updated_at);
+}
+
 els.startButton.addEventListener("click", startWork);
 els.checkButton.addEventListener("click", () => runAction(refreshTask));
-els.watchButton.addEventListener("click", () => postAction("/api/tasks/current/watch"));
 els.continueButton.addEventListener("click", () => postAction("/api/tasks/current/continue"));
 els.acceptButton.addEventListener("click", () => postAction("/api/tasks/current/accept"));
 els.stopButton.addEventListener("click", () => postAction("/api/tasks/current/stop"));

@@ -18,7 +18,7 @@ Advanced details so the default surface stays readable.
 
 ## Shipped Interface
 
-![Agentic Harness v0.6.27 desktop interface](assets/agentic-harness-gui.png)
+![Agentic Harness v0.6.28 desktop interface](assets/agentic-harness-gui.png)
 
 The same workbench stacks into a single readable column at narrow widths. See
 the [mobile capture](assets/agentic-harness-gui-mobile.png).
@@ -80,7 +80,7 @@ multi-step wizard.
 - Plain-language task field.
 - Four visible mode cards.
 - Optional safe areas and expected checks.
-- Start, refresh, undo, and redo controls.
+- Start, Run checks, undo, and redo controls.
 - Readiness gate showing whether another task can begin.
 
 ### Active Work

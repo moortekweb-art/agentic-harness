@@ -26,6 +26,8 @@ class ArtifactStore:
         self.runs_dir = self.root / "runs"
         self.current_path = self.root / "current.json"
         self.lock_path = self.root / "state.lock"
+        self.autonomy_lock_path = self.root / "autonomy.lock"
+        self._autonomy_lease: object | None = None
 
     def init(self) -> None:
         self.runs_dir.mkdir(parents=True, exist_ok=True)
@@ -33,14 +35,39 @@ class ArtifactStore:
     @contextmanager
     def locked(self) -> Iterator[None]:
         """Acquire a non-blocking project-local state lock."""
+        with self._locked_path(
+            self.lock_path,
+            f"harness state is locked by another process: {self.lock_path}",
+        ):
+            yield
+
+    @contextmanager
+    def autonomy_locked(self) -> Iterator[object]:
+        """Lease autonomous goal decisions to one driver process."""
+        with self._locked_path(
+            self.autonomy_lock_path,
+            "autonomous driver is already active for this project: "
+            f"{self.autonomy_lock_path}",
+        ):
+            lease = object()
+            self._autonomy_lease = lease
+            try:
+                yield lease
+            finally:
+                if self._autonomy_lease is lease:
+                    self._autonomy_lease = None
+
+    def owns_autonomy_lease(self, lease: object | None) -> bool:
+        return lease is not None and lease is self._autonomy_lease
+
+    @contextmanager
+    def _locked_path(self, path: Path, conflict_message: str) -> Iterator[None]:
         self.root.mkdir(parents=True, exist_ok=True)
-        with self.lock_path.open("a+", encoding="utf-8") as handle:
+        with path.open("a+", encoding="utf-8") as handle:
             try:
                 self._lock_handle(handle)
             except (BlockingIOError, OSError) as exc:
-                raise StateLockError(
-                    f"harness state is locked by another process: {self.lock_path}"
-                ) from exc
+                raise StateLockError(conflict_message) from exc
             try:
                 yield
             finally:

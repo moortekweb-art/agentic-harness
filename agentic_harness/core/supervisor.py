@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from agentic_harness.core.artifacts import ArtifactStore
@@ -10,6 +12,7 @@ from agentic_harness.core.errors import (
     InvalidTransitionError,
     LoopGuardTripped,
     NoActiveGoalError,
+    StateLockError,
 )
 from agentic_harness.core.loop_guard import LoopGuard
 from agentic_harness.core.review import DeterministicReviewer
@@ -40,8 +43,8 @@ class Supervisor:
     def init(self) -> None:
         self.store.init()
 
-    def start(self, objective: str) -> Goal:
-        with self.store.locked():
+    def start(self, objective: str, *, _autonomy_lease: object | None = None) -> Goal:
+        with self._mutation_lease(_autonomy_lease), self.store.locked():
             self.init()
             active = self.status()
             if active is not None and active.status not in {
@@ -51,6 +54,7 @@ class Supervisor:
                 raise GoalConflictError(
                     f"active goal {active.id} is {active.status}; finish or fail it before starting another"
                 )
+            self.loop_guard.reset()
             goal = Goal(objective=objective)
             goal.metadata["workspace_snapshot"] = capture_workspace_snapshot(self.project_dir)
             goal.transition(GoalStatus.PLANNING, reason="goal started")
@@ -76,16 +80,22 @@ class Supervisor:
                 dur_str = f" ({duration / 3600:.1f}h)"
         return f"{goal.status.value}{dur_str}"
 
-    def write_report(self, content: str, *, name: str = "report.md") -> tuple[Goal, Path]:
+    def write_report(
+        self,
+        content: str,
+        *,
+        name: str = "report.md",
+        _autonomy_lease: object | None = None,
+    ) -> tuple[Goal, Path]:
         """Write a markdown report for the active goal and record it as an artifact."""
-        with self.store.locked():
+        with self._mutation_lease(_autonomy_lease), self.store.locked():
             goal = self._require_goal()
             report_path = self.store.write_report(goal, content, name=name)
             self.store.write_goal(goal)
             return goal, report_path
 
-    def continue_goal(self) -> Goal:
-        with self.store.locked():
+    def continue_goal(self, *, _autonomy_lease: object | None = None) -> Goal:
+        with self._mutation_lease(_autonomy_lease), self.store.locked():
             goal = self._require_goal()
             if goal.status is GoalStatus.PLANNING:
                 goal.transition(GoalStatus.IN_PROGRESS, reason="planning complete")
@@ -115,6 +125,7 @@ class Supervisor:
             goal.metadata["worker_success"] = result.success
             goal.metadata["worker_summary"] = result.summary
             goal.metadata["worker_returncode"] = result.returncode
+            goal.metadata["worker_outcome"] = dict(result.outcome)
             goal.artifacts.extend(path for path in result.artifacts if path not in goal.artifacts)
             goal.error = None if result.success else result.stderr or result.summary
             goal.transition(
@@ -124,8 +135,13 @@ class Supervisor:
             self.store.write_goal(goal)
             return goal
 
-    def review(self) -> Goal:
-        with self.store.locked():
+    def review(
+        self,
+        *,
+        finalize: bool = True,
+        _autonomy_lease: object | None = None,
+    ) -> Goal:
+        with self._mutation_lease(_autonomy_lease), self.store.locked():
             goal = self._require_goal()
             if goal.status is not GoalStatus.REVIEW:
                 raise InvalidTransitionError(
@@ -134,14 +150,44 @@ class Supervisor:
                 )
             result = self.reviewer.review(goal)
             goal.review = result.to_dict()
-            goal.transition(
-                GoalStatus.DONE if result.passed else GoalStatus.FAILED,
-                reason="review passed" if result.passed else "review failed",
-            )
+            if result.passed:
+                if finalize:
+                    goal.transition(GoalStatus.DONE, reason="review passed")
+            else:
+                goal.transition(GoalStatus.FAILED, reason="review failed")
             self.store.write_goal(goal)
             return goal
 
-    def accept(self, *, reason: str = "accepted by operator") -> Goal:
+    def continue_after_review(
+        self,
+        feedback: str,
+        *,
+        _autonomy_lease: object | None = None,
+    ) -> Goal:
+        """Continue the same goal after partial work or an incomplete completion audit."""
+        with self._mutation_lease(_autonomy_lease), self.store.locked():
+            goal = self._require_goal()
+            if goal.status is not GoalStatus.REVIEW:
+                raise InvalidTransitionError(
+                    f"cannot continue reviewed goal {goal.id} in {goal.status.value}"
+                )
+            if goal.review is not None:
+                history = goal.metadata.setdefault("review_history", [])
+                if isinstance(history, list):
+                    history.append(dict(goal.review))
+            goal.review = None
+            goal.error = None
+            goal.metadata["continuation_feedback"] = feedback
+            goal.transition(GoalStatus.IN_PROGRESS, reason="completion remains unproven")
+            self.store.write_goal(goal)
+            return goal
+
+    def accept(
+        self,
+        *,
+        reason: str = "accepted by operator",
+        _autonomy_lease: object | None = None,
+    ) -> Goal:
         """Explicitly accept a goal as done.
 
         This is the operator-facing completion step. It handles two cases:
@@ -155,9 +201,18 @@ class Supervisor:
         not yet been reviewed raises InvalidTransitionError to prevent
         bypassing the deterministic review gate.
         """
-        with self.store.locked():
+        with self._mutation_lease(_autonomy_lease), self.store.locked():
             goal = self._require_goal()
             if goal.status is GoalStatus.DONE:
+                if goal.metadata.get("accepted") is not True:
+                    if not isinstance(goal.review, dict) or goal.review.get("passed") is not True:
+                        raise InvalidTransitionError(
+                            f"cannot accept goal {goal.id}; deterministic review has not passed"
+                        )
+                    goal.metadata["accepted"] = True
+                    goal.metadata["accepted_at"] = goal.updated_at
+                    goal.metadata["accept_reason"] = reason
+                    self.store.write_goal(goal)
                 return goal
             if goal.status is not GoalStatus.REVIEW:
                 raise InvalidTransitionError(
@@ -184,11 +239,11 @@ class Supervisor:
             self.store.write_goal(goal)
             return goal
 
-    def repair(self) -> Goal | None:
-        with self.store.locked():
+    def repair(self, *, _autonomy_lease: object | None = None) -> Goal | None:
+        with self._mutation_lease(_autonomy_lease), self.store.locked():
             return self.store.repair_current_marker()
 
-    def reset_loop_guard(self) -> bool:
+    def reset_loop_guard(self, *, _autonomy_lease: object | None = None) -> bool:
         """Reset the loop guard so future continue_goal() calls can proceed.
 
         This is the operator-facing recovery path for goals stuck because the
@@ -199,12 +254,12 @@ class Supervisor:
         Returns True if the guard was reset, False if no guard file exists.
         Raises NoActiveGoalError if there is no active goal.
         """
-        with self.store.locked():
+        with self._mutation_lease(_autonomy_lease), self.store.locked():
             self._require_goal()
             self.loop_guard.reset()
             return True
 
-    def restart(self) -> Goal:
+    def restart(self, *, _autonomy_lease: object | None = None) -> Goal:
         """Restart a failed goal: reset error/metadata, transition to PLANNING.
 
         This is the operator-facing recovery path for failed goals. It:
@@ -220,7 +275,7 @@ class Supervisor:
 
         Raises InvalidTransitionError if the goal is not in FAILED status.
         """
-        with self.store.locked():
+        with self._mutation_lease(_autonomy_lease), self.store.locked():
             goal = self._require_goal()
             if goal.status is not GoalStatus.FAILED:
                 raise InvalidTransitionError(
@@ -232,7 +287,11 @@ class Supervisor:
             goal.metadata.pop("worker_success", None)
             goal.metadata.pop("worker_summary", None)
             goal.metadata.pop("worker_returncode", None)
-            goal.metadata.pop("workspace_snapshot", None)
+            goal.metadata.pop("worker_outcome", None)
+            if goal.review is not None:
+                review_history = goal.metadata.setdefault("review_history", [])
+                if isinstance(review_history, list):
+                    review_history.append(dict(goal.review))
             goal.review = None
             self.loop_guard.reset()
             goal.transition(
@@ -247,6 +306,16 @@ class Supervisor:
         if goal is None:
             raise NoActiveGoalError("no active goal")
         return goal
+
+    @contextmanager
+    def _mutation_lease(self, lease: object | None) -> Iterator[None]:
+        if lease is not None:
+            if not self.store.owns_autonomy_lease(lease):
+                raise StateLockError("autonomous driver lease is not owned by this supervisor")
+            yield
+            return
+        with self.store.autonomy_locked():
+            yield
 
     def _run_worker(self, goal: Goal) -> WorkerResult:
         if self.worker is None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -38,6 +39,7 @@ class CodingAgentWorker:
         self.transcript_path = transcript_path
 
     def command_for(self, goal: Goal) -> list[str]:
+        instruction = self.instruction_for(goal)
         result: list[str] = []
         for part in self.command_template:
             # Use safe substitution: replace known placeholders first, then
@@ -46,15 +48,27 @@ class CodingAgentWorker:
             # the format string while still supporting arbitrary template
             # variables (goal_id, objective, and any user-defined ones).
             try:
-                substituted = part.format(goal_id=goal.id, objective=goal.objective)
+                substituted = part.format(goal_id=goal.id, objective=instruction)
             except (KeyError, ValueError):
                 # If format() fails (e.g. unmatched braces in template),
                 # fall back to safe replacement of known placeholders only.
                 substituted = part.replace("{goal_id}", goal.id).replace(
-                    "{objective}", goal.objective
+                    "{objective}", instruction
                 )
             result.append(substituted)
         return result
+
+    def instruction_for(self, goal: Goal) -> str:
+        autonomy = goal.metadata.get("autonomy")
+        instruction = goal.metadata.get("continuation_instruction")
+        if (
+            isinstance(autonomy, dict)
+            and autonomy.get("strict_completion") is True
+            and isinstance(instruction, str)
+            and instruction.strip()
+        ):
+            return instruction
+        return goal.objective
 
     def transcript_for(self, goal: Goal) -> Path:
         rel = Path(self.transcript_path.format(goal_id=goal.id, objective=goal.objective))
@@ -71,6 +85,7 @@ class CodingAgentWorker:
         env = os.environ.copy()
         env["AGENTIC_HARNESS_GOAL_ID"] = goal.id
         env["AGENTIC_HARNESS_OBJECTIVE"] = goal.objective
+        env["AGENTIC_HARNESS_INSTRUCTION"] = self.instruction_for(goal)
         try:
             proc = subprocess.run(
                 command,
@@ -97,6 +112,7 @@ class CodingAgentWorker:
                 stderr=str(exc),
                 returncode=127,
             )
+        outcome = _parse_harness_outcome(proc.stdout)
         try:
             transcript = self.transcript_for(goal)
             transcript.parent.mkdir(parents=True, exist_ok=True)
@@ -123,9 +139,13 @@ class CodingAgentWorker:
                 stdout=proc.stdout,
                 stderr=str(exc),
                 returncode=proc.returncode,
+                outcome=outcome,
             )
         success = proc.returncode == 0
-        summary = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+        outcome_summary = outcome.get("summary")
+        summary = str(outcome_summary).strip() if isinstance(outcome_summary, str) else ""
+        if not summary:
+            summary = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
         if not summary:
             summary = "coding agent completed" if success else "coding agent failed"
         artifact = transcript.relative_to(self.cwd.resolve()).as_posix()
@@ -136,4 +156,18 @@ class CodingAgentWorker:
             stdout=proc.stdout,
             stderr=proc.stderr,
             returncode=proc.returncode,
+            outcome=outcome,
         )
+
+
+def _parse_harness_outcome(stdout: str) -> dict[str, object]:
+    marker = "HARNESS_RESULT_JSON="
+    for line in reversed(stdout.splitlines()):
+        if not line.startswith(marker):
+            continue
+        try:
+            value = json.loads(line[len(marker) :])
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
+    return {}

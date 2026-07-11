@@ -2,7 +2,7 @@
 
 ## Release Shape
 
-Agentic Harness v0.6.27 is a Python application with a local browser interface.
+Agentic Harness v0.6.28 is a Python application with a local browser interface.
 The Python process serves packaged HTML, CSS, and JavaScript from loopback and
 adapts an optional local-goal installation into a stable human-facing API.
 
@@ -107,13 +107,15 @@ without rewriting the human interface.
   configured.
 - Token comparison is constant-time; browser token state is session-only.
 - Static assets never contain the configured token.
+- State-changing browser requests and WebSocket upgrades must be same-origin.
+- API writes require `application/json` bodies no larger than 1 MiB.
 - Requests are rate-limited and unknown API routes return JSON 404 responses.
 - New starts are blocked when current work requires review.
 - Raw commands, paths, and backend output stay in Advanced details.
 
-Bearer tokens are a local access gate, not a complete public-web security
-model. A non-local deployment would require a separate origin, CSRF, proxy,
-and authentication design.
+Bearer tokens and private-network membership are access gates, while the
+same-origin and JSON requirements defend the browser boundary. The server is
+still a local control surface, not a hardened public-internet deployment.
 
 ## Upgrade Path
 

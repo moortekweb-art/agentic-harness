@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from agentic_harness.core.state import Goal
 
@@ -16,6 +16,7 @@ class WorkerResult:
     stdout: str = ""
     stderr: str = ""
     returncode: int = 0
+    outcome: dict[str, Any] = field(default_factory=dict)
 
 
 class Worker(Protocol):
@@ -23,4 +24,3 @@ class Worker(Protocol):
 
     def run(self, goal: Goal) -> WorkerResult:
         """Execute work for a goal and return a structured result."""
-

@@ -56,6 +56,7 @@ class TestWorkerResult:
             "stdout": "",
             "stderr": "",
             "returncode": 0,
+            "outcome": {},
         }
 
     def test_to_dict_with_all_fields(self):
