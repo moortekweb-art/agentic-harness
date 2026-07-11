@@ -112,6 +112,34 @@ def test_embedded_backend_runs_public_engine_from_start_to_verified_finish(tmp_p
     assert "stdout" not in json.dumps(finished).lower()
 
 
+def test_terminal_state_waits_for_the_driver_to_quiesce(tmp_path) -> None:
+    _configure_scripted_agent(tmp_path)
+    backend = EmbeddedExecutionBackend(tmp_path)
+    backend.start({"objective": "Finish only after the driver releases its locks"})
+    _wait_for_terminal(backend)
+    original_driver = backend._thread
+    assert original_driver is not None
+    original_driver.join(timeout=5)
+    assert original_driver.is_alive() is False
+    release = threading.Event()
+    active_driver = threading.Thread(target=release.wait, daemon=True)
+    active_driver.start()
+    backend._thread = active_driver
+
+    try:
+        visible = backend.status()
+        readiness = backend.readiness()
+    finally:
+        release.set()
+        active_driver.join(timeout=5)
+
+    assert visible["status"] == "checking"
+    assert visible["allowed_actions"] == []
+    assert visible["final_result"]["accepted"] is False
+    assert readiness["state"] == "working"
+    assert readiness["can_start"] is False
+
+
 def test_embedded_backend_history_survives_server_restart(tmp_path) -> None:
     _configure_scripted_agent(tmp_path)
     first = EmbeddedExecutionBackend(tmp_path)

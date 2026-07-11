@@ -128,7 +128,9 @@ class EmbeddedExecutionBackend:
                 "next_action": "Open Setup and enter the key again.",
             }
         current = self.store.read_current_goal()
-        if current is not None and not _durably_terminal(current):
+        if self._driver_active() or (
+            current is not None and not _durably_terminal(current)
+        ):
             return {
                 "state": "working",
                 "label": "Work in progress",
@@ -441,7 +443,29 @@ class EmbeddedExecutionBackend:
         goal = self.store.read_current_goal()
         if goal is None:
             return self._ready_task()
-        return self._task(goal)
+        task = self._task(goal)
+        if self._driver_active() and task["status"] in {"done", "blocked", "stopped"}:
+            task["status"] = "checking"
+            task["status_label"] = _status_label("checking")
+            task["summary"] = "Finalizing the task driver and durable evidence."
+            task["needs_human"] = False
+            plan = task.get("plan")
+            requirements = task.get("requirements")
+            task["progress"] = _progress(
+                "checking",
+                plan if isinstance(plan, list) else [],
+                requirements if isinstance(requirements, list) else [],
+            )
+            task["allowed_actions"] = []
+            final_result = task.get("final_result")
+            if isinstance(final_result, dict):
+                final_result["accepted"] = False
+                final_result["summary"] = ""
+        return task
+
+    def _driver_active(self) -> bool:
+        driver = self._thread
+        return driver is not None and driver.is_alive()
 
     def history(self, *, query: str = "") -> list[dict[str, Any]]:
         needle = query.strip().lower()
