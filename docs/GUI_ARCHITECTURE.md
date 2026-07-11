@@ -62,6 +62,7 @@ import/export, theme choice, shortcuts, and local form undo/redo.
 Read routes:
 
 - `GET /api/health`
+- `GET /api/status` (deprecated compatibility alias for `/api/health`)
 - `GET /api/modes`
 - `GET /api/readiness`
 - `GET /api/tasks`
@@ -83,6 +84,10 @@ Write routes:
 
 The main UI emphasizes one task decision at a time even though the API retains
 bulk support for controlled integrations.
+
+`/api/health` is the canonical liveness and diagnostic route. `/api/status`
+returns the same payload for compatibility with older integrations; new clients
+should use `/api/health`. `/api/readiness` remains the readiness-specific route.
 
 ## Task Contract
 

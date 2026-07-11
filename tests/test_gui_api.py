@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 import threading
+import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -471,6 +472,16 @@ def test_gui_server_get_api_routes_return_json() -> None:
     assert details["task"]["status"] == "working"
 
 
+def test_status_compatibility_alias_matches_health_payload() -> None:
+    with gui_server(FakeBridge()) as base_url:
+        health = get_json(base_url, "/api/health")
+        status = get_json(base_url, "/api/status")
+
+    assert status == health
+    assert status["ok"] is True
+    assert status["readiness"]["agent_loop"]["stage"] == "Act"
+
+
 def test_gui_server_unknown_api_route_returns_json_404() -> None:
     with gui_server(FakeBridge()) as base_url:
         try:
@@ -483,6 +494,59 @@ def test_gui_server_unknown_api_route_returns_json_404() -> None:
             raise AssertionError("unknown API route should return 404")
 
     assert payload == {"ok": False, "error": "not found"}
+
+
+def test_gui_console_entrypoint_forwards_launch_options_without_opening(monkeypatch, tmp_path) -> None:
+    from agentic_harness.gui import cli as gui_cli
+
+    calls: list[dict[str, object]] = []
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    def fake_serve_gui(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(gui_server_module, "serve_gui", fake_serve_gui)
+
+    assert (
+        gui_cli.main(
+            ["--host", "0.0.0.0", "--port", "8765", "--doc-root", "~/docs", "--no-open"]
+        )
+        == 0
+    )
+    assert calls == [
+        {
+            "host": "0.0.0.0",
+            "port": 8765,
+            "doc_root": home / "docs",
+            "open_browser": False,
+            "allow_port_fallback": False,
+        }
+    ]
+
+
+def test_gui_console_entrypoint_help_documents_server_options(capsys) -> None:
+    from agentic_harness.gui import cli as gui_cli
+
+    try:
+        gui_cli.main(["--help"])
+    except SystemExit as exc:
+        assert exc.code == 0
+    else:  # pragma: no cover - argparse always exits for help
+        raise AssertionError("GUI help should exit successfully")
+
+    output = capsys.readouterr().out
+    for option in ("--host", "--port", "--doc-root", "--no-open"):
+        assert option in output
+
+
+def test_gui_console_entrypoint_is_packaged_by_local_distribution() -> None:
+    pyproject = Path("pyproject.toml")
+    project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
+
+    assert project["name"] == "local-agentic-harness"
+    assert project["scripts"]["agentic-harness-gui"] == "agentic_harness.gui.cli:main"
 
 
 def test_gui_token_mode_keeps_static_shell_public_and_gates_api(monkeypatch) -> None:

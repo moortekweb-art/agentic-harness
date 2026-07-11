@@ -1015,6 +1015,7 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
         return False
     python_bin = _venv_python(venv_dir)
     harness_bin = _venv_executable(venv_dir, "agentic-harness")
+    gui_bin = _venv_executable(venv_dir, "agentic-harness-gui")
     if not _run_release_step(
         f"Install {artifact.name}",
         [str(python_bin), "-m", "pip", "install", str(artifact)],
@@ -1029,6 +1030,30 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
             required_stdout=format_version_text(),
         ):
             return False
+    if not _run_release_step(
+        f"Smoke {stem} GUI entry point",
+        [str(gui_bin), "--help"],
+        cwd=tmp_root,
+        required_stdout="usage: agentic-harness-gui",
+    ):
+        return False
+    if not _run_release_step(
+        f"Smoke {stem} packaged static assets",
+        [
+            str(python_bin),
+            "-c",
+            (
+                "from importlib.resources import files; "
+                "root = files('agentic_harness.gui.static'); "
+                "assert all(root.joinpath(name).is_file() for name in "
+                "('index.html', 'app.js', 'styles.css')); "
+                "print('packaged static assets verified')"
+            ),
+        ],
+        cwd=tmp_root,
+        required_stdout="packaged static assets verified",
+    ):
+        return False
     for command in ("lint-fix", "typecheck-fix", "update-docs", "changelog", "verify-tests"):
         if not _run_release_step(
             f"Smoke {stem} command {command}",
