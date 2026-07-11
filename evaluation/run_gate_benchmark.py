@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from importlib import metadata
 import json
 import os
 from pathlib import Path
@@ -17,6 +16,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import time
+import tomllib
 from typing import Any
 
 
@@ -306,6 +306,7 @@ def run_benchmark(
     if repetitions < 1:
         raise ValueError("repetitions must be at least one")
     tasks = load_tasks(tasks_path)
+    provenance = source_provenance()
     output_dir.mkdir(parents=True, exist_ok=True)
     agent_command = [sys.executable, str(AGENT_SCRIPT)]
     verifier_command = [sys.executable, str(VERIFIER_SCRIPT)]
@@ -381,6 +382,7 @@ def run_benchmark(
         repetitions=repetitions,
         started_at=started_at,
         finished_at=finished_at,
+        provenance=provenance,
     )
     _write_outputs(output_dir, rows, environment, summary)
     return summary
@@ -470,6 +472,7 @@ def environment_metadata(
     repetitions: int,
     started_at: str,
     finished_at: str,
+    provenance: dict[str, Any],
 ) -> dict[str, Any]:
     source_paths = {
         "evaluation/tasks.json": tasks_path,
@@ -484,12 +487,6 @@ def environment_metadata(
         "agentic_harness/core/review.py": ROOT / "agentic_harness/core/review.py",
         "agentic_harness/core/supervisor.py": ROOT / "agentic_harness/core/supervisor.py",
     }
-    commit = _git_output(["rev-parse", "HEAD"])
-    status = _git_output(["status", "--porcelain=v1"])
-    try:
-        harness_version = metadata.version("local-agentic-harness")
-    except metadata.PackageNotFoundError:
-        harness_version = "source-tree"
     return {
         "schema": "agentic_harness.gate_evaluation_environment.v1",
         "evaluation_type": EVALUATION_TYPE,
@@ -500,13 +497,21 @@ def environment_metadata(
         "python": sys.version.split()[0],
         "python_implementation": platform.python_implementation(),
         "platform": platform.platform(),
-        "harness_version": harness_version,
-        "git_commit": commit,
-        "git_dirty": bool(status),
-        "git_status_sha256": sha256_bytes(status.encode()),
+        **provenance,
         "agent_command": public_command(AGENT_SCRIPT),
         "verifier_command": public_command(VERIFIER_SCRIPT),
         "source_checksums": {label: sha256_file(path) for label, path in source_paths.items()},
+    }
+
+
+def source_provenance() -> dict[str, Any]:
+    status = _git_output(["status", "--porcelain=v1"])
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return {
+        "harness_version": str(metadata["project"]["version"]),
+        "git_commit": _git_output(["rev-parse", "HEAD"]),
+        "git_dirty": bool(status),
+        "git_status_sha256": sha256_bytes(status.encode()),
     }
 
 

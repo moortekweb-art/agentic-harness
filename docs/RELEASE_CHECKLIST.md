@@ -4,9 +4,10 @@ Use this version-generic checklist for every release. The candidate version is
 always read from `pyproject.toml`; never copy a previous tag or reuse a version
 that has already reached PyPI.
 
-The current source candidate is v0.7.1, with canonical notes at
-`docs/RELEASE_NOTES_0.7.1.md`. The historical v0.7.0 reference remains a release
-receipt, not a claim about the latest public version and not the version to copy
+The current source candidate is v0.7.2, with canonical notes at
+`docs/RELEASE_NOTES_0.7.2.md`. The historical v0.7.1 and historical v0.7.0
+references remain release receipts, not claims about the latest public version
+and not versions to copy
 into a future candidate.
 
 ## Local candidate

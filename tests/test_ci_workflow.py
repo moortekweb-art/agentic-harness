@@ -172,6 +172,11 @@ def test_active_publish_workflow_gates_oidc_on_exact_verified_release_commit() -
     assert f"{validation_script} identity" in text
     assert f"{validation_script} ancestry" in text
     assert f"{validation_script} ci" in text
+    assert f"{validation_script} receipt" in text
+    regenerate = text.index("Regenerate representative benchmark receipt")
+    validate_receipt = text.index("Verify representative benchmark release provenance")
+    build = text.index("Build and smoke-test distributions")
+    assert regenerate < validate_receipt < build
     assert "python -m agentic_harness.core.release_validation" not in text
     validate_steps = workflow["jobs"]["validate"]["steps"]
     first_install = next(
@@ -297,7 +302,7 @@ def test_distribution_name_avoids_occupied_pypi_project() -> None:
     metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert metadata["project"]["name"] == "local-agentic-harness"
-    assert metadata["project"]["version"] == "0.7.1"
+    assert metadata["project"]["version"] == "0.7.2"
     assert metadata["project"]["requires-python"] == ">=3.11,<3.15"
     assert metadata["project"]["scripts"]["agentic-harness"] == "agentic_harness.cli:main"
     assert metadata["project"]["scripts"]["agentic-harness-gui"] == (
