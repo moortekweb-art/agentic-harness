@@ -56,24 +56,25 @@ def test_gui_uses_local_lucide_icons_across_primary_controls() -> None:
     html = (static_root / "index.html").read_text(encoding="utf-8")
     css = (static_root / "styles.css").read_text(encoding="utf-8")
     javascript = (static_root / "app.js").read_text(encoding="utf-8")
-    icons = (static_root / "icons.svg").read_text(encoding="utf-8")
     favicon = (static_root / "favicon.svg").read_text(encoding="utf-8")
     license_text = (static_root / "LUCIDE_LICENSE.txt").read_text(encoding="utf-8")
 
-    assert "Lucide" in icons
+    assert 'class="icon-sprite"' in html
+    assert "Lucide" in html
     assert "Lucide" in favicon
     assert "ISC License" in license_text
     assert "The MIT License (MIT)" in license_text
     assert '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />' in html
-    assert 'id="monitor"' in icons
-    assert 'id="route"' in icons
-    assert 'id="cloud-cog"' in icons
-    assert 'id="flask-conical"' in icons
-    assert html.count('href="/static/icons.svg#') >= 12
-    assert 'local: "monitor"' in javascript
-    assert 'guided: "route"' in javascript
-    assert 'cloud: "cloud-cog"' in javascript
-    assert 'experimental: "flask-conical"' in javascript
+    assert not (static_root / "icons.svg").exists()
+    assert 'id="icon-zap"' in html
+    assert 'id="icon-map"' in html
+    assert 'id="icon-rocket"' in html
+    assert 'id="icon-flask"' in html
+    assert html.count('href="#icon-') >= 12
+    assert 'local: "zap"' in javascript
+    assert 'guided: "map"' in javascript
+    assert 'cloud: "rocket"' in javascript
+    assert 'experimental: "flask"' in javascript
     assert ".mode-card .mode-card-title" in css
     assert ".mode-card .mode-card-note" in css
 
@@ -98,15 +99,15 @@ def test_gui_status_encodings_are_labeled_and_idle_progress_is_hidden() -> None:
     javascript = (static_root / "app.js").read_text(encoding="utf-8")
 
     assert 'id="statusIndicator"' in html
-    assert 'aria-label="Status: Ready"' in html
-    assert 'title="Status: Ready"' in html
+    assert 'aria-label="Supervisor is running"' in html
+    assert 'title="Supervisor is running"' in html
     assert 'id="progressGroup" class="progress-group" hidden' in html
     assert 'role="progressbar"' in html
     assert 'id="progressValue"' in html
     assert 'class="loop-legend"' in html
     assert "Current step" in html
     assert "els.progressGroup.hidden = progress <= 0" in javascript
-    assert 'els.statusIndicator.setAttribute("aria-label", statusDescription)' in javascript
+    assert 'const statusDescription = status === "ready" ? "Supervisor is running"' in javascript
     assert "[hidden] {" in css
     assert "display: none !important" in css
 
@@ -117,19 +118,23 @@ def test_gui_microcopy_and_footer_use_distinct_status_metadata() -> None:
     javascript = (static_root / "app.js").read_text(encoding="utf-8")
 
     assert "Check now" not in html
-    assert "Refresh status" in html
+    assert "Refresh status" not in html
+    assert "Run checks" in html
     assert 'class="status-footer"' in html
     assert 'id="statusUpdated"' in html
-    assert 'id="statusContext"' in html
-    assert "formatUpdatedAt" in javascript
+    assert 'id="statusContext"' not in html
+    assert "Last checked" in html
+    assert "formatLastCheckedAt" in javascript
     assert "renderStatusFooter" in javascript
 
 
 def test_gui_cards_use_subtle_depth_tokens() -> None:
     css = Path("agentic_harness/gui/static/styles.css").read_text(encoding="utf-8")
+    expected_shadow = "0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)"
 
     assert "--panel-shadow:" in css
     assert "--card-shadow:" in css
+    assert css.count(expected_shadow) >= 2
     assert "box-shadow: var(--panel-shadow)" in css
     assert "box-shadow: var(--card-shadow)" in css
 
