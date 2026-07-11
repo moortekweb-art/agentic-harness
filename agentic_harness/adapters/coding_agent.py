@@ -202,7 +202,11 @@ class CodingAgentWorker:
             str(autonomy.get("checkpoint") or "") if isinstance(autonomy, dict) else ""
         )
         try:
-            TaskEventStore(self.cwd, goal.id).append(
+            TaskEventStore(
+                self.cwd,
+                goal.id,
+                run_id=str(goal.metadata.get("worker_run_id") or ""),
+            ).append(
                 stage="act",
                 kind=kind,
                 summary=summary,

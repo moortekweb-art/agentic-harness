@@ -87,6 +87,24 @@ class TestReviewResult:
         assert d1["criteria"][0] is criteria[0]
 
 
+def test_failed_review_output_is_redacted_before_it_reaches_goal_or_cli(tmp_path: Path) -> None:
+    secret = "opaque-review-secret-Z7Q4M9"
+    criterion = command_passes(
+        [
+            sys.executable,
+            "-c",
+            f"import sys; print({secret!r}, file=sys.stderr); raise SystemExit(1)",
+        ],
+        cwd=tmp_path,
+    )
+
+    result = DeterministicReviewer([criterion]).review(_make_goal())
+    serialized = str(result.to_dict())
+
+    assert secret not in serialized
+    assert "exit code 1" in serialized
+
+
 # ---------------------------------------------------------------------------
 # DeterministicReviewer
 # ---------------------------------------------------------------------------
@@ -250,11 +268,11 @@ class TestCommandPasses:
         assert result[0] is False
         assert "timed out" in result[1].lower()
 
-    def test_includes_stderr_on_failure(self):
+    def test_suppresses_stderr_on_failure(self):
         criterion = command_passes(["sh", "-c", "echo error_msg >&2; exit 1"])
         result = criterion.check(_make_goal())
         assert result[0] is False
-        assert "error_msg" in result[1]
+        assert "error_msg" not in result[1]
 
     def test_cwd_is_respected(self):
         with tempfile.TemporaryDirectory() as td:

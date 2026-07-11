@@ -1,6 +1,13 @@
 # Release Checklist
 
-Use this checklist for the v0.7.0 release.
+Use this version-generic checklist for every release. The candidate version is
+always read from `pyproject.toml`; never copy a previous tag or reuse a version
+that has already reached PyPI.
+
+The current source candidate is v0.7.1, with canonical notes at
+`docs/RELEASE_NOTES_0.7.1.md`. The historical v0.7.0 reference remains a release
+receipt, not a claim about the latest public version and not the version to copy
+into a future candidate.
 
 ## Local candidate
 
@@ -13,10 +20,20 @@ Use this checklist for the v0.7.0 release.
   git log -1 --oneline
   ```
 
-- Confirm package metadata, release notes, both entry points, and supported
-  Python range agree on v0.7.0:
+- Resolve the candidate version, tag, and release-notes path from package
+  metadata:
 
-  The canonical notes file is `docs/RELEASE_NOTES_0.7.0.md`.
+  ```bash
+  VERSION="$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+  TAG="v${VERSION}"
+  NOTES="docs/RELEASE_NOTES_${VERSION}.md"
+  test -f "$NOTES"
+  test "$(sed -n '1p' "$NOTES")" = "# Agentic Harness ${TAG}"
+  printf 'candidate=%s tag=%s notes=%s\n' "$VERSION" "$TAG" "$NOTES"
+  ```
+
+- Confirm package metadata, candidate release notes, both entry points, and
+  supported Python range agree:
 
   ```bash
   agentic-harness --version
@@ -71,7 +88,13 @@ Repository-owner configuration is a release gate, not an optional follow-up:
   same release-tag policy.
 - Confirm the PyPI trusted-publisher identity names this repository,
   `.github/workflows/publish.yml`, and environment `pypi`.
-- Confirm version `0.7.0` is unused on PyPI.
+- Inspect the published versions and confirm the candidate `VERSION` is unused
+  on PyPI. An existing version must never be overwritten or reused:
+
+  ```bash
+  python -m pip index versions local-agentic-harness
+  ```
+
 - Confirm the exact candidate commit has a successful `push` CI run on the
   default branch.
 
@@ -83,8 +106,10 @@ Only after the protections and local gates pass, create and push the annotated
 tag from the verified default-branch commit:
 
 ```bash
-git tag -a v0.7.0 -m "Agentic Harness v0.7.0"
-git push origin v0.7.0
+VERSION="$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+TAG="v${VERSION}"
+git tag -a "$TAG" -m "Agentic Harness ${TAG}"
+git push origin "$TAG"
 ```
 
 The tag workflow then:

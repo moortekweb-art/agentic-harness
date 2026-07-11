@@ -63,6 +63,14 @@ class TestGoalToDictDeepCopy:
 class TestGoalFromDictInputValidation:
     """from_dict() must validate and sanitize optional fields."""
 
+    @pytest.mark.parametrize(
+        "goal_id",
+        ["../outside", "nested/goal", "", ".", "..", "goal\\outside"],
+    )
+    def test_goal_id_rejects_unsafe_path_values(self, goal_id: str) -> None:
+        with pytest.raises(ValueError, match="goal payload 'id'.*safe identifier"):
+            Goal.from_dict(_base_payload(id=goal_id))
+
     def test_artifacts_none_becomes_empty_list(self) -> None:
         goal = Goal.from_dict(_base_payload(artifacts=None))
         assert goal.artifacts == []
@@ -457,156 +465,17 @@ class TestGoalJsonSerialization:
         assert isinstance(text, str)
 
 
-class TestGoalHashEqContract:
-    """Goal.__hash__ and __eq__ must be consistent per Python's hash/eq contract."""
+class TestGoalHashContract:
+    """Mutable goals must never be used as set members or dictionary keys."""
 
-    def test_hash_matches_eq_for_identical_goals(self) -> None:
-        """Two Goals with identical fields must have equal hash and equal __eq__."""
-        g1 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g2 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        assert g1 == g2
-        assert hash(g1) == hash(g2)
+    def test_goal_is_unhashable_before_and_after_nested_mutations(self) -> None:
+        goal = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
 
-    def test_hash_differs_when_eq_differs(self) -> None:
-        """If __eq__ returns False, hash should also differ (contract consistency)."""
-        g1 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g2 = Goal(objective="test", id="g1", status=GoalStatus.IN_PROGRESS)
-        assert g1 != g2  # Different status
-        assert hash(g1) != hash(g2)  # Hash must also differ
+        assert Goal.__hash__ is None
+        with pytest.raises(TypeError, match="unhashable type"):
+            hash(goal)
 
-    def test_set_membership_consistent_with_eq(self) -> None:
-        """If x == y, then x in set containing y must be True."""
-        g1 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g2 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        s = {g2}
-        assert g1 in s  # g1 == g2, so g1 must be in set containing g2
-        assert g2 in s
-
-    def test_set_membership_inconsistent_when_eq_false(self) -> None:
-        """If x != y, x in set containing y should be False (hash also differs)."""
-        g1 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g2 = Goal(objective="test", id="g1", status=GoalStatus.IN_PROGRESS)
-        s = {g2}
-        assert g1 not in s  # g1 != g2 and hash differs, so not in set
-
-    def test_hash_stable_across_calls(self) -> None:
-        """hash(g) must return the same value on repeated calls."""
-        g = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        h1 = hash(g)
-        h2 = hash(g)
-        h3 = hash(g)
-        assert h1 == h2 == h3
-
-    def test_hash_uses_all_eq_fields(self) -> None:
-        """Hash must incorporate all fields used in __eq__."""
-        g1 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g2 = Goal(objective="test2", id="g1", status=GoalStatus.PLANNING)
-        assert g1 != g2
-        assert hash(g1) != hash(g2)
-
-    def test_hash_with_artifacts(self) -> None:
-        """Hash must differ when artifacts differ."""
-        g1 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g1.artifacts.append("artifact1")
-        g2 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g2.artifacts.append("artifact2")
-        assert g1 != g2
-        assert hash(g1) != hash(g2)
-
-    def test_hash_with_history(self) -> None:
-        """Hash must differ when history differs."""
-        g1 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g1.history.append({"from": "planning", "to": "in_progress", "at": "2026-07-06T08:00:00Z"})
-        g2 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g2.history.append({"from": "pending", "to": "planning", "at": "2026-07-06T07:00:00Z"})
-        assert g1 != g2
-        assert hash(g1) != hash(g2)
-
-
-class TestGoalHashWithUnhashableMetadata:
-    """__hash__ must handle nested unhashable types in metadata and history.
-
-    Prior to the fix, Goal.__hash__ called tuple(sorted(self.metadata.items()))
-    which raised TypeError when metadata values were dicts, lists, or sets.
-    This meant Goal objects could not be used in sets or as dict keys when
-    they had non-trivial metadata — a real reliability gap.
-    """
-
-    def test_hash_with_nested_dict_metadata(self) -> None:
-        """Hash must succeed when metadata contains nested dicts."""
-        g = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g.metadata["nested"] = {"key": "val", "list": [1, 2, 3]}
-        h = hash(g)
-        assert isinstance(h, int)
-
-    def test_hash_with_list_metadata(self) -> None:
-        """Hash must succeed when metadata contains lists."""
-        g = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g.metadata["items"] = [1, "two", 3.0]
-        h = hash(g)
-        assert isinstance(h, int)
-
-    def test_hash_with_set_metadata(self) -> None:
-        """Hash must succeed when metadata contains sets."""
-        g = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g.metadata["tags"] = {"a", "b", "c"}
-        h = hash(g)
-        assert isinstance(h, int)
-
-    def test_hash_with_deeply_nested_metadata(self) -> None:
-        """Hash must succeed for deeply nested structures."""
-        g = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g.metadata["deep"] = {"level1": {"level2": {"level3": [1, 2, {"level4": "val"}]}}}
-        h = hash(g)
-        assert isinstance(h, int)
-
-    def test_hash_deterministic_with_nested_metadata(self) -> None:
-        """Hash must be deterministic: same metadata -> same hash."""
-        g1 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g1.metadata["nested"] = {"key": "val", "list": [1, 2, 3]}
-        g2 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g2.metadata["nested"] = {"key": "val", "list": [1, 2, 3]}
-        assert hash(g1) == hash(g2)
-
-    def test_hash_equal_goals_with_nested_metadata_are_equal(self) -> None:
-        """Equal goals with nested metadata must have equal hashes."""
-        g1 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g1.metadata["nested"] = {"key": "val", "list": [1, 2, 3]}
-        g2 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g2.metadata["nested"] = {"key": "val", "list": [1, 2, 3]}
-        assert g1 == g2
-        assert hash(g1) == hash(g2)
-
-    def test_goal_in_set_with_nested_metadata(self) -> None:
-        """Goal with nested metadata must be usable in a set."""
-        g1 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g1.metadata["nested"] = {"key": "val", "list": [1, 2, 3]}
-        g2 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g2.metadata["nested"] = {"key": "val", "list": [1, 2, 3]}
-        s = {g1, g2}
-        assert len(s) == 1
-
-    def test_goal_as_dict_key_with_nested_metadata(self) -> None:
-        """Goal with nested metadata must be usable as a dict key."""
-        g1 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g1.metadata["nested"] = {"key": "val", "list": [1, 2, 3]}
-        g2 = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g2.metadata["nested"] = {"key": "val", "list": [1, 2, 3]}
-        d = {g1: "first"}
-        d[g2] = "second"
-        assert len(d) == 1
-        assert d[g1] == "second"
-
-    def test_hash_with_history_containing_nested_dicts(self) -> None:
-        """Hash must handle history entries with nested dict values."""
-        g = Goal(objective="test", id="g1", status=GoalStatus.PLANNING)
-        g.history.append(
-            {
-                "from": "planning",
-                "to": "in_progress",
-                "at": "2026-07-06T08:00:00Z",
-                "extra": {"detail": "some nested info"},
-            }
-        )
-        h = hash(g)
-        assert isinstance(h, int)
+        goal.metadata["nested"] = {"key": "value", "items": [1, 2, 3]}
+        goal.review = {"passed": True, "criteria": []}
+        with pytest.raises(TypeError, match="unhashable type"):
+            hash(goal)

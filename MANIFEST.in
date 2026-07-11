@@ -1,0 +1,14 @@
+include CONTRIBUTING.md LICENSE README.md SECURITY.md
+graft .github/workflows
+graft docs
+graft evaluation
+graft examples
+graft tests
+prune examples/fix-failing-tests-demo/.agentic-harness
+prune examples/fix-failing-tests-demo/.pytest_cache
+prune examples/shell-worker/.agentic-harness/runs
+prune examples/shell-worker/output
+exclude examples/shell-worker/.agentic-harness/current.json
+global-exclude *.backup
+global-exclude *.py[cod]
+global-exclude __pycache__

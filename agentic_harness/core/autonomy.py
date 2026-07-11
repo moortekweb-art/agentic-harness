@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from agentic_harness.core.errors import GoalConflictError, NoActiveGoalError
+from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.state import Goal, GoalStatus, now_iso
 from agentic_harness.core.supervisor import Supervisor
 from agentic_harness.core.workspace import capture_workspace_snapshot
@@ -17,6 +18,7 @@ from agentic_harness.core.workspace import capture_workspace_snapshot
 
 AUTONOMY_CONTRACT = "agentic_harness.autonomy.v1"
 COMPLETION_AUDIT_CONTRACT = "agentic_harness.completion_audit.v1"
+EVIDENCE_CONTRACT = "agentic_harness.evidence.v1"
 
 
 @dataclass(frozen=True)
@@ -283,7 +285,14 @@ class AutonomousRunner:
             "Completion requires every derived requirement to be satisfied with concrete evidence.",
             "Return one HARNESS_RESULT_JSON object with status, plan, current_subgoal, ",
             "checkpoint, requirements, blockers, summary, and verification evidence.",
+            "Requirement evidence must contain only harness-issued identifiers, never prose.",
         ]
+        review_refs = _expected_review_evidence_refs(self.supervisor)
+        if review_refs:
+            lines.append(
+                "If the corresponding independent checks pass, cite these exact IDs: "
+                + ", ".join(review_refs)
+            )
         safety = goal.metadata.get("safety")
         if isinstance(safety, dict):
             allowed_paths = [
@@ -443,6 +452,23 @@ class AutonomousRunner:
         criteria = review.get("criteria")
         if not isinstance(criteria, list) or not criteria:
             failures.append("deterministic review produced no criteria evidence")
+        requirements = outcome.get("requirements")
+        requirement_ids = (
+            [
+                str(requirement.get("id") or "").strip()
+                for requirement in requirements
+                if isinstance(requirement, dict)
+                and str(requirement.get("id") or "").strip()
+            ]
+            if isinstance(requirements, list)
+            else []
+        )
+        evidence_registry = _evidence_registry(
+            self.supervisor,
+            goal,
+            review,
+            requirement_ids=requirement_ids,
+        )
 
         strict_completion = _autonomy(goal).get("strict_completion") is True
         if strict_completion:
@@ -471,7 +497,6 @@ class AutonomousRunner:
                     item_status = str(item.get("status") or "").strip().lower()
                     if item_status not in {"complete", "completed", "done"}:
                         failures.append(f"plan item {index + 1} is not completed")
-            requirements = outcome.get("requirements")
             if not isinstance(requirements, list) or not requirements:
                 failures.append("structured completion claim has no requirements")
             else:
@@ -498,6 +523,40 @@ class AutonomousRunner:
                         failures.append(
                             f"requirement {requirement.get('id') or index + 1} has no evidence"
                         )
+                    else:
+                        normalized = [
+                            str(item).strip()
+                            for item in evidence
+                            if isinstance(item, str) and str(item).strip()
+                        ]
+                        if len(normalized) != len(set(normalized)):
+                            failures.append(
+                                f"requirement {requirement.get('id') or index + 1} "
+                                "contains duplicate evidence references"
+                            )
+                        invalid = sorted(
+                            {
+                                str(item).strip()
+                                for item in evidence
+                                if not isinstance(item, str)
+                                or str(item).strip() not in evidence_registry
+                            }
+                        )
+                        if invalid:
+                            failures.append(
+                                f"requirement {requirement.get('id') or index + 1} "
+                                "cites unverified evidence: " + ", ".join(invalid)
+                            )
+                        elif requirement_id:
+                            for evidence_id in normalized:
+                                covered = evidence_registry[evidence_id].get(
+                                    "requirement_ids"
+                                )
+                                if (
+                                    isinstance(covered, list)
+                                    and requirement_id not in covered
+                                ):
+                                    covered.append(requirement_id)
             blockers = outcome.get("blockers")
             if not isinstance(blockers, list):
                 failures.append("blockers list is missing")
@@ -511,6 +570,7 @@ class AutonomousRunner:
             "failures": failures,
             "review": review,
             "requirements": outcome.get("requirements") or [],
+            "evidence_registry": list(evidence_registry.values()),
         }
 
     def _record_blocker(self, goal: Goal, reason: str, lease: object) -> Goal:
@@ -595,6 +655,83 @@ def _outcome_blocker(outcome: dict[str, Any]) -> str:
 
 def _progress_feedback(autonomy: dict[str, Any]) -> str:
     return "Continue from checkpoint " + str(autonomy.get("checkpoint") or "current progress")
+
+
+def _review_evidence_ref(index: int) -> str:
+    return f"review:{index}"
+
+
+def _expected_review_evidence_refs(supervisor: Supervisor) -> list[str]:
+    return [
+        _review_evidence_ref(index)
+        for index, criterion in enumerate(supervisor.reviewer.criteria, 1)
+        if criterion.independent
+    ]
+
+
+def _durable_event_evidence_refs(supervisor: Supervisor, goal: Goal) -> set[str]:
+    run_id = str(goal.metadata.get("worker_run_id") or "")
+    if not run_id:
+        return set()
+    try:
+        events = TaskEventStore(supervisor.project_dir, goal.id).read(limit=None)
+    except (OSError, ValueError):
+        return set()
+    return {
+        str(event["evidence_id"])
+        for event in events
+        if isinstance(event.get("tool"), dict)
+        and event["tool"].get("status") in {"passed", "completed"}
+        and isinstance(event.get("evidence_id"), str)
+        and event.get("run_id") == run_id
+    }
+
+
+def _evidence_registry(
+    supervisor: Supervisor,
+    goal: Goal,
+    review: dict[str, Any],
+    *,
+    requirement_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    run_id = str(goal.metadata.get("worker_run_id") or "")
+    registry: dict[str, dict[str, Any]] = {
+        evidence_id: {
+            "schema": EVIDENCE_CONTRACT,
+            "id": evidence_id,
+            "goal_id": goal.id,
+            "run_id": run_id,
+            "requirement_ids": [],
+            "kind": "durable_event",
+            "result": "passed",
+            "issuer": "harness.task_event",
+            "validation": {"level": "harness_verified"},
+        }
+        for evidence_id in sorted(_durable_event_evidence_refs(supervisor, goal))
+    }
+    criteria = review.get("criteria")
+    if not isinstance(criteria, list):
+        return registry
+    for index, criterion in enumerate(criteria, 1):
+        if (
+            not isinstance(criterion, dict)
+            or criterion.get("passed") is not True
+            or criterion.get("independent") is not True
+        ):
+            continue
+        evidence_id = _review_evidence_ref(index)
+        registry[evidence_id] = {
+            "schema": EVIDENCE_CONTRACT,
+            "id": evidence_id,
+            "goal_id": goal.id,
+            "run_id": run_id,
+            "requirement_ids": list(requirement_ids),
+            "kind": "independent_review",
+            "result": "passed",
+            "issuer": "harness.review",
+            "validation": {"level": "harness_verified"},
+        }
+    return registry
 
 
 def _blocker_signature(

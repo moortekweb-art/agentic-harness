@@ -28,6 +28,7 @@ from agentic_harness.gui.api import (
     health_payload,
     modes_payload,
     readiness_payload,
+    setup_payload,
     start_task,
     status_task,
     tasks_payload,
@@ -185,8 +186,8 @@ def make_handler(
                 )
             elif route == "/api/readiness":
                 self._json(service.readiness() if embedded else readiness_payload(bridge))
-            elif route == "/api/setup" and embedded:
-                self._json(service.setup())
+            elif route == "/api/setup":
+                self._json(service.setup() if embedded else setup_payload(bridge))
             elif route == "/api/tasks":
                 if embedded:
                     current = service.status()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -12,6 +13,7 @@ from uuid import uuid4
 from agentic_harness.core.errors import InvalidTransitionError
 
 SCHEMA_VERSION = "agentic_harness.goal.v1"
+SAFE_GOAL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
 class GoalStatus(StrEnum):
@@ -82,24 +84,6 @@ def _make_json_safe(value: Any) -> Any:
     return str(value)
 
 
-def _make_hashable(value: Any) -> Any:
-    """Convert a value to a hashable form for use in __hash__.
-
-    Recursively converts dicts to sorted tuples of (key, hashable_value) pairs
-    and lists to tuples. Sets/frozensets become sorted tuples. Non-hashable
-    leaf values are converted to their string representation.
-    """
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if isinstance(value, dict):
-        return tuple((k, _make_hashable(v)) for k, v in sorted(value.items()))
-    if isinstance(value, (list, tuple)):
-        return tuple(_make_hashable(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return tuple(sorted(_make_hashable(item) for item in value))
-    return hash(str(value))
-
-
 def _parse_iso(value: str) -> datetime | None:
     """Parse an ISO timestamp string, returning None on failure."""
     if not isinstance(value, str):
@@ -144,34 +128,6 @@ class Goal:
             and self.history == other.history
         )
 
-    def __hash__(self) -> int:
-        """Hash based on the same fields as __eq__ to maintain the hash/eq contract.
-
-        Goal is mutable (not frozen), so hashing on all __eq__ fields means
-        mutating a Goal after it is placed in a set/dict will break lookup.
-        This is intentional: Goal objects are managed by ArtifactStore which
-        handles persistence and locking; they should not be used as set/dict
-        keys across mutations.
-        """
-        return hash(
-            (
-                self.id,
-                self.objective,
-                self.status,
-                self.schema_version,
-                self.created_at,
-                self.updated_at,
-                tuple(sorted(self.artifacts)),
-                _make_hashable(self.metadata) if self.metadata else (),
-                self.review,
-                self.error,
-                tuple(
-                    _make_hashable(entry) if isinstance(entry, dict) else entry
-                    for entry in self.history
-                ),
-            )
-        )
-
     @property
     def duration_seconds(self) -> float | None:
         """Elapsed seconds between created_at and updated_at, or None if timestamps are unparseable."""
@@ -213,8 +169,8 @@ class Goal:
         errors: list[str] = []
         if not isinstance(self.objective, str) or not self.objective.strip():
             errors.append("objective must be a non-empty string")
-        if not isinstance(self.id, str) or not self.id.strip():
-            errors.append("id must be a non-empty string")
+        if not isinstance(self.id, str) or SAFE_GOAL_ID.fullmatch(self.id) is None:
+            errors.append("id must be a safe identifier")
         if self.schema_version != SCHEMA_VERSION:
             errors.append(f"schema_version must be {SCHEMA_VERSION!r}, got {self.schema_version!r}")
         if self.created_at and not _parse_iso(self.created_at):
@@ -414,10 +370,16 @@ class Goal:
         objective = str(payload["objective"]).strip()
         if not objective:
             raise ValueError("goal payload 'objective' must be a non-empty string")
+        goal_id = payload["id"]
+        if not isinstance(goal_id, str) or SAFE_GOAL_ID.fullmatch(goal_id) is None:
+            raise ValueError(
+                "goal payload 'id' must be a safe identifier using 1-128 letters, "
+                "numbers, dots, underscores, or hyphens"
+            )
 
         goal = cls(
             objective=objective,
-            id=str(payload["id"]),
+            id=goal_id,
             status=GoalStatus(str(payload["status"])),
             schema_version=str(payload["schema_version"]),
             created_at=str(payload["created_at"]),

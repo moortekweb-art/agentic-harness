@@ -464,12 +464,13 @@ function renderHistory(tasks) {
 
 function renderSetup(setup) {
   state.setup = setup;
+  els.setupButton.hidden = setup.editable === false;
   els.workspacePath.textContent = setup.workspace || "Unknown workspace";
   const worker = setup.worker || {};
   els.executionSummary.textContent = setup.configured
     ? worker.type === "model_agent"
       ? `${worker.model || "Model"} · ${worker.credential_source || "no key"}`
-      : worker.type || "Configured"
+      : worker.label || worker.type || "Configured"
     : "Setup required";
   if (!els.verificationCommand.value) {
     els.verificationCommand.value = setup.verification_command || setup.suggested_check || "";

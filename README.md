@@ -6,58 +6,39 @@
 [![Python](https://img.shields.io/badge/python-3.11--3.14-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/moortekweb-art/agentic-harness/blob/main/LICENSE)
 
-A local-first execution harness that lets an agent work toward a complete goal
-without treating its own claim of success as proof.
+A coding agent saying “done” is not proof that the task is done.
 
-Agentic Harness provides one project-local engine for two interfaces: a CLI and
-a browser GUI. It can supervise an installed coding-agent CLI or run a bounded
-tool-using agent against a user-selected OpenAI-compatible local or cloud model.
-In both cases, durable progress, resource limits, recorded evidence, and an
-independent verification command determine whether the result is done.
-
-## Product Boundary
-
-`local-agentic-harness` is one Python distribution with a shared Python engine,
-project state model, packaged static browser assets, and two executable
-interfaces:
-
-- `agentic-harness` is the CLI.
-- `agentic-harness-gui` is the browser service.
-
-This is the same install, not two products. Both interfaces use
-`.agentic-harness/` inside the selected workspace. The portable embedded engine
-is the default for both new CLI goals and the GUI; a private controller or
-machine-specific sidecar is not required.
+Agentic Harness runs a coding agent on one project-local goal, preserves what it
+did, and refuses to accept completion until an independent command passes.
 
 ## Quick Start
 
-Install the released distribution and open the GUI in a project:
+### 1. See the completion gate
 
 ```bash
 pipx install local-agentic-harness
+agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
+```
+
+The packaged example starts with a failing test, runs the same goal engine, and
+ends only after the test passes. It is a controlled mechanics demo with a mock
+coding agent, not evidence about model quality. Its durable report is written to
+`.agentic-harness/runs/<goal-id>/report.md`. The complete under two minutes
+recording path is in the [terminal demo script](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/demo-script.md).
+
+### 2. Use it on a real project
+
+```bash
 cd /path/to/your/project
 agentic-harness selftest
 agentic-harness gui
 ```
 
-The GUI asks you to choose one execution method:
+In Setup, choose an installed coding agent or compatible model and the command
+that independently proves the result. Enter one outcome and start. The browser
+shows the plan, checkpoints, changed files, checks, and final evidence.
 
-- an installed coding agent: Codex, OpenCode, Aider, or CodeWhale;
-- a local OpenAI-compatible chat-completions endpoint; or
-- a cloud OpenAI-compatible chat-completions endpoint.
-
-You also choose an independent verification command before work can start. For
-a model endpoint, enter the exact chat-completions URL and any model identifier
-the endpoint accepts. Local endpoints may be keyless. When an endpoint requires
-a key, use an environment-variable reference or a session-only key. Cloud setup
-also requires explicit confirmation that selected workspace content may be sent
-to that endpoint.
-
-After setup, describe one complete outcome and start it. The GUI shows the
-current subgoal, checkpoint, cycle, durable tool events, changed files, checks,
-and final evidence. It does not invent progress while the worker is quiet.
-
-The same configured workspace can run from the CLI:
+The same configured workspace has a concise CLI path:
 
 ```bash
 agentic-harness do "fix the failing tests and verify the result"
@@ -65,48 +46,23 @@ agentic-harness check
 agentic-harness report
 ```
 
-If the GUI profile uses a session-only model key, that credential belongs to
-the GUI process and the CLI cannot reuse it. Choose an environment-variable
-reference when both interfaces need to run the same model profile.
+For a foreground autonomous run, use `agentic-harness goal "..."` and resume an
+interrupted durable goal with `agentic-harness goal`. Run
+`agentic-harness quickstart` to print the shortest path detected for the current
+project.
 
-Use a complete autonomous goal directly when a project is already configured:
+## Product Boundary
 
-```bash
-agentic-harness goal "implement the requested change, preserve unrelated work, and verify it"
-```
+`local-agentic-harness` is one Python distribution with a shared engine, project
+state model, packaged static browser assets, and two interfaces:
 
-If that foreground process is interrupted, resume the same durable goal by
-omitting a new objective:
+- `agentic-harness` is the CLI.
+- `agentic-harness-gui` is the browser service.
 
-```bash
-agentic-harness goal
-```
-
-To see the shortest path detected for the current project:
-
-```bash
-agentic-harness quickstart
-```
-
-The packaged failure-to-fix demo remains available and auto-creates config for
-its mock worker:
-
-```bash
-agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
-```
-
-Or inspect each step:
-
-```bash
-agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force
-cd /tmp/agentic-harness-demo
-python -m pip install -r requirements-dev.txt
-python -m pytest tests/ -q   # expected to fail
-agentic-harness fix-tests     # auto-creates demo config
-agentic-harness status
-agentic-harness report
-python -m pytest tests/ -q   # should pass
-```
+This is the same install, not two products. Both interfaces use
+`.agentic-harness/` inside the selected workspace. The portable embedded engine
+is the default; private controllers and machine-specific sidecars are not
+required.
 
 ### Recipes
 
@@ -147,8 +103,9 @@ plan -> act -> record progress -> evaluate -> repair if needed
 The original objective remains attached to the goal across cycles and recovery.
 The worker maintains a plan, requirement audit, current subgoal, and checkpoint.
 Tool use produces durable redacted events. A completion claim is accepted only
-when every requirement has evidence and at least one configured deterministic
-review criterion passes.
+when every requirement resolves to a passed, current-run harness evidence
+record and at least one configured independent criterion passes. Worker-authored
+prose is not evidence. See the [evidence contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EVIDENCE_CONTRACT.md).
 
 Limits on cycles, elapsed time, model tokens, provider calls, and tool calls are
 resource budgets, not success conditions. Exhausting a budget produces a
@@ -156,6 +113,28 @@ blocked or failed result; it never converts unfinished work into done.
 
 One workspace has one active goal. Use separate project roots when truly
 independent goals must run concurrently.
+
+## Controlled Evaluation
+
+A reproducible comparison has 24 task-behavior cases across six maintenance payloads.
+Each runs the same scripted coding-agent process directly and through Agentic
+Harness in pristine workspaces. The matrix includes correct first attempts,
+premature claims that can be repaired, persistent false claims, and process
+failures that can be retried.
+
+| Arm | Verified accepts | False accepts | Acceptance precision | Recovered tasks | Mean attempts |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Direct baseline | 6 | 12 | 33.3% | 0 | 1.0 |
+| Agentic Harness | 18 | 0 | 100% | 12 | 2.0 |
+
+This is a controlled gate evaluation, not a real-model benchmark or adoption
+claim. Its value is narrower: the direct baseline
+produced 12 false accepts; Agentic Harness produced 0 false accepts. It caught
+all 12 premature claims and recovered every repairable task at the explicit
+cost of more attempts. See the
+[method](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/README.md),
+[summary](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/results/representative/summary.md), and
+[raw JSONL](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/results/representative/raw.jsonl).
 
 ## Execution Methods
 
@@ -386,17 +365,17 @@ goal/report smoke test, and writes `SHA256SUMS` beside the artifacts.
 - [GUI design](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_DESIGN.md)
 - [GUI deployment](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_DEPLOYMENT.md)
 - [Autonomous goal contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/CODEX_GOAL_PARITY.md)
+- [Evidence contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EVIDENCE_CONTRACT.md)
 - [Turnstone integration boundary](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/TURNSTONE_INTEGRATION.md)
 - [Release checklist](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/RELEASE_CHECKLIST.md)
 - [PyPI trusted publishing](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/PYPI_TRUSTED_PUBLISHING.md)
+- [Security policy](https://github.com/moortekweb-art/agentic-harness/blob/main/SECURITY.md)
+- [Contributor guide](https://github.com/moortekweb-art/agentic-harness/blob/main/CONTRIBUTING.md)
 - [Examples](https://github.com/moortekweb-art/agentic-harness/tree/main/examples)
 
 ## Contributing
 
-Issues and pull requests are welcome. Keep the public core portable and
-provider-neutral. Machine-specific services, model names, credentials, and
-operator workflows belong in adapters or private deployment configuration, not
-in default product behavior.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](https://github.com/moortekweb-art/agentic-harness/blob/main/CONTRIBUTING.md) for setup, test, portability, documentation, and pull-request expectations. Security reports belong in the private channel described by [SECURITY.md](https://github.com/moortekweb-art/agentic-harness/blob/main/SECURITY.md).
 
 ## License
 

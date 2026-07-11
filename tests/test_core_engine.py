@@ -65,11 +65,152 @@ def test_goal_state_machine_allows_expected_path() -> None:
     ]
 
 
+def test_artifact_store_goal_dir_cannot_escape_runs_directory(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+
+    with pytest.raises(ValueError, match="outside runs directory"):
+        store.goal_dir("../../outside")
+
+    safe = store.goal_dir("legacy-safe-id")
+    assert safe == (store.runs_dir / "legacy-safe-id").resolve()
+
+
+@pytest.mark.parametrize(
+    "goal_id",
+    ["/tmp/absolute", "goal\\windows-escape", "C:\\outside", "x" * 129],
+)
+def test_artifact_store_rejects_unsafe_goal_ids_on_every_platform(
+    tmp_path: Path,
+    goal_id: str,
+) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+
+    with pytest.raises(ValueError, match="outside runs directory"):
+        store.goal_dir(goal_id)
+
+
+def test_artifact_store_goal_dir_rejects_existing_symlink_escape(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (store.runs_dir / "safe-looking-id").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        store.goal_dir("safe-looking-id")
+
+
+def test_artifact_store_goal_dir_rejects_symlink_alias_within_runs(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    target = store.runs_dir / "goal-b"
+    target.mkdir()
+    (store.runs_dir / "goal-a").symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        store.goal_dir("goal-a")
+
+    assert not (target / "state.json").exists()
+
+
+def test_goal_listing_and_repair_ignore_symlinked_run_directories(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    outside = tmp_path / "outside-run"
+    outside.mkdir()
+    (outside / "state.json").write_text(
+        json.dumps(Goal("outside", id="safe-looking-id").to_dict()),
+        encoding="utf-8",
+    )
+    (store.runs_dir / "safe-looking-id").symlink_to(outside, target_is_directory=True)
+
+    assert store.list_goals() == []
+    assert store.repair_current_marker() is None
+    assert not store.current_path.exists()
+
+
+@pytest.mark.parametrize("symlink_level", ["root", "runs"])
+def test_artifact_store_rejects_symlinked_state_directories(
+    tmp_path: Path,
+    symlink_level: str,
+) -> None:
+    outside = tmp_path / "outside-state"
+    outside.mkdir()
+    root = tmp_path / ".agentic-harness"
+    if symlink_level == "root":
+        root.symlink_to(outside, target_is_directory=True)
+    else:
+        root.mkdir()
+        (root / "runs").symlink_to(outside, target_is_directory=True)
+    store = ArtifactStore(root)
+
+    with pytest.raises(ValueError, match="symlink"):
+        store.init()
+
+
+def test_artifact_store_rejects_symlinked_state_file_and_lock(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    outside_state = tmp_path / "outside-state.json"
+    outside_state.write_text(
+        json.dumps(Goal("outside", id="safe-id").to_dict()),
+        encoding="utf-8",
+    )
+    run_dir = store.goal_dir("safe-id")
+    run_dir.mkdir()
+    (run_dir / "state.json").symlink_to(outside_state)
+
+    with pytest.raises(StateLockError, match="corrupted or missing goal state"):
+        store.read_goal("safe-id")
+
+    outside_lock = tmp_path / "outside.lock"
+    outside_lock.touch()
+    store.lock_path.symlink_to(outside_lock)
+    with pytest.raises(StateLockError, match="symlink"):
+        with store.locked():
+            pass
+
+
+def test_tampered_current_marker_cannot_select_goal_outside_runs(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    escaped_name = f"outside-{tmp_path.name}"
+    store.current_path.write_text(
+        json.dumps({"goal_id": f"../../../{escaped_name}"}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StateLockError, match="corrupted or missing goal state"):
+        store.read_current_goal()
+
+    assert not (tmp_path.parent / escaped_name).exists()
+
+
+def test_goal_state_id_must_match_its_containing_run_directory(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    state_path = store.runs_dir / "expected-id" / "state.json"
+    state_path.parent.mkdir()
+    state_path.write_text(
+        json.dumps(Goal("tampered", id="different-id").to_dict()),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StateLockError, match="corrupted or missing goal state"):
+        store.read_goal("expected-id")
+
+
 def test_goal_state_machine_rejects_invalid_transition() -> None:
     goal = Goal("bad jump")
 
     with pytest.raises(InvalidTransitionError):
         goal.transition(GoalStatus.DONE)
+
+
+def test_goal_validation_rejects_unsafe_direct_constructor_id() -> None:
+    goal = Goal("unsafe direct object", id="../../../outside")
+
+    assert "id must be a safe identifier" in goal.validate()
 
 
 def test_goal_state_machine_rejects_done_to_anything() -> None:
@@ -393,7 +534,7 @@ def test_command_passes_criterion_reports_missing_executable(monkeypatch, tmp_pa
     )
 
     assert result.passed is False
-    assert "missing-review-tool" in result.criteria[0]["message"]
+    assert result.criteria[0]["message"] == "independent command could not start"
 
 
 def test_file_changed_and_git_clean_criteria_use_git_status(tmp_path) -> None:
@@ -475,7 +616,7 @@ def test_command_passes_criterion_reports_return_code_and_output(monkeypatch, tm
 
     assert result.passed is False
     assert "1" in result.criteria[0]["message"]
-    assert "exit failed" in result.criteria[0]["message"]
+    assert "exit failed" not in result.criteria[0]["message"]
 
 
 def test_command_passes_criterion_handles_nonzero_return_code(monkeypatch, tmp_path) -> None:
@@ -502,6 +643,37 @@ def test_file_changed_criterion_handles_git_not_available(monkeypatch, tmp_path)
 
     assert result.passed is False
     assert "git" in result.criteria[0]["message"]
+
+
+@pytest.mark.parametrize("criterion_name", ["file_changed", "git_clean"])
+def test_git_review_criteria_never_echo_failed_process_output(
+    monkeypatch,
+    tmp_path,
+    criterion_name: str,
+) -> None:
+    secret = f"opaque-{criterion_name}-review-secret-Z7Q4M9"
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=9,
+            stdout=secret,
+            stderr=secret,
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    criterion = (
+        file_changed(tmp_path, "tracked.txt")
+        if criterion_name == "file_changed"
+        else git_clean(tmp_path)
+    )
+
+    result = DeterministicReviewer([criterion]).review(Goal("do not echo git output"))
+
+    serialized = json.dumps(result.to_dict())
+    assert result.passed is False
+    assert "exit code 9" in serialized
+    assert secret not in serialized
 
 
 def test_file_changed_criterion_reports_clean_when_no_changes(tmp_path) -> None:

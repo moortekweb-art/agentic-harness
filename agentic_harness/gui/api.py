@@ -55,6 +55,20 @@ def health_payload(bridge: LocalGoalBridge) -> dict[str, Any]:
     }
 
 
+def setup_payload(bridge: LocalGoalBridge) -> dict[str, Any]:
+    """Describe the externally managed legacy backend to the shared GUI."""
+    return {
+        "contract": "agentic_harness.gui_setup.v1",
+        "configured": bridge.available(),
+        "editable": False,
+        "workspace": str(bridge.doc_root),
+        "worker": {
+            "type": "local_goal",
+            "label": "Existing local-goal runtime",
+        },
+    }
+
+
 def readiness_payload(
     bridge: LocalGoalBridge,
     *,

@@ -62,6 +62,26 @@ def test_ci_runs_on_linux_windows_and_macos() -> None:
     assert "runs-on: ${{ matrix.os }}" in workflow
 
 
+def test_ci_keeps_cross_platform_tests_but_deduplicates_heavy_checks() -> None:
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+
+    assert workflow["on"]["push"] == {"branches": ["main"]}
+    assert workflow["on"]["pull_request"] is None
+    steps = {step["name"]: step for step in workflow["jobs"]["test"]["steps"]}
+    assert "if" not in steps["Run tests"]
+    ubuntu_once = "matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'"
+    for name in ("Run lint", "Run typecheck", "Run compile smoke", "Run CLI smoke checks"):
+        assert steps[name]["if"] == ubuntu_once
+    package_smoke = (
+        "matrix.python-version == '3.14' && "
+        "(matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest')"
+    )
+    for name in ("Build package", "Install built wheel"):
+        assert steps[name]["if"] == package_smoke
+
+
 def test_publish_workflow_template_uses_pypi_trusted_publishing() -> None:
     workflow_path = REPO_ROOT / "docs/templates/publish.yml"
     workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
@@ -277,7 +297,7 @@ def test_distribution_name_avoids_occupied_pypi_project() -> None:
     metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert metadata["project"]["name"] == "local-agentic-harness"
-    assert metadata["project"]["version"] == "0.7.0"
+    assert metadata["project"]["version"] == "0.7.1"
     assert metadata["project"]["requires-python"] == ">=3.11,<3.15"
     assert metadata["project"]["scripts"]["agentic-harness"] == "agentic_harness.cli:main"
     assert metadata["project"]["scripts"]["agentic-harness-gui"] == (
@@ -293,6 +313,11 @@ def test_release_docs_match_current_package_version() -> None:
     checklist = (REPO_ROOT / "docs/RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
     release_notes = REPO_ROOT / f"docs/RELEASE_NOTES_{version}.md"
 
+    assert "version-generic" in checklist.lower()
+    assert 'VERSION="$(python -c' in checklist
+    assert 'TAG="v${VERSION}"' in checklist
+    assert 'git tag -a "$TAG"' in checklist
+    assert f"git tag -a v{version}" not in checklist
     assert f"v{version}" in checklist
     assert f"docs/RELEASE_NOTES_{version}.md" in checklist
     assert release_notes.exists()
@@ -301,10 +326,56 @@ def test_release_docs_match_current_package_version() -> None:
     )
 
 
+def test_trusted_publishing_docs_record_current_receipt_and_steady_state() -> None:
+    guide = (REPO_ROOT / "docs/PYPI_TRUSTED_PUBLISHING.md").read_text(encoding="utf-8")
+
+    assert "v0.7.0" in guide
+    assert "29159578285" in guide
+    assert "required reviewer" in guide
+    assert "exactly one deployment policy" in guide
+    assert "`v*`" in guide
+    assert "No default-branch deployment policy remains" in guide
+    assert "temporary exact-default-branch deployment policy" in guide
+    assert "v0.6.29 is public" not in guide
+    assert "Before publishing v0.7.0" not in guide
+    assert "## Historical publication receipt: v0.7.0" in guide
+    assert "is public and latest" not in guide
+
+    checklist = (REPO_ROOT / "docs/RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
+    assert "currently published v0.7.0" not in checklist
+    assert "historical v0.7.0" in checklist
+
+
 def test_release_smoke_has_twine_dependency() -> None:
     metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert "twine>=5.1" in metadata["project"]["optional-dependencies"]["test"]
+
+
+def test_build_backend_floor_supports_pep_639_license_expression() -> None:
+    metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "setuptools>=77" in metadata["build-system"]["requires"]
+    assert metadata["project"]["license"] == "MIT"
+
+
+def test_sdist_manifest_includes_the_assets_required_by_shipped_tests() -> None:
+    manifest = (REPO_ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+
+    for entry in (
+        "include CONTRIBUTING.md LICENSE README.md SECURITY.md",
+        "graft .github/workflows",
+        "graft docs",
+        "graft evaluation",
+        "graft examples",
+        "graft tests",
+        "prune examples/fix-failing-tests-demo/.agentic-harness",
+        "prune examples/fix-failing-tests-demo/.pytest_cache",
+        "prune examples/shell-worker/.agentic-harness/runs",
+        "prune examples/shell-worker/output",
+        "global-exclude *.backup",
+    ):
+        assert entry in manifest
 
 
 def test_readme_documents_pypi_install_command() -> None:

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import pytest
 
 from agentic_harness import Goal, GoalStatus, Supervisor
+from agentic_harness.adapters.coding_agent import CodingAgentWorker
 from agentic_harness.core.autonomy import AutonomousRunner, AutonomyPolicy
 from agentic_harness.core.errors import GoalConflictError, StateLockError
+from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.review import DeterministicReviewer, ReviewCriterion
 from agentic_harness.core.worker import WorkerResult
 from agentic_harness.core.workspace import workspace_change_summary
@@ -24,7 +27,9 @@ def passing_reviewer() -> DeterministicReviewer:
     )
 
 
-def complete_outcome() -> dict[str, object]:
+def complete_outcome(
+    evidence_ref: str = "review:1",
+) -> dict[str, object]:
     return {
         "status": "complete",
         "summary": "objective implemented",
@@ -38,7 +43,7 @@ def complete_outcome() -> dict[str, object]:
             {
                 "id": "requested-outcome",
                 "status": "satisfied",
-                "evidence": ["focused check passed"],
+                "evidence": [evidence_ref],
             }
         ],
         "blockers": [],
@@ -98,7 +103,83 @@ def test_coding_agent_instruction_includes_requested_scope_and_checks(
     assert goal.status is GoalStatus.DONE
     assert "Allowed workspace paths (operator guidance): src, tests/test_feature.py" in worker.instructions[0]
     assert "Independent check: pytest -q tests/test_feature.py" in worker.instructions[0]
+    assert "review:1" in worker.instructions[0]
     assert "Do not edit outside the allowed workspace paths" in worker.instructions[0]
+
+
+def test_review_evidence_ids_do_not_embed_secret_shaped_criterion_names(
+    tmp_path: Path,
+) -> None:
+    secret = "opaque-review-name-ABC123"
+    worker = SequenceWorker(
+        [WorkerResult(success=True, summary="complete", outcome=complete_outcome("review:1"))]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=DeterministicReviewer(
+            [
+                ReviewCriterion(
+                    name=f"api_key={secret}",
+                    check=lambda goal: (True, "passed"),
+                )
+            ]
+        ),
+    )
+
+    goal = AutonomousRunner(supervisor).run("keep evidence IDs opaque")
+
+    assert goal.status is GoalStatus.DONE
+    assert "review:1" in worker.instructions[0]
+    assert secret not in worker.instructions[0]
+    assert secret not in str(goal.to_dict())
+
+
+@pytest.mark.parametrize("evidence", [["trust the worker"], ["event:999"]])
+def test_strict_completion_rejects_evidence_not_issued_by_harness(
+    tmp_path: Path,
+    evidence: list[str],
+) -> None:
+    outcome = complete_outcome()
+    outcome["requirements"][0]["evidence"] = evidence
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=SequenceWorker(
+            [WorkerResult(success=True, summary="claims complete", outcome=outcome)]
+        ),
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(supervisor).step("reject invented evidence")
+
+    assert goal.status is not GoalStatus.DONE
+    audit = goal.metadata["autonomy"]["completion_audit"]
+    assert audit["passed"] is False
+    assert any("unverified evidence" in failure for failure in audit["failures"])
+
+
+def test_coding_agent_cannot_promote_its_own_evidence_prose(tmp_path: Path) -> None:
+    outcome = complete_outcome()
+    outcome["requirements"][0]["evidence"] = ["the worker says its tests passed"]
+    script = tmp_path / "claim.py"
+    script.write_text(
+        "import json\n"
+        f"outcome = {outcome!r}\n"
+        "print('HARNESS_RESULT_JSON=' + json.dumps(outcome))\n",
+        encoding="utf-8",
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=CodingAgentWorker([sys.executable, str(script)], cwd=tmp_path),
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(supervisor).step("reject coding-agent prose")
+
+    assert goal.status is not GoalStatus.DONE
+    audit = goal.metadata["autonomy"]["completion_audit"]
+    assert audit["passed"] is False
+    assert any("unverified evidence" in failure for failure in audit["failures"])
 
 
 def test_only_one_autonomous_driver_can_own_a_project_goal(tmp_path: Path) -> None:
@@ -143,6 +224,70 @@ class SequenceWorker:
         result = self.results[self.calls]
         self.calls += 1
         return result
+
+
+class EventEvidenceWorker:
+    def __init__(
+        self,
+        project_dir: Path,
+        *,
+        event_status: str = "passed",
+        run_id: str | None = None,
+    ) -> None:
+        self.project_dir = project_dir
+        self.event_status = event_status
+        self.run_id = run_id
+
+    def run(self, goal: Goal) -> WorkerResult:
+        TaskEventStore(
+            self.project_dir,
+            goal.id,
+            run_id=self.run_id or str(goal.metadata["worker_run_id"]),
+        ).append(
+            stage="check",
+            kind="check_finished",
+            summary="independent fixture check",
+            tool_name="fixture_check",
+            tool_status=self.event_status,
+            cycle=1,
+            checkpoint="verified",
+        )
+        return WorkerResult(
+            success=True,
+            summary="complete",
+            outcome=complete_outcome("event:1"),
+        )
+
+
+class LongHistoryEventEvidenceWorker:
+    def __init__(self, project_dir: Path) -> None:
+        self.project_dir = project_dir
+
+    def run(self, goal: Goal) -> WorkerResult:
+        for index in range(500):
+            TaskEventStore(self.project_dir, goal.id, run_id="previous-run").append(
+                stage="act",
+                kind="tool_finished",
+                summary=f"old event {index}",
+                tool_name="fixture_check",
+                tool_status="passed",
+            )
+        TaskEventStore(
+            self.project_dir,
+            goal.id,
+            run_id=str(goal.metadata["worker_run_id"]),
+        ).append(
+            stage="check",
+            kind="check_finished",
+            summary="current run check",
+            tool_name="fixture_check",
+            tool_status="passed",
+        )
+        return WorkerResult(
+            success=True,
+            summary="complete",
+            outcome=complete_outcome("event:501"),
+        )
 
 
 class WorkspaceProgressWorker(SequenceWorker):
@@ -228,6 +373,100 @@ def test_autonomous_runner_continues_partial_progress_and_accepts_proven_complet
     assert '"step": "implement"' in worker.instructions[1]
     assert "Persisted requirements:" in worker.instructions[1]
     assert '"id": "requested-outcome"' in worker.instructions[1]
+
+
+def test_current_run_passed_event_is_persisted_as_typed_requirement_evidence(
+    tmp_path: Path,
+) -> None:
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=EventEvidenceWorker(tmp_path),
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(supervisor).run("accept current-run evidence")
+
+    assert goal.status is GoalStatus.DONE
+    audit = goal.metadata["autonomy"]["completion_audit"]
+    event_record = next(
+        record for record in audit["evidence_registry"] if record["id"] == "event:1"
+    )
+    assert event_record == {
+        "schema": "agentic_harness.evidence.v1",
+        "id": "event:1",
+        "goal_id": goal.id,
+        "run_id": goal.metadata["worker_run_id"],
+        "requirement_ids": ["requested-outcome"],
+        "kind": "durable_event",
+        "result": "passed",
+        "issuer": "harness.task_event",
+        "validation": {"level": "harness_verified"},
+    }
+
+
+def test_current_run_evidence_is_not_truncated_after_long_event_history(
+    tmp_path: Path,
+) -> None:
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=LongHistoryEventEvidenceWorker(tmp_path),
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(supervisor).run("accept evidence after long history")
+
+    assert goal.status is GoalStatus.DONE
+    audit = goal.metadata["autonomy"]["completion_audit"]
+    assert any(record["id"] == "event:501" for record in audit["evidence_registry"])
+
+
+@pytest.mark.parametrize(
+    ("worker", "expected_fragment"),
+    [
+        ("wrong_run", "unverified evidence"),
+        ("failed_event", "unverified evidence"),
+    ],
+)
+def test_strict_completion_rejects_cross_run_or_failed_event_evidence(
+    tmp_path: Path,
+    worker: str,
+    expected_fragment: str,
+) -> None:
+    selected = (
+        EventEvidenceWorker(tmp_path, run_id="different-run")
+        if worker == "wrong_run"
+        else EventEvidenceWorker(tmp_path, event_status="failed")
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=selected,
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(supervisor).step("reject mismatched evidence")
+
+    assert goal.status is not GoalStatus.DONE
+    failures = goal.metadata["autonomy"]["completion_audit"]["failures"]
+    assert any(expected_fragment in failure for failure in failures)
+
+
+def test_strict_completion_rejects_duplicate_evidence_references(tmp_path: Path) -> None:
+    outcome = complete_outcome()
+    outcome["requirements"][0]["evidence"] = [
+        "review:1",
+        "review:1",
+    ]
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=SequenceWorker([WorkerResult(success=True, summary="done", outcome=outcome)]),
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(supervisor).step("reject duplicate evidence")
+
+    assert goal.status is not GoalStatus.DONE
+    failures = goal.metadata["autonomy"]["completion_audit"]["failures"]
+    assert any("duplicate evidence" in failure for failure in failures)
 
 
 def test_meaningful_progress_does_not_consume_the_no_progress_circuit_breaker(
@@ -643,8 +882,16 @@ def test_failed_review_evidence_survives_automatic_repair(tmp_path: Path) -> Non
     )
     worker = SequenceWorker(
         [
-            WorkerResult(success=True, summary="first claim", outcome=complete_outcome()),
-            WorkerResult(success=True, summary="repaired", outcome=complete_outcome()),
+            WorkerResult(
+                success=True,
+                summary="first claim",
+                outcome=complete_outcome("review:1"),
+            ),
+            WorkerResult(
+                success=True,
+                summary="repaired",
+                outcome=complete_outcome("review:1"),
+            ),
         ]
     )
     supervisor = Supervisor(project_dir=tmp_path, worker=worker, reviewer=reviewer)

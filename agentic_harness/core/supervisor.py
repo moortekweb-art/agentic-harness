@@ -131,8 +131,9 @@ class Supervisor:
                 )
                 self.store.write_goal(goal)
                 return goal
-            result = self._run_worker(goal)
             goal.metadata["worker_run_id"] = uuid4().hex
+            self.store.write_goal(goal)
+            result = self._run_worker(goal)
             goal.metadata["worker_success"] = result.success
             goal.metadata["worker_summary"] = result.summary
             goal.metadata["worker_returncode"] = result.returncode

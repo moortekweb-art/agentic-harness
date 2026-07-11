@@ -188,7 +188,11 @@ class EmbeddedModelAgent:
 
     def run(self, goal: Goal) -> WorkerResult:
         messages = self._initial_messages(goal)
-        event_store = TaskEventStore(self.project_dir, goal.id)
+        event_store = TaskEventStore(
+            self.project_dir,
+            goal.id,
+            run_id=str(goal.metadata.get("worker_run_id") or ""),
+        )
         autonomy = goal.metadata.get("autonomy")
         cycle = int(autonomy.get("cycle") or 0) + 1 if isinstance(autonomy, dict) else 1
         events: list[dict[str, Any]] = []
@@ -221,17 +225,7 @@ class EmbeddedModelAgent:
                 if not isinstance(arguments, dict):
                     arguments = {}
                 if name == "report_outcome":
-                    valid_evidence_ids = {
-                        str(event.get("evidence_id"))
-                        for event in events
-                        if isinstance(event.get("tool"), dict)
-                        and event["tool"].get("status") == "passed"
-                        and event.get("evidence_id")
-                    }
-                    outcome = _validated_outcome(
-                        arguments,
-                        valid_evidence_ids=valid_evidence_ids,
-                    )
+                    outcome = _validated_outcome(arguments)
                     events.append(
                         self._persist_event(
                             event_store,
@@ -398,7 +392,9 @@ class EmbeddedModelAgent:
                     "For a tool action return action, arguments, plan, requirements, ",
                     "current_subgoal, and checkpoint.",
                     "Use report_outcome only when work is complete or genuinely blocked.",
-                    "For each satisfied requirement, cite only evidence_id values returned by successful tools.",
+                    "For each satisfied requirement, cite only exact harness-issued evidence IDs: ",
+                    "values returned by successful tools or prospective review IDs supplied in the ",
+                    "user instruction. Never invent evidence IDs or use prose as evidence.",
                     "A complete outcome must include status=complete, summary, completed plan, ",
                     "satisfied requirements with evidence, current_subgoal, checkpoint, and blockers=[]",
                     f"Model identifier: {self.model}",
@@ -774,8 +770,6 @@ def _open_no_redirect(request: urllib.request.Request, *, timeout: int) -> Any:
 
 def _validated_outcome(
     arguments: dict[str, Any],
-    *,
-    valid_evidence_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     status = str(arguments.get("status") or "").strip().lower()
     if status not in {"complete", "progress", "blocked"}:
@@ -785,24 +779,6 @@ def _validated_outcome(
         raise ValueError("report_outcome requires a summary")
     raw_requirements = arguments.get("requirements")
     requirements: list[Any] = raw_requirements if isinstance(raw_requirements, list) else []
-    if status == "complete" and valid_evidence_ids is not None:
-        for requirement in requirements:
-            if not isinstance(requirement, dict):
-                continue
-            if str(requirement.get("status") or "").strip().lower() != "satisfied":
-                continue
-            evidence = requirement.get("evidence")
-            if not isinstance(evidence, list) or not evidence:
-                continue
-            invalid = [
-                str(item)
-                for item in evidence
-                if not isinstance(item, str) or item not in valid_evidence_ids
-            ]
-            if invalid:
-                raise ValueError(
-                    "completion evidence must cite evidence_id values from successful tool events"
-                )
     return {
         "status": status,
         "summary": summary,

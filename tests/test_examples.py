@@ -70,15 +70,19 @@ def test_killer_demo_contains_runnable_fix_failing_tests_loop() -> None:
 
 def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    quick_start = readme.split("## Quick Start", 1)[1].split("### Recipes", 1)[0]
+    quick_start = readme.split("## Quick Start", 1)[1].split("## Product Boundary", 1)[0]
 
-    assert "agentic-harness selftest" in quick_start
-    assert "agentic-harness quickstart" in quick_start
+    assert len(quick_start.split()) <= 300
+    assert "pipx install local-agentic-harness" in quick_start
     assert "agentic-harness run-demo fix-tests" in quick_start
-    assert "agentic-harness create-demo fix-tests" in quick_start
-    assert "python -m pip install -r requirements-dev.txt" in quick_start
-    assert "agentic-harness fix-tests" in quick_start
-    assert "auto-creates config" in quick_start
+    assert "controlled mechanics demo" in quick_start
+    assert ".agentic-harness/runs/<goal-id>/report.md" in quick_start
+    assert "agentic-harness gui" in quick_start
+    assert "agentic-harness create-demo" not in quick_start
+    assert "python -m pip install -r requirements-dev.txt" not in quick_start
+    assert quick_start.index("agentic-harness run-demo") < quick_start.index("agentic-harness gui")
+    assert "docs/demo-script.md" in quick_start
+    assert "under two minutes" in quick_start
     assert "agentic-harness lint-fix" in readme
     assert "agentic-harness typecheck-fix" in readme
     assert "agentic-harness update-docs" in readme
@@ -111,6 +115,33 @@ def test_gui_docs_describe_one_install_with_two_interfaces() -> None:
     assert "same install" in readme.lower()
     assert "shared Python engine" in architecture
     assert "project state model" in architecture
+
+
+def test_evidence_contract_documents_common_cross_adapter_acceptance_boundary() -> None:
+    contract = (REPO_ROOT / "docs/EVIDENCE_CONTRACT.md").read_text(encoding="utf-8")
+
+    for marker in (
+        "agentic_harness.evidence.v1",
+        "goal_id",
+        "run_id",
+        "requirement_ids",
+        "harness_verified",
+        "Coding-agent and custom workers",
+        "local-goal",
+    ):
+        assert marker in contract
+
+
+def test_readme_links_reproducible_gate_evaluation_without_model_quality_claims() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "## Controlled Evaluation" in readme
+    assert "24 task-behavior cases across six maintenance payloads" in readme
+    assert "24 maintenance tasks" not in readme
+    assert "12 false accepts" in readme
+    assert "0 false accepts" in readme
+    assert "not a real-model benchmark" in readme
+    assert "evaluation/results/representative/raw.jsonl" in readme
 
 
 def test_active_product_docs_are_provider_neutral() -> None:
@@ -170,6 +201,8 @@ def test_recovery_docs_preserve_failed_goal_evidence() -> None:
 def test_terminal_demo_script_uses_packaged_auto_config_path() -> None:
     script = (REPO_ROOT / "docs" / "demo-script.md").read_text(encoding="utf-8")
 
+    assert "Target recording length: 80-110 seconds." in script
+    assert "90-120 seconds" not in script
     assert "agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force" in script
     assert "agentic-harness create-demo fix-tests /tmp/agentic-harness-demo" in script
     assert "agentic-harness fix-tests     # auto-creates demo config" in script

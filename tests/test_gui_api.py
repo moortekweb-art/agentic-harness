@@ -464,6 +464,7 @@ def test_start_task_refuses_unowned_background_work() -> None:
 def test_gui_server_get_api_routes_return_json() -> None:
     with gui_server(FakeBridge()) as base_url:
         health = get_json(base_url, "/api/health")
+        setup = get_json(base_url, "/api/setup")
         modes = get_json(base_url, "/api/modes")
         tasks = get_json(base_url, "/api/tasks")
         current = get_json(base_url, "/api/tasks/current")
@@ -471,6 +472,16 @@ def test_gui_server_get_api_routes_return_json() -> None:
         readiness = get_json(base_url, "/api/readiness")
 
     assert health["ok"] is True
+    assert setup == {
+        "contract": "agentic_harness.gui_setup.v1",
+        "configured": True,
+        "editable": False,
+        "workspace": "/tmp/docs",
+        "worker": {
+            "type": "local_goal",
+            "label": "Existing local-goal runtime",
+        },
+    }
     assert health["no_babysitting"]["enabled"] is True
     assert health["readiness"]["agent_loop"]["stage"] == "Act"
     assert readiness["agent_loop"]["stage"] == "Act"
@@ -1103,6 +1114,7 @@ def test_gui_server_rejects_cross_origin_websocket() -> None:
 
 class FakeBridge:
     local_goal = Path("/tmp/local-goal")
+    doc_root = Path("/tmp/docs")
 
     def __init__(self) -> None:
         self.commands: list[list[str]] = []

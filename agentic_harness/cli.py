@@ -558,7 +558,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "review":
             goal = supervisor.review()
-            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            print(json.dumps(_review_command_payload(goal), indent=2, sort_keys=True))
             return 0
         if args.command == "repair":
             repaired_goal = supervisor.repair()
@@ -1248,7 +1248,7 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
             {
                 "id": "installed-goal",
                 "status": "satisfied",
-                "evidence": ["independent review command passed"],
+                "evidence": ["review:1"],
             }
         ],
         "blockers": [],
@@ -1629,6 +1629,15 @@ def format_recipe_result_text(
         lines.append("Artifacts:")
         lines.extend(f"- {artifact}" for artifact in goal.artifacts)
     return "\n".join(lines)
+
+
+def _review_command_payload(goal: Goal) -> dict[str, object]:
+    """Return the terminal-safe result of an explicit review command."""
+    return {
+        "id": goal.id,
+        "status": goal.status.value,
+        "review": goal.review,
+    }
 
 
 def format_report_text(
