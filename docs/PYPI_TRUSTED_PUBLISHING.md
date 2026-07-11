@@ -70,9 +70,9 @@ defense in depth; they do not replace those repository settings.
 
 ## Current Publish Status
 
-`local-agentic-harness` v0.6.26 is public on PyPI. Workflow run `29074514346`
+`local-agentic-harness` v0.6.29 is public on PyPI. Workflow run `29142969360`
 completed the build, wheel/sdist smoke tests, trusted-publishing exchange,
-upload, and digital attestations successfully.
+upload, and digital attestations successfully from release ref `v0.6.29`.
 
 The first v0.6.26 release-triggered run failed before the trusted-publishing
 exchange because the upload action tried to parse `dist/SHA256SUMS` as a Python
@@ -85,8 +85,8 @@ successful recovery run verified that only the wheel and sdist are uploaded.
 python -m pip install -e ".[test]"
 python -m agentic_harness.cli release-smoke --dist-dir /tmp/agentic-harness-dist
 python -m pip index versions local-agentic-harness
-gh release view v0.6.26 --repo moortekweb-art/agentic-harness
-gh run view 29074514346 --repo moortekweb-art/agentic-harness
+gh release view v0.6.29 --repo moortekweb-art/agentic-harness
+gh run view 29142969360 --repo moortekweb-art/agentic-harness
 ```
 
 The publish workflow should not use `PYPI_TOKEN`, `username`, or `password`.
