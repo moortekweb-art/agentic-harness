@@ -1,0 +1,14 @@
+[Unit]
+Description=Agentic Harness GUI service
+After=network.target
+
+[Service]
+Type=simple
+User=<USER>
+WorkingDirectory=<WORKDIR>
+EnvironmentFile=-<TOKEN_ENV_FILE>
+ExecStart=<EXECUTABLE> --host 127.0.0.1 --port <PORT> --doc-root <DOC_ROOT> --no-open
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

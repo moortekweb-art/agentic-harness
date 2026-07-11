@@ -87,18 +87,25 @@ For a local browser interface:
 agentic-harness gui
 ```
 
+This is the same program and same install: the `local-agentic-harness` distribution
+provides the shared Python engine, project state model, and packaged static
+assets for both interfaces. Use `agentic-harness` for the CLI, or use
+`agentic-harness-gui` as the long-running GUI service executable; they share
+the same `.agentic-harness/` project state. They are not separate products or
+repositories.
+
 The GUI binds to `127.0.0.1` by default and asks the OS for a free local port.
 Use the exact URL printed at startup. For scripts or operators that need a
 stable URL, pass an explicit port:
 
 ```bash
-agentic-harness gui --port 8765
+agentic-harness-gui --port 8765
 ```
 
 Use `--no-open` for headless terminals, SSH sessions, and automation:
 
 ```bash
-agentic-harness gui --no-open
+agentic-harness-gui --no-open
 ```
 
 Use `agentic-harness gui --doc-root /path/to/compatible/checkout` or
@@ -236,6 +243,7 @@ transcripts, artifacts, loop limits, and review gates.
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
 - [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.29 release checks.
+- [GUI deployment guide](docs/GUI_DEPLOYMENT.md) provides a portable service template.
 - [Codex `/goal` parity contract](docs/CODEX_GOAL_PARITY.md) documents autonomous continuation, completion, recovery, and sidecar boundaries.
 - [Autonomy audit](docs/AUTONOMY_AUDIT_2026-07-10.md) records findings, fixes, verification evidence, and residual limits.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active tokenless workflow and its verified release path.
@@ -433,6 +441,11 @@ agentic-harness init-agent codex
 If no supported coding-agent backend is available, bare `init` creates a safe
 placeholder config. The `init <tool>` variant and `init-agent <tool>` variants
 write a pre-configured template for the named backend.
+
+After a failed goal, run `agentic-harness report` before deciding what to do
+next so you can inspect the recorded evidence. Use `agentic-harness restart`
+to retry that same failed goal while preserving its evidence; start a fresh
+goal only for intentionally separate work.
 
 ```yaml
 version: 1

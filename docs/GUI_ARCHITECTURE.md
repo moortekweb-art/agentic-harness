@@ -2,7 +2,14 @@
 
 ## Release Shape
 
-Agentic Harness v0.6.29 is a Python application with a local browser interface.
+Agentic Harness is one Python application with a local browser interface. The
+single PyPI distribution and package, `local-agentic-harness`, provides one
+shared Python engine and project state model, plus packaged static assets. It
+offers two interfaces from the same install: the `agentic-harness` CLI and the
+`agentic-harness-gui` long-running GUI service. Both use the same
+`.agentic-harness/` project state; do not split them into separate products or
+repositories.
+
 The Python process serves packaged HTML, CSS, and JavaScript from loopback and
 adapts an optional local-goal installation into a stable human-facing API.
 
@@ -13,10 +20,11 @@ runtime, or a separately hosted web service.
 
 ### CLI Entry Point
 
-`agentic-harness gui` starts the local server. It binds to `127.0.0.1` and asks
-the operating system for a free port unless `--port` is supplied. The selected
-URL is printed after the bind succeeds and is opened automatically unless
-`--no-open` is used.
+`agentic-harness gui` and `agentic-harness-gui` start the same local server.
+The latter is the service executable from the same install, not another package
+or product. Both bind to `127.0.0.1` and ask the operating system for a free
+port unless `--port` is supplied. The selected URL is printed after the bind
+succeeds and is opened automatically unless `--no-open` is used.
 
 ### Local Goal Bridge
 
