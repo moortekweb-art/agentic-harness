@@ -174,10 +174,22 @@ def test_active_publish_workflow_gates_oidc_on_exact_verified_release_commit() -
     assert stage["permissions"] == {"contents": "write", "actions": "read"}
     assert "environment" not in stage
     assert "github.ref_name" not in str(stage)
+    stage_release_step = next(
+        step
+        for step in stage["steps"]
+        if step.get("name") == "Create or update draft release"
+    )
+    assert stage_release_step["env"]["GH_REPO"] == "${{ github.repository }}"
     final = workflow["jobs"]["publish_release"]
     assert set(final["needs"]) == {"stage_release", "publish"}
     assert final["environment"]["name"] == "github-release"
     assert "github.ref_name" not in str(final)
+    final_release_step = next(
+        step
+        for step in final["steps"]
+        if step.get("name") == "Make the verified release public"
+    )
+    assert final_release_step["env"]["GH_REPO"] == "${{ github.repository }}"
     assert "--draft=false" in text
     assert "gh release create" in text
     assert "--draft" in text

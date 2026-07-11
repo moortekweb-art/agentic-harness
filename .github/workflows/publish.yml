@@ -123,6 +123,7 @@ jobs:
       - name: Create or update draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > draft-state 2>/dev/null; then
             test "$(cat draft-state)" = "true" || {
@@ -188,4 +189,5 @@ jobs:
       - name: Make the verified release public
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: gh release edit "$RELEASE_TAG" --draft=false --latest
