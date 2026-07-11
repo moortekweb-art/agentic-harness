@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,17 @@ import urllib.request
 
 MAX_API_RESPONSE_BYTES = 2_000_000
 REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+REPRESENTATIVE_SOURCES = (
+    "evaluation/tasks.json",
+    "evaluation/run_gate_benchmark.py",
+    "evaluation/scripted_coding_agent.py",
+    "evaluation/verify_fixture.py",
+    "evaluation/fixture_support.py",
+    "agentic_harness/adapters/coding_agent.py",
+    "agentic_harness/core/autonomy.py",
+    "agentic_harness/core/review.py",
+    "agentic_harness/core/supervisor.py",
+)
 
 
 def validate_release_identity(
@@ -110,6 +122,39 @@ def validate_ci(project_dir: Path, *, repository: str, default_branch: str, toke
         )
 
 
+def validate_representative_receipt(
+    project_dir: Path, *, expected_sha: str, expected_version: str
+) -> None:
+    results = project_dir / "evaluation/results/representative"
+    environment = json.loads((results / "environment.json").read_text(encoding="utf-8"))
+    if environment.get("git_commit") != expected_sha:
+        raise ValueError("representative receipt commit does not match release commit")
+    if environment.get("harness_version") != expected_version:
+        raise ValueError("representative receipt version does not match package version")
+    if environment.get("git_dirty") is not False:
+        raise ValueError("representative receipt was not generated from a clean baseline")
+    checksums = environment.get("source_checksums")
+    if not isinstance(checksums, dict) or set(checksums) != set(REPRESENTATIVE_SOURCES):
+        raise ValueError("representative receipt must contain exactly nine source checksums")
+    for relative in REPRESENTATIVE_SOURCES:
+        actual = hashlib.sha256((project_dir / relative).read_bytes()).hexdigest()
+        if checksums[relative] != actual:
+            raise ValueError(f"representative receipt source checksum mismatch: {relative}")
+
+    rows = [json.loads(line) for line in (results / "raw.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines() if line]
+    summary = json.loads((results / "summary.json").read_text(encoding="utf-8"))
+    if summary.get("task_count") != 24 or summary.get("record_count") != 48:
+        raise ValueError("representative summary must describe 24 tasks and 48 records")
+    if len(rows) != 48 or summary.get("pristine_arm_mismatches") != 0:
+        raise ValueError("representative raw records are inconsistent with the summary")
+    for arm in ("baseline", "harness"):
+        count = sum(row.get("arm") == arm for row in rows)
+        if count != 24 or summary.get("arms", {}).get(arm, {}).get("runs") != count:
+            raise ValueError(f"representative {arm} record count is inconsistent")
+
+
 def _git(project_dir: Path, *args: str) -> str:
     return subprocess.check_output(
         ["git", *args],
@@ -121,7 +166,7 @@ def _git(project_dir: Path, *args: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("gate", choices=("identity", "ancestry", "ci"))
+    parser.add_argument("gate", choices=("identity", "ancestry", "ci", "receipt"))
     parser.add_argument("--project-dir", default=".")
     return parser
 
@@ -138,12 +183,21 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.gate == "ancestry":
             validate_default_branch_ancestry(project_dir, os.environ["DEFAULT_BRANCH"])
-        else:
+        elif args.gate == "ci":
             validate_ci(
                 project_dir,
                 repository=os.environ["REPOSITORY"],
                 default_branch=os.environ["DEFAULT_BRANCH"],
                 token=os.environ["GH_TOKEN"],
+            )
+        else:
+            metadata = tomllib.loads(
+                (project_dir / "pyproject.toml").read_text(encoding="utf-8")
+            )
+            validate_representative_receipt(
+                project_dir,
+                expected_sha=os.environ["RELEASE_SHA"],
+                expected_version=str(metadata["project"]["version"]),
             )
     except (KeyError, OSError, ValueError, subprocess.SubprocessError) as exc:
         print(f"release validation failed: {exc}", file=sys.stderr)

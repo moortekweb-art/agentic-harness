@@ -76,6 +76,16 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: python agentic_harness/core/release_validation.py ci
 
+      - name: Regenerate representative benchmark receipt
+        run: |
+          python evaluation/run_gate_benchmark.py \
+            --output-dir evaluation/results/representative \
+            --seed 20260711 \
+            --repetitions 1
+
+      - name: Verify representative benchmark release provenance
+        run: python agentic_harness/core/release_validation.py receipt
+
       - name: Build and smoke-test distributions
         run: |
           python -m pip install -e ".[test]"
