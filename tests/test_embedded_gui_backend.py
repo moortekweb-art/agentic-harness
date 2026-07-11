@@ -131,14 +131,14 @@ def test_terminal_history_keeps_each_goals_original_changed_files(tmp_path) -> N
     supervisor = build_supervisor(tmp_path)
 
     first = supervisor.start("add the first file")
-    (tmp_path / "a.txt").write_text("a\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_bytes(b"a\n")
     supervisor.continue_goal()
     supervisor.review()
     first = supervisor.accept(reason="first verified")
     first, _ = write_goal_report(supervisor, tmp_path, first)
 
     second = supervisor.start("add the second file")
-    (tmp_path / "b.txt").write_text("b\n", encoding="utf-8")
+    (tmp_path / "b.txt").write_bytes(b"b\n")
     supervisor.continue_goal()
     supervisor.review()
     second = supervisor.accept(reason="second verified")
@@ -426,6 +426,20 @@ def test_terminal_payload_waits_for_its_durable_report(tmp_path, monkeypatch) ->
 
 def test_terminal_report_hash_uses_the_persisted_file_bytes(tmp_path, monkeypatch) -> None:
     _configure_scripted_agent(tmp_path)
+    backend = EmbeddedExecutionBackend(tmp_path)
+    backend.start({"objective": "Create a report with platform newlines"})
+    finished = _wait_for_terminal(backend)
+    report_path = next(
+        row["path"] for row in finished["artifacts"] if row["name"] == "report.md"
+    )
+    (tmp_path / report_path).unlink()
+    with backend.store.locked():
+        goal = backend.store.read_current_goal()
+        assert goal is not None
+        goal.artifacts.remove(report_path)
+        goal.metadata.pop("terminal_report_state_sha256", None)
+        goal.metadata.pop("terminal_report_content_sha256", None)
+        backend.store.write_goal(goal)
     original_write_report = ArtifactStore.write_report
 
     def write_crlf_report(self, goal, content, name="report.md"):
@@ -434,13 +448,12 @@ def test_terminal_report_hash_uses_the_persisted_file_bytes(tmp_path, monkeypatc
         return path
 
     monkeypatch.setattr(ArtifactStore, "write_report", write_crlf_report)
-    backend = EmbeddedExecutionBackend(tmp_path)
+    repaired = backend._ensure_terminal_report(goal)
+    visible = backend.status()
 
-    backend.start({"objective": "Create a report with platform newlines"})
-    finished = _wait_for_terminal(backend)
-
-    assert finished["status"] == "done"
-    assert finished["final_result"]["accepted"] is True
+    assert backend._terminal_report_ready(repaired) is True
+    assert visible["status"] == "done"
+    assert visible["final_result"]["accepted"] is True
 
 
 def test_terminal_report_is_refreshed_after_blocked_goal_recovers(tmp_path) -> None:

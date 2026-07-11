@@ -745,7 +745,13 @@ class EmbeddedExecutionBackend:
         if terminal and not report_ready:
             status = "checking"
         progress = _progress(status, plan, requirements)
-        trusted_error = goal.error if status in {"blocked", "stopped"} else None
+        blocker = autonomy.get("blocker")
+        blocker_reason = (
+            str(blocker.get("reason") or "") if isinstance(blocker, dict) else ""
+        )
+        trusted_error = (
+            str(goal.error or blocker_reason) if status in {"blocked", "stopped"} else ""
+        )
         summary = str(
             trusted_error
             or outcome.get("summary")
