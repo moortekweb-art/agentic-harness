@@ -1305,27 +1305,38 @@ def run_demo(name: str, path: Path, *, force: bool = False, install: bool = True
         print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
         return 2
 
-    env = os.environ.copy()
-    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
-
     print(f"Demo path: {demo_path}")
-    if install and not _run_demo_step(
-        "Install demo dependencies",
-        [sys.executable, "-m", "pip", "install", "-r", "requirements-dev.txt"],
-        cwd=demo_path,
-        env=env,
-    ):
-        return 1
+    python = Path(sys.executable)
+    env = os.environ.copy()
+    if install:
+        venv_dir = demo_path / ".venv"
+        if not _run_demo_step(
+            "Create demo virtual environment",
+            [sys.executable, "-m", "venv", "--system-site-packages", str(venv_dir)],
+            cwd=demo_path,
+            env=env,
+        ):
+            return 1
+        python = _venv_python(venv_dir)
+    env["PATH"] = str(python.parent) + os.pathsep + env.get("PATH", "")
+    if install:
+        if not _run_demo_step(
+            "Install demo dependencies",
+            [str(python), "-m", "pip", "install", "-r", "requirements-dev.txt"],
+            cwd=demo_path,
+            env=env,
+        ):
+            return 1
     if not _run_demo_step(
         "Reset demo",
-        [sys.executable, "reset_demo.py"],
+        [str(python), "reset_demo.py"],
         cwd=demo_path,
         env=env,
     ):
         return 1
     if not _run_demo_step(
         "Confirm starting tests fail",
-        [sys.executable, "-m", "pytest", "tests/", "-q"],
+        [str(python), "-m", "pytest", "tests/", "-q"],
         cwd=demo_path,
         env=env,
         expect_failure=True,
@@ -1333,7 +1344,7 @@ def run_demo(name: str, path: Path, *, force: bool = False, install: bool = True
         return 1
     if not _run_demo_step(
         "Run fix-tests recipe",
-        [sys.executable, "-m", "agentic_harness.cli", "fix-tests"],
+        [str(python), "-m", "agentic_harness.cli", "fix-tests"],
         cwd=demo_path,
         env=env,
         echo_output=True,
@@ -1341,7 +1352,7 @@ def run_demo(name: str, path: Path, *, force: bool = False, install: bool = True
         return 1
     if not _run_demo_step(
         "Show status",
-        [sys.executable, "-m", "agentic_harness.cli", "status"],
+        [str(python), "-m", "agentic_harness.cli", "status"],
         cwd=demo_path,
         env=env,
         echo_output=True,
@@ -1349,7 +1360,7 @@ def run_demo(name: str, path: Path, *, force: bool = False, install: bool = True
         return 1
     if not _run_demo_step(
         "Confirm final tests pass",
-        [sys.executable, "-m", "pytest", "tests/", "-q"],
+        [str(python), "-m", "pytest", "tests/", "-q"],
         cwd=demo_path,
         env=env,
     ):

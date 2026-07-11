@@ -356,6 +356,78 @@ def test_run_demo_fix_tests_executes_end_to_end(tmp_path, monkeypatch, capsys) -
     assert f"$ {sys.executable} mock_coding_agent.py" in transcript.read_text(encoding="utf-8")
 
 
+def test_run_demo_creates_venv_and_uses_its_python(tmp_path, monkeypatch) -> None:
+    demo = tmp_path / "demo"
+    commands: list[list[str]] = []
+
+    def fake_step(label, command, **kwargs):
+        commands.append(command)
+        return True
+
+    monkeypatch.setattr(cli, "_run_demo_step", fake_step)
+
+    assert cli.run_demo("fix-tests", demo) == 0
+
+    venv_python = cli._venv_python(demo / ".venv")
+    assert commands[0] == [
+        sys.executable,
+        "-m",
+        "venv",
+        "--system-site-packages",
+        str(demo / ".venv"),
+    ]
+    assert commands[1] == [
+        str(venv_python),
+        "-m",
+        "pip",
+        "install",
+        "-r",
+        "requirements-dev.txt",
+    ]
+    assert all(command[0] == str(venv_python) for command in commands[1:])
+
+
+def test_run_demo_prepends_venv_executable_directory_to_path(tmp_path, monkeypatch) -> None:
+    demo = tmp_path / "demo"
+    environments: list[dict[str, str]] = []
+
+    def fake_step(label, command, **kwargs):
+        environments.append(kwargs["env"])
+        return True
+
+    monkeypatch.setattr(cli, "_run_demo_step", fake_step)
+
+    assert cli.run_demo("fix-tests", demo) == 0
+
+    expected = str(cli._venv_python(demo / ".venv").parent)
+    assert all(env["PATH"].split(os.pathsep)[0] == expected for env in environments)
+
+
+@pytest.mark.parametrize(
+    ("failed_label", "expected_labels"),
+    [
+        ("Create demo virtual environment", ["Create demo virtual environment"]),
+        (
+            "Install demo dependencies",
+            ["Create demo virtual environment", "Install demo dependencies"],
+        ),
+    ],
+)
+def test_run_demo_propagates_venv_or_install_failure(
+    tmp_path, monkeypatch, failed_label, expected_labels
+) -> None:
+    labels: list[str] = []
+
+    def fake_step(label, command, **kwargs):
+        labels.append(label)
+        return label != failed_label
+
+    monkeypatch.setattr(cli, "_run_demo_step", fake_step)
+
+    assert cli.run_demo("fix-tests", tmp_path / "demo") == 1
+    assert labels == expected_labels
+
+
 def test_direct_recipe_auto_initializes_packaged_demo(tmp_path, capsys) -> None:
     demo = tmp_path / "demo"
     assert main(["create-demo", "fix-tests", str(demo)]) == 0

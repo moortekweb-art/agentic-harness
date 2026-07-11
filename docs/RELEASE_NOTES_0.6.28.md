@@ -19,6 +19,9 @@ browser control boundary before the durable-goal work leaves draft review.
   and other retryable failures remain under background recovery.
 - Installed wheel and sdist smoke tests now execute the strict `goal` path with
   structured completion evidence and an independent review command.
+- `run-demo fix-tests` now installs demo dependencies into a project-local
+  virtual environment, avoiding PEP 668 system-Python writes while propagating
+  setup failures and using the same interpreter for every demo step.
 
 ## Verification
 
