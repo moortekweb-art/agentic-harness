@@ -103,6 +103,16 @@ def _run_cli(
     )
 
 
+def _run_selftest_cli() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(RUNNER), "--selftest"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
@@ -206,6 +216,26 @@ def test_cli_compares_pristine_arms_and_catches_false_claims(tmp_path: Path) -> 
     assert summary["arms"]["harness"]["recovered_tasks"] == 2
     assert summary["token_metrics_available"] is False
     assert all("tokens" not in row for row in rows)
+
+
+def test_cli_selftest_runs_compact_offline_matrix_without_tracked_outputs() -> None:
+    latest = EVALUATION / "results" / "latest"
+    assert not latest.exists()
+
+    completed = _run_selftest_cli()
+
+    assert completed.returncode == 0, completed.stderr
+    assert not latest.exists()
+    summary = json.loads(completed.stdout)
+    assert summary["evaluation_type"] == "controlled_completion_gate_efficacy"
+    assert summary["task_count"] == 4
+    assert summary["record_count"] == 8
+    assert summary["seed"] == 20260711
+    assert summary["repetitions"] == 1
+    assert summary["arms"]["baseline"]["false_success_rate"] == 1.0
+    assert summary["arms"]["harness"]["false_success_rate"] == 0.0
+    assert summary["arms"]["harness"]["verified_accepts"] == 3
+    assert summary["token_metrics_available"] is False
 
 
 def test_seeded_order_and_report_artifacts_are_reproducible(tmp_path: Path) -> None:
