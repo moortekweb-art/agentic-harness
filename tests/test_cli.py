@@ -754,6 +754,11 @@ def test_installed_artifact_smoke_checks_version_commands(
         return
     assert "Smoke wheel version --version" in labels
     assert "Smoke wheel version version" in labels
+    assert "Smoke wheel GUI entry point" in labels
+    assert "Smoke wheel packaged static assets" in labels
+    assert commands["Smoke wheel GUI entry point"][0] == str(
+        cli._venv_executable(tmp_root / "wheel" / "venv", "agentic-harness-gui")
+    )
     assert "Smoke wheel run" in labels
     assert "Smoke wheel status default text" in labels
     assert "Smoke wheel run-until-done" in labels

@@ -89,6 +89,56 @@ def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
     assert "cat > .agentic-harness/config.yml" not in quick_start
 
 
+def test_readme_documents_released_distribution_install() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    installation = readme.split("## Installation", 1)[1].split("For development:", 1)[0]
+
+    assert "pipx install local-agentic-harness" in installation
+    assert "The installed CLI command remains `agentic-harness`." in installation
+    assert "After the first PyPI publish" not in installation
+
+
+def test_gui_docs_describe_one_install_with_two_interfaces() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    architecture = (REPO_ROOT / "docs/GUI_ARCHITECTURE.md").read_text(encoding="utf-8")
+
+    for text in (readme, architecture):
+        assert "local-agentic-harness" in text
+        assert "agentic-harness-gui" in text
+        assert ".agentic-harness/" in text
+        assert "packaged static" in text
+        assert "assets" in text
+    assert "same install" in readme.lower()
+    assert "shared Python engine" in architecture
+    assert "project state model" in architecture
+
+
+def test_gui_deployment_guide_is_portable_and_uses_placeholders() -> None:
+    guide = (REPO_ROOT / "docs/GUI_DEPLOYMENT.md").read_text(encoding="utf-8")
+    template = (REPO_ROOT / "docs/agentic-harness-gui.service.template").read_text(
+        encoding="utf-8"
+    )
+
+    assert "agentic-harness-gui" in guide
+    assert "Tailscale Serve" in guide
+    assert "loopback" in guide.lower()
+    assert "<USER>" in template
+    assert "<WORKDIR>" in template
+    assert "<EXECUTABLE>" in template
+    assert "<PORT>" in template
+    assert "--no-open" in template
+    assert "EnvironmentFile=-<TOKEN_ENV_FILE>" in template
+
+
+def test_recovery_docs_preserve_failed_goal_evidence() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "`.agentic-harness/config.yml`" in readme
+    assert "`agentic-harness report`" in readme
+    assert "`agentic-harness restart`" in readme
+    assert "preserving its evidence" in readme
+
+
 def test_terminal_demo_script_uses_packaged_auto_config_path() -> None:
     script = (REPO_ROOT / "docs" / "demo-script.md").read_text(encoding="utf-8")
 

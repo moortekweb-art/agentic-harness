@@ -115,7 +115,7 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
                 return
             if route.startswith("/api/") and not self._allowed(parsed.query):
                 return
-            if route == "/api/health":
+            if route in {"/api/health", "/api/status"}:
                 self._json(health_payload(bridge))
             elif route == "/api/modes":
                 self._json({"modes": modes_payload()})

@@ -109,7 +109,13 @@ jobs:
           with open(os.path.join(demo_dir, "requirements-dev.txt"), encoding="utf-8") as handle:
               if "pytest>=8" not in handle.read():
                   raise SystemExit("generated demo is missing pytest requirement")
-          subprocess.check_call([python_bin, "-m", "pytest", "tests/", "-q"], cwd=demo_dir, env=env)
+          demo_python = os.path.join(
+              demo_dir,
+              ".venv",
+              "Scripts" if os.name == "nt" else "bin",
+              "python.exe" if os.name == "nt" else "python",
+          )
+          subprocess.check_call([demo_python, "-m", "pytest", "tests/", "-q"], cwd=demo_dir, env=env)
 
       - name: Run CLI smoke checks
         shell: python
