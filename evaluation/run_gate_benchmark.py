@@ -484,12 +484,12 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
         "",
         "This is a deterministic scripted gate evaluation, not real-model performance.",
         "",
-        f"- Task-behavior cases: {summary['task_count']}",
+        f"- Tasks: {summary['task_count']}",
         f"- Repetitions: {summary['repetitions']}",
         f"- Seed: {summary['seed']}",
         f"- Token metrics available: {str(summary['token_metrics_available']).lower()}",
         "",
-        "| Arm | Verified accepts | Verifier pass | False-success rate (false-claim cases) | Caught false claims | Recovered | Mean attempts | Mean seconds |",
+        "| Arm | Verified accepts | Verifier pass | False-success rate | Caught false claims | Recovered | Mean attempts | Mean seconds |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for arm in ARMS:
@@ -503,9 +503,8 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "The baseline trusts an exit-zero structured completion claim. The harness arm uses "
+            "The baseline trusts an exit-zero structured completion claim. The harness arm uses ",
             "`CodingAgentWorker`, `AutonomousRunner`, and an independent verifier process.",
-            "The false-success rate denominator is the intentionally false-claim cases, not all runs.",
             "",
         ]
     )

@@ -12,7 +12,7 @@ Accepted records use `agentic_harness.evidence.v1`:
 ```json
 {
   "schema": "agentic_harness.evidence.v1",
-  "id": "review:1",
+  "id": "review:1:command_passes",
   "goal_id": "0123456789abcdef0123456789abcdef",
   "run_id": "fedcba9876543210fedcba9876543210",
   "requirement_ids": ["R1"],

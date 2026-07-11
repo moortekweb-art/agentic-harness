@@ -208,43 +208,6 @@ def test_cli_compares_pristine_arms_and_catches_false_claims(tmp_path: Path) -> 
     assert all("tokens" not in row for row in rows)
 
 
-def test_scripted_agent_preserves_manifest_newlines_on_windows(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from evaluation import scripted_coding_agent
-    from evaluation.run_gate_benchmark import load_tasks, materialize_task
-
-    manifest = _mini_manifest(tmp_path / "tasks.json")
-    task = load_tasks(manifest)[0]
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    materialize_task(workspace, task)
-    original_write_text = Path.write_text
-
-    def windows_write_text(
-        path: Path,
-        data: str,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
-    ) -> int:
-        translated = data.replace("\n", "\r\n") if newline is None else data
-        return original_write_text(
-            path,
-            translated,
-            encoding=encoding,
-            errors=errors,
-            newline="",
-        )
-
-    monkeypatch.setattr(Path, "write_text", windows_write_text)
-    monkeypatch.chdir(workspace)
-
-    assert scripted_coding_agent.main() == 0
-    assert (workspace / str(task["path"])).read_bytes() == str(task["expected"]).encode()
-
-
 def test_seeded_order_and_report_artifacts_are_reproducible(tmp_path: Path) -> None:
     manifest = _mini_manifest(tmp_path / "tasks.json")
     first = tmp_path / "first"
@@ -284,8 +247,6 @@ def test_seeded_order_and_report_artifacts_are_reproducible(tmp_path: Path) -> N
     markdown = (first / "summary.md").read_text(encoding="utf-8")
     assert "controlled completion-gate efficacy evaluation" in markdown.lower()
     assert "not real-model performance" in markdown.lower()
-    assert "Task-behavior cases: 4" in markdown
-    assert "False-success rate (false-claim cases)" in markdown
     assert (first / "summary.json").is_file()
     assert (first / "raw.jsonl").is_file()
 

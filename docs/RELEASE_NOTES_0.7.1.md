@@ -12,9 +12,7 @@ execution backend or product mode.
   overlong IDs, and symlink escapes are rejected.
 - Failed independent commands no longer copy stdout, stderr, command arguments,
   or opaque output into terminal-facing review results. Review fields are also
-  redacted before they enter durable goal state. The explicit `review` command
-  returns only the goal ID, status, and review result, omitting stored check
-  arguments and derived instructions.
+  redacted before they enter durable goal state.
 - Strict completion accepts only typed `agentic_harness.evidence.v1` records.
   Records are bound to the current goal and worker run, must be passed and
   harness-verified, and carry explicit requirement coverage. Prose, duplicates,
@@ -35,23 +33,19 @@ aborting startup on `/api/setup` with a JSON 404.
   failure-to-verification demo, and one recommended real-project GUI path.
 - Stale marketing and private-infrastructure idea files were removed. A full
   contributor guide, private-reporting security policy, common evidence
-  contract, version-generic release checklist, and dated publishing receipts
+  contract, version-generic release checklist, and current publishing receipts
   replace them.
 - CI retains the full Linux, Windows, and macOS Python 3.11–3.14 test matrix but
   runs lint, typing, builds, wheel demos, and CLI smoke checks only on the cells
   that add distinct signal.
-- `evaluation/` adds a reproducible, two-arm comparison covering 24
-  task-behavior cases across six maintenance payloads, with pristine workspaces,
-  seeded arm order, raw JSONL, checksums, environment metadata, and aggregate
-  reports. It is deliberately labeled as a controlled gate-efficacy evaluation,
-  not real-model performance. In the representative run, the direct baseline
-  produced 12 false accepts and 6 verified accepts; the harness produced no
-  false accepts, 18 verified accepts, caught all 12 premature claims, and
-  recovered all 12 repairable tasks. Mean attempts rose from 1.0 to 2.0, making
-  the added work explicit.
-- The declared Setuptools floor now supports the PEP 639 license expression,
-  and the source distribution includes the documentation, evaluation, examples,
-  workflows, and tests needed for its shipped test suite to remain coherent.
+- `evaluation/` adds a reproducible 24-task, two-arm completion-gate comparison
+  with pristine workspaces, seeded arm order, raw JSONL, checksums, environment
+  metadata, and aggregate reports. It is deliberately labeled as a controlled
+  gate-efficacy evaluation, not real-model performance. In the representative
+  run, the direct baseline produced 12 false accepts and 6 verified accepts;
+  the harness produced no false accepts, 18 verified accepts, caught all 12
+  premature claims, and recovered all 12 repairable tasks. Mean attempts rose
+  from 1.0 to 2.0, making the added work explicit.
 
 ## Compatibility notes
 

@@ -9,7 +9,7 @@ The same scripted coding-agent process runs in two pristine copies of each fixtu
 - `harness` runs the process through `CodingAgentWorker`, `AutonomousRunner`, and a
   separate deterministic verifier.
 
-The 24 task-behavior cases cross six maintenance payloads with four scripted behaviors:
+The 24 maintenance-style fixtures cross six payloads with four scripted behaviors:
 
 - correct completion on the first attempt;
 - an exit-zero false claim followed by a correct repair;
