@@ -2,7 +2,7 @@
 
 ## Release Shape
 
-Agentic Harness v0.6.28 is a Python application with a local browser interface.
+Agentic Harness v0.6.29 is a Python application with a local browser interface.
 The Python process serves packaged HTML, CSS, and JavaScript from loopback and
 adapts an optional local-goal installation into a stable human-facing API.
 

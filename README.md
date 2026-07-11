@@ -109,7 +109,7 @@ the missing optional executable and how to configure it.
 
 Agentic Harness is a Python application. Its GUI is rendered by packaged
 HTML/CSS/JS files served by the Python backend; there is no Node, Electron,
-Tauri, or native widget runtime in the v0.6.28 GUI. The packaged browser app
+Tauri, or native widget runtime in the v0.6.29 GUI. The packaged browser app
 includes live status updates over WebSocket, progress indicators, task history
 search, dark/light theme switching, keyboard shortcuts, session export/import,
 and local form undo/redo.
@@ -235,7 +235,7 @@ transcripts, artifacts, loop limits, and review gates.
 ## Project Links
 
 - [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.28 release checks.
+- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.29 release checks.
 - [Codex `/goal` parity contract](docs/CODEX_GOAL_PARITY.md) documents autonomous continuation, completion, recovery, and sidecar boundaries.
 - [Autonomy audit](docs/AUTONOMY_AUDIT_2026-07-10.md) records findings, fixes, verification evidence, and residual limits.
 - [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active tokenless workflow and its verified release path.

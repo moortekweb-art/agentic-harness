@@ -1199,8 +1199,9 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
     if len(transcripts) != 1 or len(reports) != 1:
         print(f"{stem} smoke failed: expected one transcript and one report artifact")
         return False
-    if str(python_bin) not in transcripts[0].read_text(encoding="utf-8"):
-        print(f"{stem} smoke failed: demo transcript did not use venv Python")
+    demo_python = _venv_python(demo_dir / ".venv")
+    if str(demo_python) not in transcripts[0].read_text(encoding="utf-8"):
+        print(f"{stem} smoke failed: demo transcript did not use nested demo venv Python")
         return False
     demo_report = reports[0].read_text(encoding="utf-8")
     if "Report: .agentic-harness/runs/" not in demo_report:
@@ -1249,7 +1250,7 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
         return False
     return _run_release_step(
         f"Verify {stem} final demo tests",
-        [str(python_bin), "-m", "pytest", "tests/", "-q"],
+        [str(demo_python), "-m", "pytest", "tests/", "-q"],
         cwd=demo_dir,
     )
 
@@ -1308,6 +1309,18 @@ def run_demo(name: str, path: Path, *, force: bool = False, install: bool = True
     print(f"Demo path: {demo_path}")
     python = Path(sys.executable)
     env = os.environ.copy()
+    harness_root = str(Path(__file__).resolve().parent.parent)
+    existing_pythonpath = env.get("PYTHONPATH", "").split(os.pathsep)
+    pythonpath = [harness_root]
+    seen = {os.path.normcase(os.path.abspath(harness_root))}
+    for entry in existing_pythonpath:
+        if not entry:
+            continue
+        normalized = os.path.normcase(os.path.abspath(entry))
+        if normalized not in seen:
+            pythonpath.append(entry)
+            seen.add(normalized)
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath)
     if install:
         venv_dir = demo_path / ".venv"
         if not _run_demo_step(

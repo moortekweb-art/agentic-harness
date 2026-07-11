@@ -403,6 +403,27 @@ def test_run_demo_prepends_venv_executable_directory_to_path(tmp_path, monkeypat
     assert all(env["PATH"].split(os.pathsep)[0] == expected for env in environments)
 
 
+def test_run_demo_exposes_only_harness_import_root_to_nested_venv(tmp_path, monkeypatch) -> None:
+    demo = tmp_path / "demo"
+    existing = [str(tmp_path / "existing"), str(Path(cli.__file__).resolve().parent.parent)]
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(existing))
+    environments: list[dict[str, str]] = []
+
+    def fake_step(label, command, **kwargs):
+        environments.append(kwargs["env"])
+        return True
+
+    monkeypatch.setattr(cli, "_run_demo_step", fake_step)
+
+    assert cli.run_demo("fix-tests", demo) == 0
+
+    harness_root = str(Path(cli.__file__).resolve().parent.parent)
+    expected = [harness_root, existing[0]]
+    assert all(env["PYTHONPATH"].split(os.pathsep) == expected for env in environments)
+    parent_site_packages = str(Path(sys.prefix) / "lib" / "python-site-packages")
+    assert parent_site_packages not in expected
+
+
 @pytest.mark.parametrize(
     ("failed_label", "expected_labels"),
     [
@@ -641,11 +662,18 @@ def test_write_release_checksums_uses_sha256_and_artifact_names(tmp_path) -> Non
     ]
 
 
-def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("use_nested_demo_venv", "expected"),
+    [(True, True), (False, False)],
+)
+def test_installed_artifact_smoke_checks_version_commands(
+    tmp_path, monkeypatch, use_nested_demo_venv: bool, expected: bool
+) -> None:
     artifact = tmp_path / "local_agentic_harness-0.0.0-py3-none-any.whl"
     artifact.write_text("wheel\n", encoding="utf-8")
     tmp_root = tmp_path / "smoke"
     labels: list[str] = []
+    commands: dict[str, list[str]] = {}
 
     def fake_run_release_step(
         label: str,
@@ -656,6 +684,7 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
         env: dict[str, str] | None = None,
     ) -> bool:
         labels.append(label)
+        commands[label] = command
         if label == "Smoke wheel run-until-done":
             project_dir = Path(command[command.index("--project-dir") + 1])
             run_dir = project_dir / ".agentic-harness" / "runs" / "goal"
@@ -685,8 +714,11 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
             run_dir = demo_dir / ".agentic-harness" / "runs" / "goal"
             run_dir.mkdir(parents=True)
             (demo_dir / "requirements-dev.txt").write_text("pytest>=8\n", encoding="utf-8")
+            transcript_python = cli._venv_python(
+                demo_dir / ".venv" if use_nested_demo_venv else tmp_root / "wheel" / "venv"
+            )
             (run_dir / "shell-worker.log").write_text(
-                str(cli._venv_python(tmp_root / "wheel" / "venv")),
+                str(transcript_python),
                 encoding="utf-8",
             )
             (run_dir / "report.md").write_text(
@@ -717,7 +749,9 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
 
     monkeypatch.setattr(cli, "_run_release_step", fake_run_release_step)
 
-    assert cli._smoke_installed_artifact(artifact, tmp_root)
+    assert cli._smoke_installed_artifact(artifact, tmp_root) is expected
+    if not expected:
+        return
     assert "Smoke wheel version --version" in labels
     assert "Smoke wheel version version" in labels
     assert "Smoke wheel run" in labels
@@ -726,6 +760,9 @@ def test_installed_artifact_smoke_checks_version_commands(tmp_path, monkeypatch)
     assert "Smoke wheel strict goal" in labels
     assert "Smoke wheel recipe until-done" in labels
     assert "Smoke wheel run auto-config" in labels
+    assert commands["Verify wheel final demo tests"][0] == str(
+        cli._venv_python(tmp_root / "wheel" / "demo" / ".venv")
+    )
 
 
 def test_easy_explain_does_not_create_config(tmp_path, capsys) -> None:

@@ -18,7 +18,7 @@ Advanced details so the default surface stays readable.
 
 ## Shipped Interface
 
-![Agentic Harness v0.6.28 desktop interface](assets/agentic-harness-gui.png)
+![Agentic Harness v0.6.29 desktop interface](assets/agentic-harness-gui.png)
 
 The same workbench stacks into a single readable column at narrow widths. See
 the [mobile capture](assets/agentic-harness-gui-mobile.png).

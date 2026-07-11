@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for a v0.6.28 release.
+Use this checklist for a v0.6.29 release.
 
 ## Before Tagging
 
@@ -57,14 +57,14 @@ Use this checklist for a v0.6.28 release.
 Create and push the tag:
 
 ```bash
-git tag v0.6.28
-git push origin v0.6.28
+git tag -a v0.6.29 -m "Agentic Harness v0.6.29"
+git push origin v0.6.29
 ```
 
 Create the GitHub release:
 
 ```bash
-gh release create v0.6.28 --title "v0.6.28" --notes-file docs/RELEASE_NOTES_0.6.28.md
+gh release create v0.6.29 --title "v0.6.29" --notes-file docs/RELEASE_NOTES_0.6.29.md
 ```
 
 ## PyPI Publishing
