@@ -2,13 +2,13 @@ const STORAGE_KEY = "agentic-harness-gui-session";
 const THEME_KEY = "agentic-harness-theme";
 const TOKEN_KEY = "agentic-harness-gui-session-token";
 const TOKEN_PARAM = "token";
-const ICON_SPRITE = "/static/icons.svg";
+const ICON_PREFIX = "#icon-";
 
 const MODE_ICONS = Object.freeze({
-  local: "monitor",
-  guided: "route",
-  cloud: "cloud-cog",
-  experimental: "flask-conical",
+  local: "zap",
+  guided: "map",
+  cloud: "rocket",
+  experimental: "flask",
 });
 
 const STATUS_ICONS = Object.freeze({
@@ -78,11 +78,10 @@ const els = {
   exportButtonLabel: document.getElementById("exportButtonLabel"),
   importButton: document.getElementById("importButton"),
   statusUpdated: document.getElementById("statusUpdated"),
-  statusContext: document.getElementById("statusContext"),
 };
 
 function iconHref(name) {
-  return `${ICON_SPRITE}#${name}`;
+  return `${ICON_PREFIX}${name}`;
 }
 
 function iconMarkup(name) {
@@ -271,7 +270,7 @@ function renderTask(task) {
   const rawProgress = Number(task.progress || 0);
   const progress = Number.isFinite(rawProgress) ? Math.max(0, Math.min(100, rawProgress)) : 0;
   const statusLabel = task.status_label || "Working";
-  const statusDescription = `Status: ${statusLabel}`;
+  const statusDescription = status === "ready" ? "Supervisor is running" : `Status: ${statusLabel}`;
   state.currentTask = task;
   els.statusLabel.textContent = statusLabel;
   els.statusIndicator.className = `status-indicator ${status}`;
@@ -374,7 +373,7 @@ function renderHistory(tasks) {
       ${iconMarkup("clock")}
       <span>
         <strong>${escapeHtml(title)}</strong>
-        <small>${escapeHtml(`${status} · ${formatUpdatedAt(updatedAt)}`)}</small>
+        <small>${escapeHtml(`${status} · ${formatLastCheckedAt(updatedAt)}`)}</small>
       </span>
     `;
     button.title = status;
@@ -586,17 +585,15 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function formatUpdatedAt(value) {
+function formatLastCheckedAt(value) {
   const timestamp = value ? new Date(value) : new Date();
-  if (Number.isNaN(timestamp.getTime())) return "Updated recently";
-  return `Updated ${timestamp.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  if (Number.isNaN(timestamp.getTime())) return "Last checked recently";
+  return `Last checked ${timestamp.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }
 
 function renderStatusFooter(task) {
   const metadata = task.metadata && typeof task.metadata === "object" ? task.metadata : {};
-  const mode = state.modes.find((candidate) => candidate.key === metadata.mode);
-  els.statusUpdated.textContent = formatUpdatedAt(metadata.updated_at);
-  els.statusContext.textContent = mode ? `Mode: ${mode.label}` : "Local task state";
+  els.statusUpdated.textContent = formatLastCheckedAt(metadata.updated_at);
 }
 
 els.startButton.addEventListener("click", startWork);

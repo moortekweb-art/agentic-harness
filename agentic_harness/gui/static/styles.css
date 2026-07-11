@@ -9,8 +9,8 @@
   --accent-strong: #174d44;
   --warn: #a75322;
   --danger: #9a2f2f;
-  --panel-shadow: 0 10px 28px rgba(31, 37, 40, 0.07), 0 1px 2px rgba(31, 37, 40, 0.05);
-  --card-shadow: 0 2px 8px rgba(31, 37, 40, 0.06);
+  --panel-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
 }
 
 :root[data-theme="dark"] {
@@ -24,8 +24,8 @@
   --accent-strong: #91d3c5;
   --warn: #d49a5c;
   --danger: #e07878;
-  --panel-shadow: 0 10px 28px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.18);
-  --card-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  --panel-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
 }
 
 * {
@@ -34,6 +34,13 @@
 
 [hidden] {
   display: none !important;
+}
+
+.icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
 }
 
 body {
@@ -264,7 +271,7 @@ input[type="search"]:focus {
 }
 
 .mode-card:hover {
-  box-shadow: 0 4px 12px rgba(31, 37, 40, 0.09);
+  box-shadow: var(--card-shadow);
 }
 
 .mode-card[aria-pressed="true"] {
