@@ -113,6 +113,32 @@ def test_gui_docs_describe_one_install_with_two_interfaces() -> None:
     assert "project state model" in architecture
 
 
+def test_active_product_docs_are_provider_neutral() -> None:
+    active_docs = [
+        REPO_ROOT / "README.md",
+        REPO_ROOT / "docs/GUI_ARCHITECTURE.md",
+        REPO_ROOT / "docs/GUI_DESIGN.md",
+        REPO_ROOT / "docs/GUI_DEPLOYMENT.md",
+        REPO_ROOT / "docs/CODEX_GOAL_PARITY.md",
+    ]
+
+    for path in active_docs:
+        text = path.read_text(encoding="utf-8")
+        assert "/mnt/raid0" not in text, path
+        assert "Let GLM" not in text, path
+        assert "Node1" not in text, path
+        assert "Hermes" not in text, path
+        assert "Mode 3A" not in text, path
+
+
+def test_turnstone_is_documented_as_an_optional_external_backend() -> None:
+    guide = (REPO_ROOT / "docs/TURNSTONE_INTEGRATION.md").read_text(encoding="utf-8")
+
+    assert "turnstonelabs/turnstone" in guide
+    assert "optional" in guide.lower()
+    assert "not bundled" in guide.lower()
+
+
 def test_gui_deployment_guide_is_portable_and_uses_placeholders() -> None:
     guide = (REPO_ROOT / "docs/GUI_DEPLOYMENT.md").read_text(encoding="utf-8")
     template = (REPO_ROOT / "docs/agentic-harness-gui.service.template").read_text(
@@ -126,6 +152,8 @@ def test_gui_deployment_guide_is_portable_and_uses_placeholders() -> None:
     assert "<WORKDIR>" in template
     assert "<EXECUTABLE>" in template
     assert "<PORT>" in template
+    assert "--project-dir <WORKDIR>" in template
+    assert "--doc-root" not in template
     assert "--no-open" in template
     assert "EnvironmentFile=-<TOKEN_ENV_FILE>" in template
 

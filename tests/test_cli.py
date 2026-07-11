@@ -594,6 +594,14 @@ def test_release_smoke_resolves_relative_dist_dir_against_project_root(
 ) -> None:
     (tmp_path / "pyproject.toml").write_text("[build-system]\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
+    stale_dist = tmp_path / "dist"
+    stale_dist.mkdir()
+    (stale_dist / "local_agentic_harness-previous-py3-none-any.whl").write_text(
+        "stale wheel\n", encoding="utf-8"
+    )
+    (stale_dist / "local_agentic_harness-previous.tar.gz").write_text(
+        "stale sdist\n", encoding="utf-8"
+    )
     smoked_artifacts: list[Path] = []
     release_steps: list[tuple[str, list[str]]] = []
 
@@ -1981,6 +1989,8 @@ def test_goal_command_requires_structured_completion_and_accepts_it(tmp_path, ca
             str(tmp_path),
             "goal",
             "implement the complete requested outcome",
+            "--safe-area",
+            "structured_worker.py",
             "--json",
         ]
     )
@@ -1990,6 +2000,56 @@ def test_goal_command_requires_structured_completion_and_accepts_it(tmp_path, ca
     assert payload["status"] == "done"
     assert payload["metadata"]["accepted"] is True
     assert payload["metadata"]["autonomy"]["completion_audit"]["passed"] is True
+    assert payload["metadata"]["safety"]["allowed_paths"] == ["structured_worker.py"]
+    assert payload["metadata"]["safety"]["checks"][0]["argv"] == [
+        sys.executable,
+        "-c",
+        "raise SystemExit(0)",
+    ]
+    assert payload["metadata"]["safety"]["preexisting_changes"] == []
+
+
+def test_start_command_persists_dirty_file_safety_for_model_agent(
+    tmp_path,
+    capsys,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.test"], cwd=tmp_path, check=True
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    target = tmp_path / "owned-by-user.txt"
+    target.write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "owned-by-user.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=tmp_path, check=True)
+    target.write_text("user work\n", encoding="utf-8")
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: model_agent",
+                "llm:",
+                "  endpoint: http://127.0.0.1:8000/v1/chat/completions",
+                "  model: local-model",
+                "review_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                "  - \"print('verified')\"",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rc = main(["--project-dir", str(tmp_path), "start", "respect existing work"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert "owned-by-user.txt" in payload["metadata"]["safety"][
+        "preexisting_changes"
+    ]
 
 
 def test_run_until_done_limits_repeated_blockers_not_progressing_attempts(
@@ -2048,56 +2108,73 @@ def test_run_until_done_limits_repeated_blockers_not_progressing_attempts(
     assert (tmp_path / "progress.txt").read_text(encoding="utf-8") == "5"
 
 
-def test_easy_do_requires_and_explains_background_ownership(monkeypatch, capsys) -> None:
-    class BackgroundBridge:
-        local_goal = Path("/tmp/local-goal")
+def test_easy_do_uses_portable_project_engine_without_optional_sidecar(
+    tmp_path,
+    capsys,
+) -> None:
+    worker = tmp_path / "portable_worker.py"
+    worker.write_text(
+        "import json\n"
+        "outcome = {\"status\": \"complete\", \"summary\": \"portable done\", "
+        "\"checkpoint\": \"verified\", \"current_subgoal\": \"audit complete\", "
+        "\"plan\": [{\"step\": \"work\", \"status\": \"completed\"}], "
+        "\"requirements\": [{\"id\": \"R1\", \"status\": \"satisfied\", "
+        "\"evidence\": [\"check passed\"]}], \"blockers\": []}\n"
+        "print('HARNESS_RESULT_JSON=' + json.dumps(outcome))\n",
+        encoding="utf-8",
+    )
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: coding_agent",
+                "coding_agent_command:",
+                f"  - {sys.executable}",
+                f"  - {worker}",
+                "review_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                "  - \"print('verified')\"",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
-        def __init__(self, **kwargs) -> None:
-            pass
-
-        def available(self) -> bool:
-            return True
-
-        def background_supervision(self) -> dict[str, object]:
-            return {"active": True, "summary": "Background watcher active"}
-
-        def start_human_goal(self, **kwargs) -> cli.CommandResult:
-            return cli.CommandResult(("local-goal", "enqueue"), 0, "queued_id=goal-1\n", "")
-
-    monkeypatch.setattr(cli, "LocalGoalBridge", BackgroundBridge)
-
-    rc = main(["do", "finish this without routine check-ins"])
+    rc = main(
+        [
+            "--project-dir",
+            str(tmp_path),
+            "do",
+            "finish this without a private sidecar",
+        ]
+    )
 
     output = capsys.readouterr().out
     assert rc == 0
-    assert "Background supervisor owns this task" in output
-    assert "You can close this" in output
-    assert "Move it forward" not in output
+    assert "portable done" in output
+    assert "local-goal" not in output
+    assert "GLM" not in output
+    state_path = next((tmp_path / ".agentic-harness" / "runs").glob("*/state.json"))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "preexisting_changes" in state["metadata"]["safety"]
 
 
-def test_easy_do_refuses_to_claim_unattended_work_without_watcher(
-    monkeypatch, capsys
+def test_easy_do_reports_portable_setup_when_no_execution_method_exists(
+    tmp_path,
+    monkeypatch,
+    capsys,
 ) -> None:
-    class NoWatcherBridge:
-        local_goal = Path("/tmp/local-goal")
+    monkeypatch.setattr(cli, "preferred_agent_tool", lambda: None)
 
-        def __init__(self, **kwargs) -> None:
-            pass
-
-        def available(self) -> bool:
-            return True
-
-        def background_supervision(self) -> dict[str, object]:
-            return {"active": False, "summary": "Watcher inactive"}
-
-    monkeypatch.setattr(cli, "LocalGoalBridge", NoWatcherBridge)
-
-    rc = main(["do", "do not queue this without supervision"])
+    rc = main(["--project-dir", str(tmp_path), "do", "do not guess a worker"])
 
     output = capsys.readouterr().out
     assert rc == 2
-    assert "did not start the task" in output
-    assert "Watcher inactive" in output
+    assert "no .agentic-harness/config.yml" in output
+    assert "local-goal" not in output
 
 
 def test_module_cli_init_works_in_temp_dir(tmp_path) -> None:
@@ -2684,7 +2761,12 @@ def test_cli_restart_clears_metadata(tmp_path, capsys) -> None:
     rc = main(["--project-dir", str(tmp_path), "restart"])
     payload = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert set(payload["metadata"]) == {"workspace_snapshot"}
+    assert "worker_success" not in payload["metadata"]
+    assert "worker_summary" not in payload["metadata"]
+    assert "worker_returncode" not in payload["metadata"]
+    assert "worker_outcome" not in payload["metadata"]
+    assert payload["metadata"]["interface"] == "cli"
+    assert isinstance(payload["metadata"]["safety"]["preexisting_changes"], list)
     assert payload["metadata"]["workspace_snapshot"]["schema"] == (
         "agentic_harness.workspace_snapshot.v1"
     )

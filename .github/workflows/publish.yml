@@ -1,41 +1,164 @@
 name: Publish
 
 "on":
-  release:
-    types: [published]
-  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Build and publish to PyPI
+  validate:
+    name: Validate exact release commit
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/local-agentic-harness/
     permissions:
       contents: read
-      id-token: write
+      actions: read
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Check out release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
+
+      - name: Verify release tag and package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: python -m agentic_harness.core.release_validation identity
+
+      - name: Verify release commit is on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python -m agentic_harness.core.release_validation ancestry
+
+      - name: Verify exact release commit passed CI
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: python -m agentic_harness.core.release_validation ci
 
       - name: Build and smoke-test distributions
         run: |
           python -m pip install -e ".[test]"
           python -m agentic_harness.cli release-smoke --dist-dir dist
 
-      - name: Prepare PyPI distributions
+      - name: Separate PyPI inputs from release evidence
         run: |
-          mkdir -p pypi-dist
+          mkdir -p pypi-dist release-bundle
           cp dist/*.whl dist/*.tar.gz pypi-dist/
+          cp dist/*.whl dist/*.tar.gz dist/SHA256SUMS release-bundle/
+          version="$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          cp "docs/RELEASE_NOTES_${version}.md" release-bundle/RELEASE_NOTES.md
+
+      - name: Upload verified PyPI distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-pypi-distributions
+          path: pypi-dist/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload verified release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-release-bundle
+          path: release-bundle/
+          if-no-files-found: error
+          retention-days: 30
+
+  stage_release:
+    name: Stage draft GitHub release
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Download verified release evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-release-bundle
+          path: release-bundle/
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > draft-state 2>/dev/null; then
+            test "$(cat draft-state)" = "true" || {
+              echo "refusing to replace an already-public release" >&2
+              exit 1
+            }
+          else
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --notes-file release-bundle/RELEASE_NOTES.md
+          fi
+          mkdir -p existing-assets
+          for asset in release-bundle/*.whl release-bundle/*.tar.gz release-bundle/SHA256SUMS; do
+            name="$(basename "$asset")"
+            rm -f "existing-assets/$name"
+            if gh release download "$RELEASE_TAG" --pattern "$name" --dir existing-assets 2>/dev/null; then
+              cmp -s "$asset" "existing-assets/$name" || {
+                echo "existing draft asset does not match verified build: $name" >&2
+                exit 1
+              }
+            else
+              gh release upload "$RELEASE_TAG" "$asset"
+            fi
+          done
+
+  publish:
+    name: Publish verified distributions to PyPI
+    needs: [validate, stage_release]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/local-agentic-harness/
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download verified PyPI distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-pypi-distributions
+          path: pypi-dist/
 
       - name: Publish package distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           packages-dir: pypi-dist/
+
+  publish_release:
+    name: Publish staged GitHub release
+    needs: [stage_release, publish]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-release
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Make the verified release public
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest

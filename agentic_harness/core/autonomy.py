@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import hashlib
 import json
+from collections.abc import Callable
 from typing import Any
 
 from agentic_harness.core.errors import GoalConflictError, NoActiveGoalError
@@ -23,10 +25,24 @@ class AutonomyPolicy:
 
     repeated_blocker_limit: int = 3
     require_completion_claim: bool = True
+    max_cycles: int = 100
+    max_elapsed_seconds: int = 7_200
+    max_total_tokens: int = 500_000
+    max_provider_calls: int = 200
+    max_tool_calls: int = 1_000
 
     def __post_init__(self) -> None:
         if self.repeated_blocker_limit < 1:
             raise ValueError("repeated_blocker_limit must be at least 1")
+        for name in (
+            "max_cycles",
+            "max_elapsed_seconds",
+            "max_total_tokens",
+            "max_provider_calls",
+            "max_tool_calls",
+        ):
+            if int(getattr(self, name)) < 0:
+                raise ValueError(f"{name} must not be negative")
 
 
 class AutonomousRunner:
@@ -37,9 +53,11 @@ class AutonomousRunner:
         supervisor: Supervisor,
         *,
         policy: AutonomyPolicy | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> None:
         self.supervisor = supervisor
         self.policy = policy or AutonomyPolicy()
+        self.cancel_requested = cancel_requested or (lambda: False)
 
     def run(self, objective: str | None = None) -> Goal:
         with self.supervisor.store.autonomy_locked() as lease:
@@ -72,25 +90,68 @@ class AutonomousRunner:
                 return goal
             goal = self.supervisor.restart(_autonomy_lease=lease)
             autonomy = _autonomy(goal)
+        if goal.status is GoalStatus.REVIEW:
+            self._record_worker_cycle(goal, autonomy, lease)
+            return self._process_worker_result(goal, autonomy, lease)
 
         self._prepare_instruction(goal, autonomy)
         self._save(goal, lease)
         goal = self.supervisor.continue_goal(_autonomy_lease=lease)
         autonomy = _autonomy(goal)
-        autonomy["cycle"] = int(autonomy.get("cycle") or 0) + 1
-        autonomy["heartbeat"] = now_iso()
+        self._record_worker_cycle(goal, autonomy, lease)
+        return self._process_worker_result(goal, autonomy, lease)
+
+    def _record_worker_cycle(
+        self,
+        goal: Goal,
+        autonomy: dict[str, Any],
+        lease: object,
+    ) -> None:
         outcome = goal.metadata.get("worker_outcome")
         if not isinstance(outcome, dict):
             outcome = {}
+        run_id = str(goal.metadata.get("worker_run_id") or "")
+        processed_run_id = str(autonomy.get("processed_worker_run_id") or "")
+        if run_id and processed_run_id == run_id:
+            return
+        if (
+            not run_id
+            and int(autonomy.get("cycle") or 0) > 0
+            and autonomy.get("last_worker_outcome") == outcome
+        ):
+            return
+        autonomy["cycle"] = int(autonomy.get("cycle") or 0) + 1
+        autonomy["heartbeat"] = now_iso()
         self._record_outcome(autonomy, outcome)
+        if run_id:
+            autonomy["processed_worker_run_id"] = run_id
         self._save(goal, lease)
+
+    def _process_worker_result(
+        self,
+        goal: Goal,
+        autonomy: dict[str, Any],
+        lease: object,
+    ) -> Goal:
+        outcome = goal.metadata.get("worker_outcome")
+        if not isinstance(outcome, dict):
+            outcome = {}
+        if self.cancel_requested():
+            return self._record_cancellation(goal, lease)
+
+        exhausted = self._budget_exhaustion(goal, outcome)
+        if exhausted is not None:
+            return self._record_budget_exhaustion(goal, exhausted, lease)
 
         if goal.status is GoalStatus.FAILED:
             return self._record_blocker(goal, _worker_failure(goal), lease)
 
         outcome_status = str(outcome.get("status") or "").strip().lower()
         if outcome_status == "progress":
-            progress_signature = _progress_signature(self.supervisor)
+            progress_signature = _progress_signature(
+                self.supervisor,
+                progress_token=str(outcome.get("progress_token") or ""),
+            )
             if progress_signature == autonomy.get("progress_signature"):
                 return self._record_blocker(
                     goal,
@@ -111,6 +172,8 @@ class AutonomousRunner:
 
         goal = self.supervisor.review(finalize=False, _autonomy_lease=lease)
         autonomy = _autonomy(goal)
+        if self.cancel_requested():
+            return self._record_cancellation(goal, lease)
         if goal.status is GoalStatus.FAILED:
             return self._record_blocker(goal, _review_failure(goal), lease)
 
@@ -129,10 +192,16 @@ class AutonomousRunner:
         autonomy["checkpoint"] = str(outcome.get("checkpoint") or "accepted")
         autonomy["operator_intervention_required"] = False
         self._save(goal, lease)
-        return self.supervisor.accept(
+        if self.cancel_requested():
+            return self._record_cancellation(goal, lease)
+        accepted = self.supervisor.accept(
             reason="autonomous completion audit passed",
             _autonomy_lease=lease,
+            cancel_requested=self.cancel_requested,
         )
+        if accepted.status is not GoalStatus.DONE and self.cancel_requested():
+            return self._record_cancellation(accepted, lease)
+        return accepted
 
     def _load_or_start(self, objective: str | None, lease: object) -> Goal:
         goal = self.supervisor.status()
@@ -167,6 +236,7 @@ class AutonomousRunner:
             existing["strict_completion"] = bool(persisted_strict) or bool(
                 self.policy.require_completion_claim
             )
+            existing.setdefault("budget", self._new_budget())
             return existing
         autonomy: dict[str, Any] = {
             "contract": AUTONOMY_CONTRACT,
@@ -182,6 +252,7 @@ class AutonomousRunner:
             "blocker": {"signature": "", "consecutive_count": 0, "reason": ""},
             "operator_intervention_required": False,
             "strict_completion": self.policy.require_completion_claim,
+            "budget": self._new_budget(),
         }
         goal.metadata["autonomy"] = autonomy
         goal.metadata.setdefault("accepted", False)
@@ -192,29 +263,52 @@ class AutonomousRunner:
             autonomy.get("current_subgoal") or "derive the next concrete subgoal"
         )
         feedback = str(goal.metadata.get("continuation_feedback") or "")
-        goal.metadata["continuation_instruction"] = "\n".join(
-            [
-                "Preserve and pursue this complete objective without shrinking it:",
-                goal.objective,
-                "",
-                f"Current subgoal: {current_subgoal}",
-                f"Checkpoint: {autonomy.get('checkpoint') or 'none'}",
-                "Persisted plan: "
-                + json.dumps(autonomy.get("plan") or [], sort_keys=True, default=str),
-                "Persisted requirements: "
-                + json.dumps(
-                    autonomy.get("requirements") or [], sort_keys=True, default=str
-                ),
-                f"Prior feedback: {feedback or 'none'}",
-                "",
-                "Continue autonomously while meaningful progress is possible.",
-                "Treat failed checks and review findings as repair input, not completion.",
-                "Do not ask for routine decisions or claim completion from effort, time, or token use.",
-                "Completion requires every derived requirement to be satisfied with concrete evidence.",
-                "Return one HARNESS_RESULT_JSON object with status, plan, current_subgoal, ",
-                "checkpoint, requirements, blockers, summary, and verification evidence.",
+        lines = [
+            "Preserve and pursue this complete objective without shrinking it:",
+            goal.objective,
+            "",
+            f"Current subgoal: {current_subgoal}",
+            f"Checkpoint: {autonomy.get('checkpoint') or 'none'}",
+            "Persisted plan: "
+            + json.dumps(autonomy.get("plan") or [], sort_keys=True, default=str),
+            "Persisted requirements: "
+            + json.dumps(
+                autonomy.get("requirements") or [], sort_keys=True, default=str
+            ),
+            f"Prior feedback: {feedback or 'none'}",
+            "",
+            "Continue autonomously while meaningful progress is possible.",
+            "Treat failed checks and review findings as repair input, not completion.",
+            "Do not ask for routine decisions or claim completion from effort, time, or token use.",
+            "Completion requires every derived requirement to be satisfied with concrete evidence.",
+            "Return one HARNESS_RESULT_JSON object with status, plan, current_subgoal, ",
+            "checkpoint, requirements, blockers, summary, and verification evidence.",
+        ]
+        safety = goal.metadata.get("safety")
+        if isinstance(safety, dict):
+            allowed_paths = [
+                str(path)
+                for path in safety.get("allowed_paths", [])
+                if str(path).strip()
             ]
-        )
+            lines.extend(
+                [
+                    "",
+                    "Workspace boundary:",
+                    "Allowed workspace paths (operator guidance): "
+                    + (", ".join(allowed_paths) if allowed_paths else "the whole workspace"),
+                    "Do not edit outside the allowed workspace paths. Preserve pre-existing changes.",
+                ]
+            )
+            checks = safety.get("checks")
+            if isinstance(checks, list):
+                for row in checks:
+                    if not isinstance(row, dict):
+                        continue
+                    label = str(row.get("label") or "").strip()
+                    if label:
+                        lines.append(f"Independent check: {label}")
+        goal.metadata["continuation_instruction"] = "\n".join(lines)
 
     def _record_outcome(self, autonomy: dict[str, Any], outcome: dict[str, Any]) -> None:
         for source, target in (
@@ -228,6 +322,116 @@ class AutonomousRunner:
                 autonomy[target] = value
         autonomy["last_worker_outcome"] = outcome
         autonomy["status"] = "checking"
+        budget = autonomy.get("budget")
+        if not isinstance(budget, dict):
+            budget = self._new_budget()
+            autonomy["budget"] = budget
+        usage = budget.get("usage")
+        if not isinstance(usage, dict):
+            usage = {}
+            budget["usage"] = usage
+        usage["cycles"] = int(autonomy.get("cycle") or 0)
+        reported = outcome.get("usage")
+        if isinstance(reported, dict):
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens", "provider_calls"):
+                value = reported.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    usage[key] = float(usage.get(key) or 0) + value
+        events = outcome.get("events")
+        if isinstance(events, list):
+            usage["tool_calls"] = int(usage.get("tool_calls") or 0) + len(events)
+        budget["elapsed_seconds"] = _elapsed_seconds(str(budget.get("started_at") or ""))
+
+    def _new_budget(self) -> dict[str, Any]:
+        return {
+            "started_at": now_iso(),
+            "limits": {
+                "max_cycles": self.policy.max_cycles,
+                "max_elapsed_seconds": self.policy.max_elapsed_seconds,
+                "max_total_tokens": self.policy.max_total_tokens,
+                "max_provider_calls": self.policy.max_provider_calls,
+                "max_tool_calls": self.policy.max_tool_calls,
+            },
+            "usage": {
+                "cycles": 0,
+                "provider_calls": 0,
+                "tool_calls": 0,
+                "total_tokens": 0,
+            },
+            "elapsed_seconds": 0,
+            "exhausted": "",
+        }
+
+    def _budget_exhaustion(
+        self,
+        goal: Goal,
+        outcome: dict[str, Any],
+    ) -> tuple[str, str] | None:
+        budget = _autonomy(goal).get("budget")
+        if not isinstance(budget, dict):
+            return None
+        limits = budget.get("limits")
+        usage = budget.get("usage")
+        if not isinstance(limits, dict) or not isinstance(usage, dict):
+            return None
+        complete = str(outcome.get("status") or "").strip().lower() == "complete"
+        checks = (
+            ("max_cycles", "cycles", "cycle budget"),
+            ("max_total_tokens", "total_tokens", "token budget"),
+            ("max_provider_calls", "provider_calls", "provider-call budget"),
+            ("max_tool_calls", "tool_calls", "tool-call budget"),
+        )
+        for limit_key, usage_key, label in checks:
+            limit = int(limits.get(limit_key) or 0)
+            consumed = float(usage.get(usage_key) or 0)
+            if limit and (consumed > limit or (not complete and consumed >= limit)):
+                return limit_key, f"{label} exhausted ({consumed:g}/{limit})"
+        elapsed_limit = int(limits.get("max_elapsed_seconds") or 0)
+        elapsed = float(budget.get("elapsed_seconds") or 0)
+        if elapsed_limit and (elapsed > elapsed_limit or (not complete and elapsed >= elapsed_limit)):
+            return (
+                "max_elapsed_seconds",
+                f"time budget exhausted ({elapsed:g}/{elapsed_limit} seconds)",
+            )
+        return None
+
+    def _record_budget_exhaustion(
+        self,
+        goal: Goal,
+        exhausted: tuple[str, str],
+        lease: object,
+    ) -> Goal:
+        key, reason = exhausted
+        autonomy = _autonomy(goal)
+        budget = autonomy.get("budget")
+        if isinstance(budget, dict):
+            budget["exhausted"] = key
+            budget["exhausted_at"] = now_iso()
+        autonomy["status"] = "blocked"
+        autonomy["operator_intervention_required"] = True
+        autonomy["blocker"] = {
+            "signature": "budget:" + key,
+            "consecutive_count": 1,
+            "reason": reason,
+            "observed_at": now_iso(),
+        }
+        goal.error = reason
+        if goal.status is GoalStatus.REVIEW:
+            goal.transition(GoalStatus.FAILED, reason="goal resource budget exhausted")
+        self._save(goal, lease)
+        return goal
+
+    def _record_cancellation(self, goal: Goal, lease: object) -> Goal:
+        autonomy = _autonomy(goal)
+        autonomy["status"] = "stopped"
+        autonomy["operator_intervention_required"] = False
+        autonomy["checkpoint"] = "stopped_at_safe_boundary"
+        goal.metadata["cancelled"] = True
+        goal.error = "stopped by user"
+        if goal.status is GoalStatus.REVIEW:
+            goal.transition(GoalStatus.FAILED, reason="stopped by user at safe boundary")
+        self._save(goal, lease)
+        return goal
 
     def _completion_audit(
         self, goal: Goal, outcome: dict[str, Any]
@@ -329,8 +533,6 @@ class AutonomousRunner:
             count >= self.policy.repeated_blocker_limit
         )
         goal.metadata["continuation_feedback"] = reason
-        self._save(goal, lease)
-
         if autonomy["operator_intervention_required"]:
             autonomy["status"] = "blocked"
             goal.error = reason
@@ -338,6 +540,7 @@ class AutonomousRunner:
                 goal.transition(GoalStatus.FAILED, reason="same blocker repeated without progress")
             self._save(goal, lease)
             return goal
+        self._save(goal, lease)
         if goal.status is GoalStatus.FAILED:
             return self.supervisor.restart(_autonomy_lease=lease)
         if goal.status is GoalStatus.REVIEW:
@@ -409,9 +612,24 @@ def _blocker_signature(
 
 def _progress_signature(
     supervisor: Supervisor,
+    *,
+    progress_token: str = "",
 ) -> str:
     payload = {
         "workspace": capture_workspace_snapshot(supervisor.project_dir),
+        "progress_token": progress_token,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _elapsed_seconds(started_at: str) -> float:
+    if not started_at:
+        return 0
+    try:
+        started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    return max(0.0, (datetime.now(UTC) - started).total_seconds())

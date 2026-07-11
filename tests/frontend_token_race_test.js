@@ -48,6 +48,14 @@ class Element {
     this.listeners[type] = handler;
   }
 
+  replaceChildren(...children) {
+    this.children = [...children];
+  }
+
+  append(...children) {
+    this.children.push(...children);
+  }
+
   setAttribute(name, value) {
     this[name] = value;
   }
@@ -104,6 +112,15 @@ function okPayloadFor(url) {
   }
   if (url === "/api/modes") {
     return { modes: [{ key: "cloud", label: "Cloud", best_for: "tests", caution: "" }] };
+  }
+  if (url === "/api/setup") {
+    return {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: true,
+      workspace: "/tmp/project",
+      worker: { type: "coding_agent" },
+      suggested_check: "python -m pytest -q",
+    };
   }
   if (url === "/api/tasks/current") {
     return { status: "ready", status_label: "Ready", summary: "Backend ready", progress: 0 };
@@ -182,11 +199,15 @@ async function runApp({ initialToken = "" } = {}) {
     window: {
       location: { search: "", pathname: "/", hash: "", protocol: "http:", host: "127.0.0.1:41111" },
       setTimeout,
+      setInterval() { return 1; },
+      clearInterval() {},
       alert(message) {
         throw new Error(message);
       },
     },
     setTimeout,
+    setInterval() { return 1; },
+    clearInterval() {},
   };
   context.window.WebSocket = WebSocketShim;
   context.globalThis = context;
@@ -217,8 +238,7 @@ async function testConcurrentStartup401sShareOnePromptAndAllRetry() {
   assert.equal(app.fetchCalls.slice(4).every((call) => call.auth === "Bearer correct-token"), true);
   assert.equal(app.elements.get("summary").textContent, "Backend ready");
   assert.equal(app.sessionStorage.getItem("agentic-harness-gui-session-token"), "correct-token");
-  assert.equal(app.websocketUrls.length, 1);
-  assert.equal(app.websocketUrls[0].includes("token=correct-token"), true);
+  assert.equal(app.websocketUrls.length, 0);
   assert.deepEqual(app.consoleErrors, []);
 }
 
@@ -253,7 +273,7 @@ async function testCancelResolvesAllWaitersWithoutSecondDialogOrLeakingToken() {
   assert.equal(app.document.openDialogs.length, 0);
   assert.equal(app.fetchCalls.length, 4);
   assert.equal(app.sessionStorage.getItem("agentic-harness-gui-session-token"), null);
-  assert.equal(app.elements.get("statusLabel").textContent, "Blocked");
+  assert.equal(app.elements.get("statusLabel").textContent, "Needs attention");
   assert.equal(app.elements.get("summary").textContent, "Authorization required.");
   assert.equal(app.websocketUrls.length, 0);
 }

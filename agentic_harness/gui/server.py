@@ -14,10 +14,14 @@ import hashlib
 import json
 import mimetypes
 import os
+from threading import Lock
 import time
 import webbrowser
 
 from agentic_harness.core.local_goal_bridge import LocalGoalBridge, resolve_doc_root
+from agentic_harness.core.errors import HarnessError
+from agentic_harness.core.redaction import redact_secrets
+from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.gui.api import (
     command_task,
     details_payload,
@@ -32,6 +36,25 @@ from agentic_harness.gui.api import (
 
 
 MAX_REQUEST_BYTES = 1_048_576
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "default-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+def _portable_modes() -> list[dict[str, Any]]:
+    return [
+        {
+            "key": "goal",
+            "number": 1,
+            "label": "Verified goal",
+            "best_for": "One clear task that should continue until its checks pass.",
+            "caution": "The configured execution method may edit files in the selected workspace.",
+        }
+    ]
 
 
 def serve_gui(
@@ -39,11 +62,33 @@ def serve_gui(
     host: str = "127.0.0.1",
     port: int = 0,
     doc_root: str | Path | None = None,
+    project_dir: str | Path = ".",
+    backend: str = "embedded",
     open_browser: bool = True,
     allow_port_fallback: bool = False,
 ) -> None:
-    bridge = LocalGoalBridge(doc_root=resolve_doc_root(doc_root))
-    handler = make_handler(bridge)
+    if not _is_loopback_host(host) and not os.environ.get(
+        "AGENTIC_HARNESS_GUI_TOKEN", ""
+    ).strip():
+        raise GuiSecurityError(
+            "AGENTIC_HARNESS_GUI_TOKEN is required before binding the GUI beyond loopback"
+        )
+    if backend == "local-goal":
+        service: LocalGoalBridge | EmbeddedExecutionBackend = LocalGoalBridge(
+            doc_root=resolve_doc_root(doc_root)
+        )
+    else:
+        service = EmbeddedExecutionBackend(Path(project_dir))
+    allowed_hosts = {"127.0.0.1", "localhost", "::1"}
+    normalized_host = host.strip().strip("[]").lower()
+    if normalized_host not in {"0.0.0.0", "::", ""}:
+        allowed_hosts.add(normalized_host)
+    allowed_hosts.update(
+        item.strip().strip("[]").lower()
+        for item in os.environ.get("AGENTIC_HARNESS_GUI_ALLOWED_HOSTS", "").split(",")
+        if item.strip()
+    )
+    handler = make_handler(service, allowed_hosts=allowed_hosts)
     server = create_gui_server(host, port, handler, allow_port_fallback=allow_port_fallback)
     actual_port = int(server.server_address[1])
     url = f"http://{host}:{actual_port}/"
@@ -62,6 +107,10 @@ def serve_gui(
 
 class GuiPortUnavailable(RuntimeError):
     """Raised when the GUI cannot bind to the requested port."""
+
+
+class GuiSecurityError(RuntimeError):
+    """Raised when GUI network exposure is missing a required guardrail."""
 
 
 def create_gui_server(
@@ -95,10 +144,17 @@ def create_gui_server(
         ) from exc
 
 
-def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
+def make_handler(
+    service: Any,
+    *,
+    allowed_hosts: set[str] | None = None,
+) -> type[BaseHTTPRequestHandler]:
     session = GuiSession()
+    embedded = isinstance(service, EmbeddedExecutionBackend)
+    bridge = service
     auth_token = os.environ.get("AGENTIC_HARNESS_GUI_TOKEN", "").strip()
     rate_limiter = RateLimiter(limit=240, window_seconds=60)
+    trusted_hosts = allowed_hosts or {"127.0.0.1", "localhost", "::1"}
 
     class GuiHandler(BaseHTTPRequestHandler):
         server_version = "AgenticHarnessGUI/0.1"
@@ -106,6 +162,8 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             route = parsed.path
+            if route.startswith("/api/") and not self._trusted_host():
+                return
             if route == "/api/tasks/stream":
                 if not self._same_origin():
                     return
@@ -116,27 +174,81 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
             if route.startswith("/api/") and not self._allowed(parsed.query):
                 return
             if route in {"/api/health", "/api/status"}:
-                self._json(health_payload(bridge))
+                self._json(service.health() if embedded else health_payload(bridge))
             elif route == "/api/modes":
-                self._json({"modes": modes_payload()})
+                self._json(
+                    {
+                        "modes": _portable_modes()
+                        if embedded
+                        else modes_payload()
+                    }
+                )
             elif route == "/api/readiness":
-                self._json(readiness_payload(bridge))
+                self._json(service.readiness() if embedded else readiness_payload(bridge))
+            elif route == "/api/setup" and embedded:
+                self._json(service.setup())
             elif route == "/api/tasks":
-                payload = tasks_payload(bridge)
-                session.record(payload["current"])
-                payload["tasks"] = session.history() or payload["tasks"]
-                self._json(payload)
+                if embedded:
+                    current = service.status()
+                    self._json({"current": current, "tasks": service.history()})
+                else:
+                    payload = tasks_payload(bridge)
+                    session.record(payload["current"])
+                    payload["tasks"] = session.history() or payload["tasks"]
+                    self._json(payload)
             elif route == "/api/tasks/current":
-                task = status_task(bridge)
-                session.record(task)
-                self._json(task)
+                if embedded:
+                    self._json(service.status())
+                else:
+                    task = status_task(bridge)
+                    session.record(task)
+                    self._json(task)
             elif route == "/api/tasks/history":
                 query = parse_qs(parsed.query).get("q", [""])[0]
-                self._json({"tasks": session.history(query=query)})
+                self._json(
+                    {"tasks": service.history(query=query)}
+                    if embedded
+                    else {"tasks": session.history(query=query)}
+                )
+            elif route == "/api/tasks/current/events":
+                after_raw = parse_qs(parsed.query).get("after", ["0"])[0]
+                try:
+                    after = max(0, int(after_raw))
+                except ValueError:
+                    after = 0
+                self._json({"events": service.events(after=after) if embedded else []})
+            elif route == "/api/tasks/current/file" and embedded:
+                path = parse_qs(parsed.query).get("path", [""])[0]
+                goal_id = parse_qs(parsed.query).get("goal_id", [""])[0]
+                try:
+                    self._json(service.preview_file(path, goal_id=goal_id))
+                except (ValueError, OSError) as exc:
+                    self._json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+            elif route == "/api/tasks/current/artifact" and embedded:
+                path = parse_qs(parsed.query).get("path", [""])[0]
+                goal_id = parse_qs(parsed.query).get("goal_id", [""])[0]
+                try:
+                    self._json(service.preview_artifact(path, goal_id=goal_id))
+                except (ValueError, OSError) as exc:
+                    self._json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
             elif route == "/api/tasks/current/details":
-                self._json(details_payload(bridge))
+                self._json(
+                    {"task": service.status(), "raw": {}}
+                    if embedded
+                    else details_payload(bridge)
+                )
             elif route == "/api/session":
-                self._json(session.export())
+                self._json(
+                    {"version": 2, "tasks": service.history()}
+                    if embedded
+                    else session.export()
+                )
             elif route.startswith("/api/"):
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
             else:
@@ -145,6 +257,8 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             route = parsed.path
+            if route.startswith("/api/") and not self._trusted_host():
+                return
             if not self._same_origin():
                 return
             if route.startswith("/api/") and not self._allowed(parsed.query):
@@ -153,36 +267,117 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
             if body is None:
                 return
             if route == "/api/tasks":
-                task = session.enrich(start_task(bridge, body), body)
-                session.record(task)
-                self._json(task)
+                if embedded:
+                    self._json(service.start(body))
+                else:
+                    task = session.enrich(start_task(bridge, body), body)
+                    session.record(task)
+                    self._json(task)
+            elif route == "/api/setup" and embedded:
+                if body.get("api_key") and not self._client_is_loopback():
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "Session API keys may be entered only from a loopback or local reverse-proxy connection; use an environment-variable reference instead.",
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                try:
+                    self._json(service.configure(body))
+                except (ValueError, OSError, HarnessError) as exc:
+                    self._json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+            elif route == "/api/setup/credential" and embedded:
+                if not self._client_is_loopback():
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "Session API keys may be entered only from a loopback or local reverse-proxy connection.",
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                try:
+                    credential = service.set_session_credential(
+                        str(body.get("api_key") or "")
+                    )
+                    self._json({"ok": True, "credential": credential})
+                except (ValueError, OSError, HarnessError) as exc:
+                    self._json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+            elif route == "/api/setup/test" and embedded:
+                if body.get("api_key") and not self._client_is_loopback():
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "Session API keys may be tested only from a loopback connection; use an environment-variable reference instead.",
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                try:
+                    self._json(service.test_connection(body))
+                except (ValueError, OSError, RuntimeError) as exc:
+                    self._json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
             elif route == "/api/tasks/bulk":
-                tasks = []
-                for item in body.get("tasks", []):
-                    if isinstance(item, dict):
-                        task = session.enrich(start_task(bridge, item), item)
-                        session.record(task)
-                        tasks.append(task)
-                self._json({"tasks": tasks})
+                if embedded:
+                    self._json(
+                        {"ok": False, "error": "The embedded backend runs one visible goal at a time."},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                else:
+                    tasks = []
+                    for item in body.get("tasks", []):
+                        if isinstance(item, dict):
+                            task = session.enrich(start_task(bridge, item), item)
+                            session.record(task)
+                            tasks.append(task)
+                    self._json({"tasks": tasks})
             elif route == "/api/tasks/current/watch":
-                task = watch_task(bridge)
-                session.record(task)
-                self._json(task)
+                if embedded:
+                    self._json(service.status())
+                else:
+                    task = watch_task(bridge)
+                    session.record(task)
+                    self._json(task)
             elif route == "/api/tasks/current/accept":
-                task = command_task(bridge, "accept", body)
-                session.record(task)
-                self._json(task)
+                if embedded:
+                    self._json(service.accept())
+                else:
+                    task = command_task(bridge, "accept", body)
+                    session.record(task)
+                    self._json(task)
             elif route == "/api/tasks/current/continue":
-                task = command_task(bridge, "continue", body)
-                session.record(task)
-                self._json(task)
+                if embedded:
+                    self._json(service.continue_task(str(body.get("feedback") or "")))
+                else:
+                    task = command_task(bridge, "continue", body)
+                    session.record(task)
+                    self._json(task)
             elif route == "/api/tasks/current/stop":
-                task = command_task(bridge, "stop", body)
-                session.record(task)
-                self._json(task)
+                if embedded:
+                    self._json(service.stop())
+                else:
+                    task = command_task(bridge, "stop", body)
+                    session.record(task)
+                    self._json(task)
             elif route == "/api/session/import":
-                session.import_payload(body)
-                self._json({"ok": True, "tasks": session.history()})
+                if embedded:
+                    self._json(
+                        {"ok": False, "error": "Durable engine history cannot be replaced by a browser import."},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                else:
+                    session.import_payload(body)
+                    self._json({"ok": True, "tasks": session.history()})
             else:
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -244,10 +439,14 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
             return value
 
         def _json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
-            encoded = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+            encoded = redact_secrets(
+                json.dumps(payload, indent=2, sort_keys=True)
+            ).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Cache-Control", "no-store")
+            self._security_headers()
             self.end_headers()
             self.wfile.write(encoded)
 
@@ -259,12 +458,38 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
             if not auth_token:
                 return True
             supplied = self.headers.get("Authorization", "")
-            query_token = parse_qs(query).get("token", [""])[0]
             bearer = supplied.removeprefix("Bearer ").strip() if supplied.startswith("Bearer ") else ""
-            if _token_matches(bearer, auth_token) or _token_matches(query_token, auth_token):
+            if _token_matches(bearer, auth_token):
                 return True
             self._json({"ok": False, "error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
             return False
+
+        def _trusted_host(self) -> bool:
+            raw = self.headers.get("Host", "").strip()
+            if not raw:
+                self._json(
+                    {"ok": False, "error": "untrusted host"},
+                    status=HTTPStatus.FORBIDDEN,
+                )
+                return False
+            hostname = urlparse("//" + raw).hostname
+            if hostname and hostname.strip("[]").lower() in trusted_hosts:
+                return True
+            self._json(
+                {"ok": False, "error": "untrusted host"},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return False
+
+        def _client_is_loopback(self) -> bool:
+            if not self.client_address:
+                return False
+            client = str(self.client_address[0]).strip().lower()
+            return client in {"127.0.0.1", "::1", "localhost"}
+
+        def _security_headers(self) -> None:
+            for name, value in SECURITY_HEADERS.items():
+                self.send_header(name, value)
 
         def _same_origin(self) -> bool:
             fetch_site = self.headers.get("Sec-Fetch-Site", "").strip().lower()
@@ -305,8 +530,9 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             while True:
                 try:
-                    task = status_task(bridge)
-                    session.record(task)
+                    task = service.status() if embedded else status_task(bridge)
+                    if not embedded:
+                        session.record(task)
                     self.wfile.write(_websocket_text_frame(json.dumps(task, sort_keys=True)))
                     self.wfile.flush()
                     time.sleep(2)
@@ -331,6 +557,8 @@ def make_handler(bridge: LocalGoalBridge) -> type[BaseHTTPRequestHandler]:
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", mime)
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache")
+            self._security_headers()
             self.end_headers()
             self.wfile.write(data)
 
@@ -392,17 +620,19 @@ class RateLimiter:
         self.limit = limit
         self.window_seconds = window_seconds
         self._hits: dict[str, list[float]] = {}
+        self._lock = Lock()
 
     def allowed(self, key: str) -> bool:
-        now = time.monotonic()
-        start = now - self.window_seconds
-        hits = [hit for hit in self._hits.get(key, []) if hit >= start]
-        if len(hits) >= self.limit:
+        with self._lock:
+            now = time.monotonic()
+            start = now - self.window_seconds
+            hits = [hit for hit in self._hits.get(key, []) if hit >= start]
+            if len(hits) >= self.limit:
+                self._hits[key] = hits
+                return False
+            hits.append(now)
             self._hits[key] = hits
-            return False
-        hits.append(now)
-        self._hits[key] = hits
-        return True
+            return True
 
 
 def _websocket_text_frame(message: str) -> bytes:
@@ -451,10 +681,12 @@ def run_server_from_args(args: Any) -> int:
             host=str(args.host),
             port=0 if port is None else int(port),
             doc_root=resolve_doc_root(args.doc_root),
+            project_dir=Path(getattr(args, "project_dir", ".")).expanduser(),
+            backend=str(getattr(args, "backend", "embedded")),
             open_browser=not bool(args.no_open),
             allow_port_fallback=False,
         )
         return 0
-    except GuiPortUnavailable as exc:
+    except (GuiPortUnavailable, GuiSecurityError) as exc:
         print(str(exc))
         return 2

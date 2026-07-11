@@ -77,12 +77,13 @@ class ArtifactStore:
         goal_id = goal.id if isinstance(goal, Goal) else goal
         return self.runs_dir / goal_id
 
-    def write_goal(self, goal: Goal) -> Path:
+    def write_goal(self, goal: Goal, *, make_current: bool = True) -> Path:
         run_dir = self.goal_dir(goal)
         run_dir.mkdir(parents=True, exist_ok=True)
         state_path = run_dir / "state.json"
         self._write_json(state_path, goal.to_dict())
-        self._write_json(self.current_path, {"goal_id": goal.id})
+        if make_current:
+            self._write_json(self.current_path, {"goal_id": goal.id})
         return state_path
 
     def read_goal(self, goal_id: str) -> Goal:
@@ -102,6 +103,21 @@ class ArtifactStore:
         if not isinstance(goal_id, str):
             return None
         return self.read_goal(goal_id)
+
+    def list_goals(self) -> list[Goal]:
+        """Return readable durable goals, newest first."""
+
+        goals: list[Goal] = []
+        if not self.runs_dir.exists():
+            return goals
+        for state_path in self.runs_dir.glob("*/state.json"):
+            try:
+                goal = Goal.from_dict(self._read_json(state_path))
+            except (json.JSONDecodeError, OSError, ValueError):
+                continue
+            goals.append(goal)
+        goals.sort(key=lambda goal: (goal.updated_at, goal.created_at, goal.id), reverse=True)
+        return goals
 
     def write_report(self, goal: Goal, content: str, name: str = "report.md") -> Path:
         run_dir = self.goal_dir(goal)

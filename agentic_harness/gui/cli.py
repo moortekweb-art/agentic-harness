@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from pathlib import Path
 
 from agentic_harness.core.local_goal_bridge import DOC_ROOT_ENV
 from agentic_harness.gui.server import run_server_from_args
@@ -22,10 +23,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Port to bind. Default: ask the OS for a free local port.",
     )
     parser.add_argument(
+        "--project-dir",
+        default=".",
+        help="Workspace whose .agentic-harness state and files the app should use.",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=("embedded", "local-goal"),
+        default="embedded",
+        help="Execution backend. Default: portable embedded engine.",
+    )
+    parser.add_argument(
         "--doc-root",
         default=None,
         help=(
-            "Optional local-goal backend checkout root. Explicit value wins; otherwise "
+            "Optional legacy local-goal backend checkout root. Explicit value wins; otherwise "
             f"{DOC_ROOT_ENV} or the current directory is used."
         ),
     )
@@ -34,4 +46,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    return run_server_from_args(build_parser().parse_args(argv))
+    args = build_parser().parse_args(argv)
+    args.project_dir = Path(args.project_dir).expanduser()
+    return run_server_from_args(args)

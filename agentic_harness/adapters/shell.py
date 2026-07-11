@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from agentic_harness.core.redaction import redact_secrets
+from agentic_harness.core.secure_io import write_private_text
 from agentic_harness.core.state import Goal
 from agentic_harness.core.worker import WorkerResult
 
@@ -66,8 +67,8 @@ class ShellWorker:
         artifacts: list[str] = []
         try:
             transcript = self.transcript_for(goal)
-            transcript.parent.mkdir(parents=True, exist_ok=True)
-            transcript.write_text(
+            write_private_text(
+                transcript,
                 redact_secrets(
                     "\n".join(
                         [
@@ -81,7 +82,6 @@ class ShellWorker:
                         ]
                     )
                 ),
-                encoding="utf-8",
             )
             artifacts.append(transcript.relative_to(self.cwd.resolve()).as_posix())
         except OSError as exc:

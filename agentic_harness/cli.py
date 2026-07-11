@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -13,12 +14,8 @@ import tempfile
 import tomllib
 from importlib import metadata
 from pathlib import Path
+from typing import Any
 
-from agentic_harness.adapters.coding_agent import CodingAgentWorker
-from agentic_harness.adapters.github_actions import GitHubActionsAdapter
-from agentic_harness.adapters.local_llm import LocalLLMAdapter
-from agentic_harness.adapters.shell import ShellWorker
-from agentic_harness.adapters.tmux import TmuxWorker
 from agentic_harness.core.autonomy import AutonomousRunner, AutonomyPolicy
 from agentic_harness.core.config import (
     CONFIG_DIR,
@@ -31,31 +28,24 @@ from agentic_harness.core.config import (
 )
 from agentic_harness.core.demos import create_demo, demo_names
 from agentic_harness.core.errors import ConfigError, HarnessError
+from agentic_harness.core.factory import (
+    autonomy_policy_from_config,
+    build_supervisor,
+)
 from agentic_harness.core.local_goal_bridge import (
     CommandResult,
     DOC_ROOT_ENV,
-    HUMAN_MODES,
     LocalGoalBridge,
     Mode3AGoalOptions,
     format_command_result,
-    format_human_modes,
-    format_popos_setup,
     human_mode_by_key,
     resolve_doc_root,
 )
 from agentic_harness.gui.server import run_server_from_args
 from agentic_harness.core.recipes import Recipe, explain_recipe, list_recipes, load_recipe
-from agentic_harness.core.review import (
-    DeterministicReviewer,
-    ReviewCriterion,
-    artifact_exists,
-    command_passes,
-    file_changed,
-    git_clean,
-)
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.supervisor import Supervisor
-from agentic_harness.core.worker import Worker
+from agentic_harness.core.safety import goal_safety_metadata
 from agentic_harness.core.workspace import format_workspace_change_lines, workspace_change_summary
 
 
@@ -71,7 +61,7 @@ RECIPE_COMMANDS = {
 DIST_NAME = "local-agentic-harness"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOC_ROOT_HELP = (
-    "Path to optional local-goal/Mode 3A backend checkout root. Explicit value wins; "
+    "Path to an optional external local-goal backend root. Explicit value wins; "
     f"otherwise {DOC_ROOT_ENV} is used when non-empty; otherwise the current "
     "directory is used. The Python package does not install local-goal."
 )
@@ -110,19 +100,14 @@ def build_parser() -> argparse.ArgumentParser:
     easy_do = sub.add_parser("do", help="Start useful background work from plain English")
     easy_do.add_argument("objective")
     easy_do.add_argument(
-        "--mode",
-        choices=[mode.key for mode in HUMAN_MODES],
-        default="cloud",
-        help="Human mode to use. Default: cloud.",
+        "--blocker-limit",
+        type=int,
+        default=3,
+        help="Stop for review after this many identical no-progress blockers.",
     )
     easy_do.add_argument("--safe-area", action="append", default=[])
     easy_do.add_argument("--check", action="append", default=[])
-    easy_do.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
-    easy_do.add_argument(
-        "--watch",
-        action="store_true",
-        help="Run one immediate diagnostic monitor pass after starting.",
-    )
+    easy_do.add_argument("--json", action="store_true", help="Print final goal JSON.")
     work = sub.add_parser("work", help="Interactive no-jargon mode picker")
     work.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
     gui = sub.add_parser("gui", help="Open the local browser app")
@@ -134,6 +119,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Port to bind. Default: ask the OS for a free local port.",
     )
     gui.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    gui.add_argument(
+        "--backend",
+        choices=("embedded", "local-goal"),
+        default="embedded",
+        help="Use the portable embedded engine (default) or optional legacy local-goal backend.",
+    )
     gui.add_argument("--no-open", action="store_true", help="Do not open a browser automatically.")
     sub.add_parser("modes", help="Explain the four human work modes")
     easy_check = sub.add_parser("check", help="Show what the background worker is doing")
@@ -149,7 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
     popos_advanced.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
     mode3a_run = sub.add_parser(
         "mode3a-run",
-        help="Run a plain-English task through the GLM-backed Mode 3A cloud lane",
+        help="Run a plain-English task through an optional external orchestration lane",
     )
     mode3a_run.add_argument("objective")
     mode3a_run.add_argument("--allowed", action="append", default=[])
@@ -162,10 +153,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run one immediate diagnostic monitor pass after queueing.",
     )
     mode3a_run.add_argument("--json", action="store_true", help="Print raw local-goal JSON output.")
-    mode3a_status = sub.add_parser("mode3a-status", help="Show Mode 3A/local-goal status")
+    mode3a_status = sub.add_parser(
+        "mode3a-status",
+        help="Show optional external local-goal status (compatibility command)",
+    )
     mode3a_status.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
     mode3a_status.add_argument("--json", action="store_true")
-    mode3a_monitor = sub.add_parser("mode3a-monitor", help="Run one Mode 3A/local-goal monitor pass")
+    mode3a_monitor = sub.add_parser(
+        "mode3a-monitor",
+        help="Run one optional external-backend monitor pass (compatibility command)",
+    )
     mode3a_monitor.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
     mode3a_monitor.add_argument("--json", action="store_true")
     sub.add_parser("agents", help="Show supported backend tools found on PATH")
@@ -254,6 +251,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=3,
         help="Consecutive identical no-progress blockers before human review. Default: 3.",
     )
+    goal_cmd.add_argument("--safe-area", action="append", default=[])
+    goal_cmd.add_argument("--check", action="append", default=[])
     goal_cmd.add_argument("--json", action="store_true", help="Print the final goal JSON.")
     status = sub.add_parser("status", help="Show current goal state")
     status.add_argument(
@@ -315,21 +314,21 @@ def main(argv: list[str] | None = None) -> int:
         print(format_start_here_text())
         return 0
     if args.command in {"setup", "popos-setup"}:
-        print(format_popos_setup(LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))))
+        print(format_portable_setup(project_dir))
         return 0
     if args.command == "modes":
-        print(format_human_modes())
+        print(format_portable_goal_flow())
         return 0
     if args.command == "work":
-        return run_interactive_work_command(args)
+        return run_interactive_work_command(args, project_dir)
     if args.command == "gui":
         return run_server_from_args(args)
     if args.command == "do":
-        return run_easy_do_command(args)
+        return run_easy_do_command(args, project_dir)
     if args.command == "check":
-        return run_easy_check_command(args)
+        return run_easy_check_command(args, project_dir)
     if args.command == "watch":
-        return run_easy_watch_command(args)
+        return run_easy_watch_command(args, project_dir)
     if args.command == "mode3a-run":
         return run_mode3a_command(args)
     if args.command == "mode3a-status":
@@ -401,11 +400,19 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         if args.command == "start":
-            goal = supervisor.start(args.objective)
+            config = load_config(project_dir)
+            goal = supervisor.start(
+                args.objective,
+                metadata=_cli_goal_safety_metadata(project_dir, config),
+            )
             print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
             return 0
         if args.command == "run":
-            goal = supervisor.start(args.objective)
+            config = load_config(project_dir)
+            goal = supervisor.start(
+                args.objective,
+                metadata=_cli_goal_safety_metadata(project_dir, config),
+            )
             goal = supervisor.continue_goal()
             if goal.status is GoalStatus.REVIEW:
                 goal = supervisor.review()
@@ -423,9 +430,22 @@ def main(argv: list[str] | None = None) -> int:
                 print(format_report_text(goal, report_path=report_path, workspace_changes=changes))
             return 0 if goal.status is GoalStatus.DONE else 1
         if args.command == "run-until-done":
+            config = load_config(project_dir)
+            current = supervisor.status()
+            objective = args.objective
+            if objective and (
+                current is None or current.status in {GoalStatus.DONE, GoalStatus.FAILED}
+            ):
+                supervisor.start(
+                    objective,
+                    metadata=_cli_goal_safety_metadata(project_dir, config),
+                )
+                objective = None
+            else:
+                _ensure_cli_goal_safety(supervisor, project_dir, config)
             goal = run_until_done(
                 supervisor,
-                objective=args.objective,
+                objective=objective,
                 max_attempts=args.max_attempts,
             )
             goal, report_path = write_goal_report(supervisor, project_dir, goal)
@@ -443,13 +463,51 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if goal.status is GoalStatus.DONE else 1
         if args.command == "goal":
             try:
-                policy = AutonomyPolicy(
+                config = load_config(project_dir)
+                review_commands = [
+                    shlex.split(value) for value in args.check if value.strip()
+                ]
+                if not review_commands and config.review_command:
+                    review_commands = [config.review_command]
+                if not review_commands:
+                    raise ConfigError(
+                        "no independent verification command is configured; add --check or set review_command"
+                    )
+                supervisor = build_supervisor(
+                    project_dir,
+                    review_commands=review_commands,
+                )
+                policy = autonomy_policy_from_config(
+                    config,
                     repeated_blocker_limit=args.blocker_limit,
                     require_completion_claim=True,
                 )
             except ValueError as exc:
                 raise ConfigError(str(exc)) from exc
-            goal = AutonomousRunner(supervisor, policy=policy).run(args.objective)
+            current = supervisor.status()
+            if args.objective and (
+                current is None or current.status in {GoalStatus.DONE, GoalStatus.FAILED}
+            ):
+                supervisor.start(
+                    args.objective,
+                    metadata=goal_safety_metadata(
+                        project_dir,
+                        allowed_paths=list(args.safe_area),
+                        review_commands=review_commands,
+                        path_enforcement=config.worker == "model_agent",
+                        secret_env_names=[config.llm_api_key_env],
+                        interface="cli",
+                    ),
+                )
+                goal = AutonomousRunner(supervisor, policy=policy).run()
+            else:
+                _ensure_cli_goal_safety(
+                    supervisor,
+                    project_dir,
+                    config,
+                    review_commands=review_commands,
+                )
+                goal = AutonomousRunner(supervisor, policy=policy).run(args.objective)
             goal, report_path = write_goal_report(supervisor, project_dir, goal)
             if args.json:
                 print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
@@ -494,6 +552,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.command == "continue":
+            config = load_config(project_dir)
+            _ensure_cli_goal_safety(supervisor, project_dir, config)
             goal = supervisor.continue_goal()
             print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
             return 0
@@ -544,6 +604,58 @@ def run_until_done(
     return AutonomousRunner(supervisor, policy=policy).run(objective)
 
 
+def _cli_goal_safety_metadata(
+    project_dir: Path,
+    config: HarnessConfig,
+    *,
+    review_commands: list[list[str]] | None = None,
+) -> dict[str, Any]:
+    commands = (
+        review_commands
+        if review_commands is not None
+        else ([config.review_command] if config.review_command else [])
+    )
+    return goal_safety_metadata(
+        project_dir,
+        allowed_paths=[],
+        review_commands=commands,
+        path_enforcement=config.worker == "model_agent",
+        secret_env_names=[config.llm_api_key_env],
+        interface="cli",
+    )
+
+
+def _ensure_cli_goal_safety(
+    supervisor: Supervisor,
+    project_dir: Path,
+    config: HarnessConfig,
+    *,
+    review_commands: list[list[str]] | None = None,
+) -> None:
+    goal = supervisor.status()
+    if goal is None:
+        return
+    safety = goal.metadata.get("safety")
+    if (
+        isinstance(safety, dict)
+        and isinstance(safety.get("allowed_paths"), list)
+        and isinstance(safety.get("preexisting_changes"), list)
+    ):
+        return
+    metadata = _cli_goal_safety_metadata(
+        project_dir,
+        config,
+        review_commands=review_commands,
+    )
+    with supervisor.store.autonomy_locked():
+        with supervisor.store.locked():
+            current = supervisor.store.read_current_goal()
+            if current is None or current.id != goal.id:
+                raise HarnessError("active goal changed while safety metadata was prepared")
+            current.metadata.update(metadata)
+            supervisor.store.write_goal(current)
+
+
 def run_mode3a_command(args: argparse.Namespace) -> int:
     bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
     if not bridge.available():
@@ -562,7 +674,7 @@ def run_mode3a_command(args: argparse.Namespace) -> int:
         return 2
     supervision = bridge.background_supervision()
     if supervision.get("active") is not True:
-        print("Mode 3A task was not queued because unattended supervision is unavailable.")
+        print("External task was not queued because unattended supervision is unavailable.")
         print(str(supervision.get("summary") or "Background watcher could not be verified."))
         return 2
     try:
@@ -581,7 +693,7 @@ def run_mode3a_command(args: argparse.Namespace) -> int:
     if args.json:
         print(format_command_result(result))
     else:
-        print("Mode 3A task queued.")
+        print("External orchestration task queued.")
         print(format_command_result(result))
         print("Background supervisor owns continuation, repair, review, and acceptance.")
         print("You can close this. Status is available with agentic-harness check.")
@@ -594,86 +706,73 @@ def run_mode3a_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_easy_do_command(args: argparse.Namespace) -> int:
-    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
-    if not bridge.available():
-        print("I cannot find the background worker on this machine.")
-        print(f"Expected: {bridge.local_goal}")
-        print(f"Next: {local_goal_setup_hint()}")
-        return 2
-    supervision = bridge.background_supervision()
-    if supervision.get("active") is not True:
-        print("I did not start the task because unattended supervision is unavailable.")
-        print(str(supervision.get("summary") or "Background watcher could not be verified."))
-        print(f"Next: {local_goal_setup_hint()}")
-        return 2
+def run_easy_do_command(args: argparse.Namespace, project_dir: Path) -> int:
     try:
-        result = start_human_mode(
-            bridge,
-            mode_key=args.mode,
-            objective=args.objective,
-            safe_areas=tuple(args.safe_area),
-            checks=tuple(args.check),
+        initialized = ensure_execution_config(project_dir)
+        config = load_config(project_dir)
+        review_commands = [shlex.split(value) for value in args.check if value.strip()]
+        if not review_commands and config.review_command:
+            review_commands = [config.review_command]
+        if not review_commands:
+            raise ConfigError(
+                "no independent verification command is configured; add --check or set review_command"
+            )
+        supervisor = build_supervisor(project_dir, review_commands=review_commands)
+        supervisor.start(
+            args.objective,
+            metadata=goal_safety_metadata(
+                project_dir,
+                allowed_paths=list(args.safe_area),
+                review_commands=review_commands,
+                path_enforcement=config.worker == "model_agent",
+                secret_env_names=[config.llm_api_key_env],
+                interface="cli",
+            ),
         )
-    except ValueError as exc:
-        print(f"Could not start work: {exc}")
+        policy = autonomy_policy_from_config(
+            config,
+            repeated_blocker_limit=args.blocker_limit,
+            require_completion_claim=True,
+        )
+        goal = AutonomousRunner(supervisor, policy=policy).run()
+        goal, report_path = write_goal_report(supervisor, project_dir, goal)
+    except (ConfigError, HarnessError, ValueError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
         return 2
-    if result.returncode != 0:
-        print("The background worker refused the task.")
-        print(format_command_result(result))
-        return result.returncode
-    print("Started background work.")
-    print(_friendly_queue_summary(result.stdout))
-    print("Background supervisor owns this task through completion or a true blocker.")
-    print("You can close this. Status is available any time with agentic-harness check.")
-    if args.watch:
-        watch_result = bridge.monitor()
-        print(format_command_result(watch_result))
-        return watch_result.returncode
-    return 0
+    if args.json:
+        print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+    else:
+        if initialized is not None:
+            print(format_init_text(*initialized))
+        print(
+            format_report_text(
+                goal,
+                report_path=report_path,
+                workspace_changes=workspace_change_summary(
+                    project_dir,
+                    goal.metadata.get("workspace_snapshot"),
+                ),
+            )
+        )
+    return 0 if goal.status is GoalStatus.DONE else 1
 
 
-def run_interactive_work_command(args: argparse.Namespace) -> int:
-    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
-    if not bridge.available():
-        print("I cannot find the background worker on this machine.")
-        print(f"Expected: {bridge.local_goal}")
-        print(f"Next: {local_goal_setup_hint()}")
-        return 2
-    supervision = bridge.background_supervision()
-    if supervision.get("active") is not True:
-        print("I did not start work because unattended supervision is unavailable.")
-        print(str(supervision.get("summary") or "Background watcher could not be verified."))
-        return 2
-    print(format_human_modes())
+def run_interactive_work_command(args: argparse.Namespace, project_dir: Path) -> int:
+    print("Agentic Harness verified goal")
+    print(f"Workspace: {project_dir.resolve()}")
     print("")
-    selected = input("Choose a mode [2]: ").strip() or "2"
     objective = input("What do you want done? ").strip()
     if not objective:
         print("No task entered. Nothing started.")
         return 2
-    try:
-        mode = human_mode_by_key(selected)
-        result = start_human_mode(
-            bridge,
-            mode_key=mode.key,
-            objective=objective,
-            safe_areas=(),
-            checks=(),
-        )
-    except ValueError as exc:
-        print(f"Could not start work: {exc}")
-        return 2
-    if result.returncode != 0:
-        print("The background worker refused the task.")
-        print(format_command_result(result))
-        return result.returncode
-    print("")
-    print(f"Started: {mode.title}")
-    print(_friendly_queue_summary(result.stdout))
-    print("Background supervisor owns this task through completion or a true blocker.")
-    print("You can close this. Status is available any time with agentic-harness check.")
-    return 0
+    portable_args = argparse.Namespace(
+        objective=objective,
+        blocker_limit=3,
+        safe_area=[],
+        check=[],
+        json=False,
+    )
+    return run_easy_do_command(portable_args, project_dir)
 
 
 def start_human_mode(
@@ -695,32 +794,25 @@ def start_human_mode(
 
 def local_goal_setup_hint() -> str:
     return (
-        "install or expose the optional local-goal/Mode 3A backend, then pass "
+        "install or expose the optional external local-goal backend, then pass "
         f"--doc-root, set {DOC_ROOT_ENV}, or set AGENTIC_HARNESS_LOCAL_GOAL; "
         "run agentic-harness setup for detected paths"
     )
 
 
-def run_easy_check_command(args: argparse.Namespace) -> int:
-    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
-    if not bridge.available():
-        print("I cannot find the background worker on this machine.")
-        print(f"Next: {local_goal_setup_hint()}")
+def run_easy_check_command(args: argparse.Namespace, project_dir: Path) -> int:
+    try:
+        supervisor = build_supervisor(project_dir)
+    except ConfigError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
         return 2
-    result = bridge.status(json_output=False)
-    print(format_command_result(result))
-    return result.returncode
+    print(format_status_text(supervisor.status()))
+    return 0
 
 
-def run_easy_watch_command(args: argparse.Namespace) -> int:
-    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
-    if not bridge.available():
-        print("I cannot find the background worker on this machine.")
-        print(f"Next: {local_goal_setup_hint()}")
-        return 2
-    result = bridge.monitor(json_output=False)
-    print(format_command_result(result))
-    return result.returncode
+def run_easy_watch_command(args: argparse.Namespace, project_dir: Path) -> int:
+    print("Current durable task snapshot:")
+    return run_easy_check_command(args, project_dir)
 
 
 def _friendly_queue_summary(stdout: str) -> str:
@@ -952,6 +1044,7 @@ def run_release_smoke(project_dir: Path, dist_dir: Path | None = None) -> int:
             out_dir = project_dir / out_dir
         out_dir = out_dir.resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
+        before_build = _artifact_snapshot(out_dir)
         if not _run_release_step(
             "Build wheel and sdist",
             [sys.executable, "-m", "build", "--outdir", str(out_dir)],
@@ -959,8 +1052,8 @@ def run_release_smoke(project_dir: Path, dist_dir: Path | None = None) -> int:
         ):
             return 1
         try:
-            wheel = _single_artifact(out_dir, "*.whl")
-            sdist = _single_artifact(out_dir, "*.tar.gz")
+            wheel = _single_artifact(out_dir, "*.whl", before=before_build)
+            sdist = _single_artifact(out_dir, "*.tar.gz", before=before_build)
         except ConfigError as exc:
             print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
             return 2
@@ -981,10 +1074,32 @@ def run_release_smoke(project_dir: Path, dist_dir: Path | None = None) -> int:
         return 0
 
 
-def _single_artifact(dist_dir: Path, pattern: str) -> Path:
-    matches = sorted(dist_dir.glob(pattern))
+def _artifact_snapshot(dist_dir: Path) -> dict[Path, tuple[int, int, int]]:
+    snapshot: dict[Path, tuple[int, int, int]] = {}
+    for pattern in ("*.whl", "*.tar.gz"):
+        for path in dist_dir.glob(pattern):
+            stat = path.stat()
+            snapshot[path.resolve()] = (stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
+def _single_artifact(
+    dist_dir: Path,
+    pattern: str,
+    *,
+    before: dict[Path, tuple[int, int, int]],
+) -> Path:
+    matches: list[Path] = []
+    for path in sorted(dist_dir.glob(pattern)):
+        stat = path.stat()
+        signature = (stat.st_ino, stat.st_size, stat.st_mtime_ns)
+        if before.get(path.resolve()) != signature:
+            matches.append(path)
     if len(matches) != 1:
-        raise ConfigError(f"expected one {pattern} artifact in {dist_dir}, found {len(matches)}")
+        raise ConfigError(
+            f"expected the build to create one {pattern} artifact in {dist_dir}, "
+            f"found {len(matches)}"
+        )
     return matches[0]
 
 
@@ -1451,6 +1566,15 @@ def write_goal_report(
     goal: Goal,
 ) -> tuple[Goal, str]:
     changes = workspace_change_summary(project_dir, goal.metadata.get("workspace_snapshot"))
+    if goal.status.is_terminal and isinstance(changes, dict):
+        with supervisor.store.autonomy_locked():
+            with supervisor.store.locked():
+                current = supervisor.store.read_current_goal()
+                if current is None or current.id != goal.id:
+                    raise HarnessError("active goal changed before terminal evidence was frozen")
+                current.metadata["terminal_workspace_changes"] = changes
+                supervisor.store.write_goal(current)
+                goal = current
     reported_goal, report_path = supervisor.write_report(
         format_report_markdown(goal, workspace_changes=changes)
     )
@@ -1474,95 +1598,6 @@ def resolve_easy_agent(agent: str) -> str | None:
     if agent == "shell":
         return "shell"
     return agent if shutil.which(agent) is not None else None
-
-
-def build_supervisor(
-    project_dir: Path,
-    *,
-    review_command: list[str] | None = None,
-    review_command_timeout: int | None = None,
-) -> Supervisor:
-    config = load_config(project_dir)
-    worker: Worker | None = None
-    if config.worker == "shell" and config.shell_command:
-        worker = ShellWorker(config.shell_command, cwd=project_dir)
-    elif config.worker == "coding_agent":
-        worker = CodingAgentWorker(
-            config.coding_agent_command,
-            cwd=project_dir,
-            timeout=config.coding_agent_timeout,
-            transcript_path=config.coding_agent_transcript,
-        )
-    elif config.worker == "tmux":
-        worker = TmuxWorker(
-            config.tmux_command,
-            session_prefix=config.tmux_session_prefix,
-            cwd=project_dir,
-        )
-    elif config.worker == "local_llm":
-        worker = LocalLLMAdapter(
-            endpoint=config.llm_endpoint,
-            model=config.llm_model,
-            api_key=config.llm_api_key,
-            timeout=config.llm_timeout,
-            retries=config.llm_retries,
-            retry_delay=config.llm_retry_delay,
-        )
-    elif config.worker == "github_actions":
-        worker = GitHubActionsAdapter(
-            owner=config.github_owner,
-            repo=config.github_repo,
-            workflow_id=config.github_workflow_id,
-            token=config.github_token,
-            ref=config.github_ref,
-            wait_for_completion=config.github_wait,
-            poll_interval=config.github_poll_interval,
-            timeout=config.github_timeout,
-            api_version=config.github_api_version,
-        )
-    criteria = review_criteria_from_config(
-        config,
-        project_dir,
-        review_command=review_command,
-        review_command_timeout=review_command_timeout,
-    )
-    return Supervisor(
-        project_dir=project_dir,
-        worker=worker,
-        reviewer=DeterministicReviewer(criteria) if criteria else None,
-        allow_noop_success=config.allow_noop_success,
-    )
-
-
-def review_criteria_from_config(
-    config: HarnessConfig,
-    project_dir: Path,
-    *,
-    review_command: list[str] | None = None,
-    review_command_timeout: int | None = None,
-) -> list[ReviewCriterion]:
-    criteria: list[ReviewCriterion] = []
-    command = review_command if review_command is not None else config.review_command
-    timeout = (
-        review_command_timeout
-        if review_command_timeout is not None
-        else config.review_command_timeout
-    )
-    if command:
-        criteria.append(
-            command_passes(
-                command,
-                cwd=project_dir,
-                timeout=timeout,
-            )
-        )
-    if config.review_artifact:
-        criteria.append(artifact_exists(project_dir, config.review_artifact))
-    if config.review_file_changed:
-        criteria.append(file_changed(project_dir, config.review_file_changed))
-    if config.review_git_clean:
-        criteria.append(git_clean(project_dir))
-    return criteria
 
 
 def format_recipe_result_text(
@@ -1617,6 +1652,19 @@ def format_report_text(
         f"Objective: {goal.objective}",
         f"Status: {goal.status.value}",
     ]
+    outcome = goal.metadata.get("worker_outcome")
+    summary = ""
+    if isinstance(outcome, dict):
+        summary = str(outcome.get("summary") or "").strip()
+    if not summary:
+        summary = str(goal.metadata.get("worker_summary") or "").strip()
+    if summary:
+        lines.append(f"Summary: {summary}")
+    autonomy = goal.metadata.get("autonomy")
+    if isinstance(autonomy, dict):
+        checkpoint = str(autonomy.get("checkpoint") or "").strip()
+        if checkpoint:
+            lines.append(f"Checkpoint: {checkpoint}")
     if report_path:
         lines.append(f"Report: {report_path}")
     lines.extend(format_workspace_change_lines(workspace_changes))
@@ -1768,9 +1816,67 @@ def format_start_here_text() -> str:
             "   agentic-harness run-recipe fix-tests --explain",
             "   agentic-harness recipes",
             "",
-            "No prompt design or YAML editing. For long work, use goal; for the Pop-OS background lane, use do and check.",
+            "No prompt design or YAML editing. Use goal for durable foreground work, or do and check for the portable project flow.",
         ]
     )
+
+
+def format_portable_goal_flow() -> str:
+    return "\n".join(
+        [
+            "Agentic Harness verified goal flow",
+            "",
+            "1. Describe one complete outcome.",
+            "2. The configured agent plans and acts inside the workspace.",
+            "3. Checkpoints, changed files, and checks remain visible.",
+            "4. Done is accepted only after independent verification passes.",
+            "",
+            'CLI: agentic-harness goal "describe one verified outcome"',
+            "GUI: agentic-harness gui",
+            "Optional external orchestration is available with --backend local-goal.",
+        ]
+    )
+
+
+def format_portable_setup(project_dir: Path) -> str:
+    config_path = project_dir / CONFIG_DIR / CONFIG_NAME
+    lines = [
+        "Agentic Harness setup",
+        "",
+        f"Workspace: {project_dir.resolve()}",
+        f"Config: {config_path}",
+    ]
+    if not config_path.exists():
+        lines.extend(
+            [
+                "State: setup required",
+                "Next: agentic-harness gui",
+                "Or choose a CLI agent: agentic-harness init-agent codex",
+            ]
+        )
+        return "\n".join(lines)
+    try:
+        config = load_config(project_dir)
+    except ConfigError as exc:
+        lines.extend(["State: config needs attention", f"Problem: {exc}"])
+        return "\n".join(lines)
+    lines.extend(
+        [
+            "State: configured",
+            f"Execution: {config.worker}",
+            f"Verification: {' '.join(config.review_command) or 'not configured'}",
+            "Next: agentic-harness do \"describe one verified outcome\"",
+        ]
+    )
+    if config.worker == "model_agent":
+        lines.extend(
+            [
+                f"Model: {config.llm_model}",
+                f"Endpoint: {config.llm_endpoint}",
+                f"Credential source: {config.llm_credential_source}",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def available_agent_tools() -> dict[str, bool]:

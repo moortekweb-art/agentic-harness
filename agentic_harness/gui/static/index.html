@@ -240,11 +240,15 @@
             <svg class="icon"><use href="#icon-workflow"></use></svg>
           </span>
           <div>
-            <p class="eyebrow">Local assistant control</p>
+            <p class="eyebrow">Plain-language goals, visible work</p>
             <h1>Agentic Harness</h1>
           </div>
         </div>
         <div class="top-actions">
+          <button id="setupButton" title="Choose workspace execution and model settings">
+            <svg class="icon" aria-hidden="true"><use href="#icon-braces"></use></svg>
+            <span>Setup</span>
+          </button>
           <button id="themeButton" title="Use dark theme">
             <svg class="icon" aria-hidden="true"><use id="themeIcon" href="#icon-moon"></use></svg>
             <span>Theme</span>
@@ -255,43 +259,49 @@
           </button>
           <div class="health" id="health" role="status">
             <svg class="icon" aria-hidden="true"><use id="healthIcon" href="#icon-loader-circle"></use></svg>
-            <span id="healthText">Checking...</span>
+            <span id="healthText">Checking…</span>
           </div>
         </div>
       </header>
 
+      <div class="workspace-strip">
+        <span>Workspace</span>
+        <strong id="workspacePath">Loading…</strong>
+        <span id="executionSummary">Execution setup not loaded</span>
+      </div>
+
       <section class="workbench">
         <div class="start-panel">
           <div class="section-heading">
-            <p class="eyebrow">Start work</p>
-            <h2>What should the assistant do?</h2>
+            <p class="eyebrow">New goal</p>
+            <h2>What outcome do you want?</h2>
+            <p class="help-text">Describe one result. The assistant will keep the goal, show each checkpoint, run your check, and only mark it done when the evidence passes.</p>
           </div>
 
-          <label class="field-label" for="objective">Task</label>
+          <label class="field-label" for="objective">Goal</label>
           <textarea
             id="objective"
             rows="7"
-            placeholder="Example: make Jarvis voice startup more reliable"
+            placeholder="Example: add a CSV export, update its tests, and explain the changed files"
           ></textarea>
 
-          <div class="mode-grid" id="modes"></div>
-
           <details class="boundaries">
-            <summary>Add boundaries</summary>
-            <label class="field-label" for="safeAreas">Safe places to work</label>
-            <textarea id="safeAreas" rows="3" placeholder="One per line"></textarea>
-            <label class="field-label" for="checks">Checks to run</label>
-            <textarea id="checks" rows="3" placeholder="One per line"></textarea>
+            <summary>Add scope and checks</summary>
+            <p class="help-text" id="scopeHelp">Paths are enforced by the built-in model agent. Installed coding-agent CLIs receive them as guidance.</p>
+            <label class="field-label" for="safeAreas">Allowed files or folders</label>
+            <textarea id="safeAreas" rows="3" placeholder="One workspace-relative path per line; blank means the whole workspace"></textarea>
+            <label class="field-label" for="checks">Independent verification commands</label>
+            <textarea id="checks" rows="3" placeholder="One command per line; setup provides the default"></textarea>
           </details>
 
           <div class="actions">
-            <button class="primary" id="startButton" title="Start the task" disabled>
+            <button class="primary" id="startButton" title="Start this verified goal" disabled>
               <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>
-              <span>Start</span>
+              <span>Start goal</span>
             </button>
-            <button id="checkButton" title="Get the latest task status">
+            <button id="checkButton" title="Refresh the visible task status">
               <svg class="icon" aria-hidden="true"><use href="#icon-refresh-cw"></use></svg>
-              <span>Run checks</span>
+              <span>Refresh</span>
             </button>
             <button id="undoButton" title="Undo the last form edit">
               <svg class="icon" aria-hidden="true"><use href="#icon-undo-2"></use></svg>
@@ -304,126 +314,97 @@
           </div>
         </div>
 
-        <aside class="status-panel">
+        <aside class="status-panel" aria-live="polite">
           <div class="status-head">
             <div>
               <p class="eyebrow">Current work</p>
               <h2 id="statusLabel">Ready</h2>
             </div>
-            <span
-              class="status-indicator ready"
-              id="statusIndicator"
-              role="img"
-              aria-label="Supervisor is running"
-              title="Supervisor is running"
-            >
+            <span class="status-indicator ready" id="statusIndicator" role="img" aria-label="Ready" title="Ready">
               <svg class="icon" aria-hidden="true"><use id="statusIcon" href="#icon-circle-check"></use></svg>
             </span>
           </div>
 
+          <p class="summary" id="summary">No task is running.</p>
           <div id="progressGroup" class="progress-group" hidden>
             <div class="progress-meta">
-              <span>Progress</span>
+              <span>Measured progress</span>
               <span id="progressValue">0%</span>
             </div>
-            <div
-              class="progress-track"
-              id="progressTrack"
-              role="progressbar"
-              aria-label="Task progress"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow="0"
-            >
+            <div class="progress-track" id="progressTrack" role="progressbar" aria-label="Measured task progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
               <div class="progress-bar" id="progressBar"></div>
             </div>
           </div>
-          <p class="summary" id="summary">No active work is visible yet.</p>
 
-          <div class="readiness-card" id="readinessCard">
-            <div>
-              <h3 class="icon-heading">
-                <svg class="icon" aria-hidden="true"><use href="#icon-shield-check"></use></svg>
-                <span>Readiness gate</span>
-              </h3>
-              <p id="readinessStatus">Checking...</p>
-              <p id="readinessSummary">Waiting for local status.</p>
-            </div>
-            <div>
-              <h3 class="icon-heading">
-                <svg class="icon" aria-hidden="true"><use href="#icon-workflow"></use></svg>
-                <span>Local loop</span>
-              </h3>
-              <p class="loop-legend"><span class="loop-marker" aria-hidden="true"></span>Current step</p>
-              <ol id="agentLoop"></ol>
-            </div>
-          </div>
+          <section class="current-card" id="currentCard">
+            <div><span>Working on now</span><strong id="currentSubgoal">Waiting for a goal</strong></div>
+            <div><span>Checkpoint</span><strong id="checkpoint">Not started</strong></div>
+            <div><span>Cycle</span><strong id="cycleValue">0</strong></div>
+          </section>
 
           <div class="quick-actions">
             <button id="continueButton" hidden>
               <svg class="icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg>
-              <span>Ask to continue</span>
+              <span>Continue with a note</span>
             </button>
             <button id="acceptButton" hidden>
               <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
-              <span>Accept</span>
+              <span>Accept result</span>
             </button>
             <button class="danger" id="stopButton" hidden>
               <svg class="icon" aria-hidden="true"><use href="#icon-square"></use></svg>
-              <span>Stop</span>
+              <span>Stop safely</span>
             </button>
           </div>
 
+          <section class="work-detail-grid">
+            <div>
+              <h3>Plan</h3>
+              <ol id="planList" class="plain-list"></ol>
+            </div>
+            <div>
+              <h3>Requirements</h3>
+              <ul id="requirementsList" class="plain-list"></ul>
+            </div>
+          </section>
+
+          <section>
+            <h3>Activity</h3>
+            <ol id="eventTimeline" class="timeline"></ol>
+          </section>
+
+          <section id="finalResult" class="final-result" hidden>
+            <h3>Result</h3>
+            <p id="finalSummary"></p>
+            <p id="finalRemaining"></p>
+          </section>
+
           <div class="evidence">
-            <h3 class="icon-heading">
-              <svg class="icon" aria-hidden="true"><use href="#icon-file-text"></use></svg>
-              <span>Changed files</span>
-            </h3>
+            <h3 class="icon-heading"><svg class="icon" aria-hidden="true"><use href="#icon-file-text"></use></svg><span>Changed files</span></h3>
             <ul id="changedFiles"></ul>
-            <h3 class="icon-heading">
-              <svg class="icon" aria-hidden="true"><use href="#icon-list-checks"></use></svg>
-              <span>Checks</span>
-            </h3>
+            <h3 class="icon-heading"><svg class="icon" aria-hidden="true"><use href="#icon-list-checks"></use></svg><span>Verification</span></h3>
             <ul id="verification"></ul>
-            <h3 class="icon-heading">
-              <svg class="icon" aria-hidden="true"><use href="#icon-package"></use></svg>
-              <span>Artifacts</span>
-            </h3>
+            <h3 class="icon-heading"><svg class="icon" aria-hidden="true"><use href="#icon-package"></use></svg><span>Artifacts</span></h3>
             <ul id="artifacts"></ul>
           </div>
 
-          <div class="history-tools">
-            <label class="field-label icon-heading" for="historySearch">
-              <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
-              <span>History search</span>
-            </label>
-            <input id="historySearch" type="search" placeholder="Search previous tasks" />
+          <details class="history-tools">
+            <summary>Previous goals</summary>
+            <label class="field-label" for="historySearch">Search</label>
+            <input id="historySearch" type="search" placeholder="Search previous goals" />
             <div class="actions compact">
-              <button id="exportButton" title="Copy GUI session history">
-                <svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>
-                <span id="exportButtonLabel">Export</span>
-              </button>
-              <button id="importButton" title="Import GUI session history">
-                <svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg>
-                <span>Import</span>
-              </button>
+              <button id="exportButton" title="Copy durable task history"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg><span id="exportButtonLabel">Copy history</span></button>
             </div>
             <ul class="history-list" id="historyList"></ul>
-          </div>
+          </details>
 
           <details class="advanced">
-            <summary>
-              <svg class="icon" aria-hidden="true"><use href="#icon-braces"></use></svg>
-              <span>Advanced details</span>
-            </summary>
+            <summary><svg class="icon" aria-hidden="true"><use href="#icon-braces"></use></svg><span>Technical metadata</span></summary>
             <pre id="advancedDetails">{}</pre>
           </details>
 
           <footer class="status-footer" aria-label="Task status metadata">
-            <span>
-              <svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg>
-              <span id="statusUpdated">Last checked: awaiting first check</span>
-            </span>
+            <span><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg><span id="statusUpdated">No progress recorded yet</span></span>
           </footer>
         </aside>
       </section>
@@ -439,12 +420,77 @@
         </div>
         <dl class="shortcut-list">
           <dt>Ctrl Enter</dt><dd>Start work</dd>
-          <dt>Ctrl R</dt><dd>Run checks</dd>
+          <dt>Ctrl R</dt><dd>Refresh progress</dd>
           <dt>Ctrl K</dt><dd>Search history</dd>
           <dt>Ctrl /</dt><dd>Show shortcuts</dd>
           <dt>Ctrl Z</dt><dd>Undo form edit</dd>
           <dt>Ctrl Shift Z</dt><dd>Redo form edit</dd>
         </dl>
+      </form>
+    </dialog>
+    <dialog id="setupDialog">
+      <form id="setupForm">
+        <div class="dialog-head">
+          <div><p class="eyebrow">Workspace setup</p><h2>Choose how work runs</h2></div>
+          <button type="button" id="closeSetupButton" title="Close setup"><svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg><span>Close</span></button>
+        </div>
+        <p class="help-text">Settings are saved in this workspace. API key values are never saved; a key entered here lasts only until this app process closes.</p>
+        <label class="field-label" for="executionChoice">Execution method</label>
+        <select id="executionChoice" required>
+          <option value="coding_agent">Installed coding agent</option>
+          <option value="local_model">Local OpenAI-compatible model</option>
+          <option value="cloud_model">Cloud OpenAI-compatible model</option>
+        </select>
+        <div id="codingAgentFields">
+          <label class="field-label" for="codingAgentChoice">Coding agent</label>
+          <select id="codingAgentChoice"><option value="codex">Codex</option><option value="opencode">OpenCode</option><option value="aider">Aider</option><option value="codewhale">CodeWhale</option></select>
+        </div>
+        <div id="providerFields" hidden>
+          <label class="field-label" for="providerEndpoint">Chat completions endpoint</label>
+          <input id="providerEndpoint" type="url" placeholder="http://127.0.0.1:8000/v1/chat/completions" />
+          <label class="field-label" for="providerModel">Model ID</label>
+          <input id="providerModel" type="text" placeholder="Qwen/Qwen3-9B-Coder or your cloud model ID" />
+          <label class="field-label" for="providerApiKeyEnv">API key environment variable (optional)</label>
+          <input id="providerApiKeyEnv" type="text" placeholder="OPENAI_API_KEY" autocomplete="off" />
+          <label class="field-label" for="providerApiKey">Or enter an API key for this app session</label>
+          <input id="providerApiKey" type="password" autocomplete="new-password" spellcheck="false" />
+          <div class="actions compact">
+            <button type="button" id="testConnectionButton">Test model connection</button>
+            <span id="connectionResult" role="status"></span>
+          </div>
+          <label class="confirm-row" id="remoteDataRow" hidden><input id="confirmRemoteData" type="checkbox" /><span>I understand selected file excerpts and tool results will be sent to this remote model endpoint.</span></label>
+        </div>
+        <label class="field-label" for="verificationCommand">Independent verification command</label>
+        <input id="verificationCommand" type="text" placeholder="python -m pytest -q" required />
+        <details>
+          <summary>Goal limits</summary>
+          <p class="help-text">These limits stop a goal for review; they never turn unfinished work into success.</p>
+          <div class="limit-grid">
+            <label>Cycles<input id="maxCycles" type="number" min="1" value="100" /></label>
+            <label>Minutes<input id="maxMinutes" type="number" min="1" value="120" /></label>
+            <label>Total tokens<input id="maxTokens" type="number" min="1" value="500000" /></label>
+            <label>Provider calls<input id="maxProviderCalls" type="number" min="1" value="200" /></label>
+            <label>Tool calls<input id="maxToolCalls" type="number" min="1" value="1000" /></label>
+          </div>
+        </details>
+        <p class="form-error" id="setupError" role="alert"></p>
+        <div class="actions">
+          <button class="primary" type="submit" id="saveSetupButton">Save setup</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="continueDialog">
+      <form id="continueForm">
+        <div class="dialog-head"><h2>Continue this goal</h2><button type="button" id="closeContinueButton"><span>Close</span></button></div>
+        <label class="field-label" for="continueFeedback">What should change or be tried next?</label>
+        <textarea id="continueFeedback" rows="4" placeholder="Example: keep the current approach, but cover the empty-file case"></textarea>
+        <div class="actions"><button class="primary" type="submit">Continue</button></div>
+      </form>
+    </dialog>
+    <dialog id="previewDialog">
+      <form method="dialog">
+        <div class="dialog-head"><h2 id="previewTitle">Evidence preview</h2><button value="close"><span>Close</span></button></div>
+        <pre id="previewContent"></pre>
       </form>
     </dialog>
     <script src="/static/app.js"></script>

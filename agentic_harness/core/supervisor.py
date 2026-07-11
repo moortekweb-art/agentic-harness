@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from copy import deepcopy
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from agentic_harness.core.artifacts import ArtifactStore
 from agentic_harness.core.errors import (
@@ -43,7 +45,13 @@ class Supervisor:
     def init(self) -> None:
         self.store.init()
 
-    def start(self, objective: str, *, _autonomy_lease: object | None = None) -> Goal:
+    def start(
+        self,
+        objective: str,
+        *,
+        metadata: dict[str, object] | None = None,
+        _autonomy_lease: object | None = None,
+    ) -> Goal:
         with self._mutation_lease(_autonomy_lease), self.store.locked():
             self.init()
             active = self.status()
@@ -56,6 +64,8 @@ class Supervisor:
                 )
             self.loop_guard.reset()
             goal = Goal(objective=objective)
+            if metadata:
+                goal.metadata.update(deepcopy(metadata))
             goal.metadata["workspace_snapshot"] = capture_workspace_snapshot(self.project_dir)
             goal.transition(GoalStatus.PLANNING, reason="goal started")
             self.store.write_goal(goal)
@@ -122,6 +132,7 @@ class Supervisor:
                 self.store.write_goal(goal)
                 return goal
             result = self._run_worker(goal)
+            goal.metadata["worker_run_id"] = uuid4().hex
             goal.metadata["worker_success"] = result.success
             goal.metadata["worker_summary"] = result.summary
             goal.metadata["worker_returncode"] = result.returncode
@@ -187,6 +198,7 @@ class Supervisor:
         *,
         reason: str = "accepted by operator",
         _autonomy_lease: object | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> Goal:
         """Explicitly accept a goal as done.
 
@@ -203,6 +215,8 @@ class Supervisor:
         """
         with self._mutation_lease(_autonomy_lease), self.store.locked():
             goal = self._require_goal()
+            if cancel_requested is not None and cancel_requested():
+                return goal
             if goal.status is GoalStatus.DONE:
                 if goal.metadata.get("accepted") is not True:
                     if not isinstance(goal.review, dict) or goal.review.get("passed") is not True:
@@ -229,6 +243,8 @@ class Supervisor:
                     f"cannot accept goal {goal.id} in {goal.status.value}; "
                     f"review has not passed. Run agentic-harness review first."
                 )
+            if cancel_requested is not None and cancel_requested():
+                return goal
             goal.transition(
                 GoalStatus.DONE,
                 reason=reason,
@@ -288,6 +304,7 @@ class Supervisor:
             goal.metadata.pop("worker_summary", None)
             goal.metadata.pop("worker_returncode", None)
             goal.metadata.pop("worker_outcome", None)
+            goal.metadata.pop("worker_run_id", None)
             if goal.review is not None:
                 review_history = goal.metadata.setdefault("review_history", [])
                 if isinstance(review_history, list):

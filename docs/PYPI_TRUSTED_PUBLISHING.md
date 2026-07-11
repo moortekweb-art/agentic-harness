@@ -45,13 +45,28 @@ The observed GitHub/PyPI trusted-publishing claims use:
 - `repository`: `moortekweb-art/agentic-harness`
 - `repository_owner`: `moortekweb-art`
 - `workflow_ref`: `moortekweb-art/agentic-harness/.github/workflows/publish.yml@<release-ref>`
-- `ref`: the selected release tag or explicitly dispatched branch
+- `ref`: the pushed release tag
 - `environment`: `pypi`
 
-Publishing a GitHub release runs the `Publish` workflow and uploads the
-release-smoke-verified distributions built from that release. The workflow can
-also be dispatched manually for a controlled recovery after a workflow-only
-fix.
+Pushing an annotated or lightweight `v<version>` tag starts the `Publish`
+workflow. The workflow checks out the immutable triggering event SHA, verifies
+that the tag and package version identify that exact commit, requires trusted
+default-branch CI for it, builds once, and stages a draft GitHub release. The
+same verified artifacts are then published to PyPI before the protected
+`github-release` job makes the draft public. There is deliberately no manual
+dispatch path.
+
+Before publishing v0.7.0, repository owners must configure both protected
+GitHub environments:
+
+- `pypi`, restricted to release tags and protected with the desired reviewers;
+- `github-release`, with the same release-tag policy and final-publication
+  reviewers.
+
+The default branch and release tags also need repository rulesets that require
+CI, prevent force updates/deletion, and make release tags immutable in normal
+operation. The workflow's per-tag concurrency and event-SHA validation are
+defense in depth; they do not replace those repository settings.
 
 ## Current Publish Status
 

@@ -63,6 +63,44 @@ def test_completion_status_is_case_insensitive(tmp_path: Path) -> None:
     assert worker.calls == 1
 
 
+def test_coding_agent_instruction_includes_requested_scope_and_checks(
+    tmp_path: Path,
+) -> None:
+    worker = SequenceWorker(
+        [WorkerResult(success=True, summary="complete", outcome=complete_outcome())]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=passing_reviewer(),
+    )
+    supervisor.start(
+        "make the bounded change",
+        metadata={
+            "safety": {
+                "allowed_paths": ["src", "tests/test_feature.py"],
+                "checks": [
+                    {
+                        "id": "check-1",
+                        "label": "pytest -q tests/test_feature.py",
+                        "argv": ["pytest", "-q", "tests/test_feature.py"],
+                    }
+                ],
+                "path_enforcement": False,
+                "secret_env_names": [],
+                "preexisting_changes": [],
+            }
+        },
+    )
+
+    goal = AutonomousRunner(supervisor).run()
+
+    assert goal.status is GoalStatus.DONE
+    assert "Allowed workspace paths (operator guidance): src, tests/test_feature.py" in worker.instructions[0]
+    assert "Independent check: pytest -q tests/test_feature.py" in worker.instructions[0]
+    assert "Do not edit outside the allowed workspace paths" in worker.instructions[0]
+
+
 def test_only_one_autonomous_driver_can_own_a_project_goal(tmp_path: Path) -> None:
     worker = SequenceWorker(
         [WorkerResult(success=True, summary="complete", outcome=complete_outcome())]
@@ -260,6 +298,148 @@ def test_repeated_progress_claim_without_evidence_trips_the_blocker_threshold(
     assert autonomy["operator_intervention_required"] is True
     assert "without changing the workspace" in autonomy["blocker"]["reason"]
     assert worker.calls == 3
+
+
+def test_runtime_progress_token_counts_bounded_tool_observation_as_progress(
+    tmp_path: Path,
+) -> None:
+    worker = SequenceWorker(
+        [
+            WorkerResult(
+                success=True,
+                summary="inspected the requested file",
+                outcome={
+                    "status": "progress",
+                    "summary": "inspected the requested file",
+                    "checkpoint": "source_inspected",
+                    "current_subgoal": "apply the focused change",
+                    "plan": [{"step": "Inspect source", "status": "completed"}],
+                    "requirements": [],
+                    "progress_token": "trusted-tool-event-sha256",
+                },
+            )
+        ]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(supervisor).step("inspect before editing")
+
+    assert goal.status is GoalStatus.IN_PROGRESS
+    assert goal.metadata["autonomy"]["blocker"]["consecutive_count"] == 0
+
+
+def test_cycle_budget_blocks_resumably_instead_of_running_forever(tmp_path: Path) -> None:
+    worker = SequenceWorker(
+        [
+            WorkerResult(
+                success=True,
+                summary="made bounded progress",
+                outcome={
+                    "status": "progress",
+                    "summary": "made bounded progress",
+                    "checkpoint": "first_cycle",
+                    "current_subgoal": "continue",
+                    "plan": [{"step": "Continue", "status": "in_progress"}],
+                    "requirements": [],
+                    "progress_token": "cycle-1",
+                },
+            )
+        ]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(
+        supervisor,
+        policy=AutonomyPolicy(max_cycles=1),
+    ).run("respect the configured cycle budget")
+
+    assert goal.status is GoalStatus.FAILED
+    assert goal.metadata["autonomy"]["operator_intervention_required"] is True
+    assert goal.metadata["autonomy"]["budget"]["exhausted"] == "max_cycles"
+    assert "cycle budget" in str(goal.error)
+    assert worker.calls == 1
+
+
+def test_token_budget_exhaustion_never_counts_as_completion(tmp_path: Path) -> None:
+    outcome = complete_outcome()
+    outcome["usage"] = {"total_tokens": 11, "provider_calls": 1}
+    worker = SequenceWorker(
+        [WorkerResult(success=True, summary="claims complete", outcome=outcome)]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(
+        supervisor,
+        policy=AutonomyPolicy(max_total_tokens=10),
+    ).run("stay within the cloud token budget")
+
+    assert goal.status is GoalStatus.FAILED
+    assert goal.metadata["accepted"] is False
+    assert goal.metadata["autonomy"]["budget"]["exhausted"] == "max_total_tokens"
+
+
+def test_completion_at_exact_token_budget_can_still_pass_review(tmp_path: Path) -> None:
+    outcome = complete_outcome()
+    outcome["usage"] = {"total_tokens": 10, "provider_calls": 1}
+    worker = SequenceWorker(
+        [WorkerResult(success=True, summary="complete", outcome=outcome)]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(
+        supervisor,
+        policy=AutonomyPolicy(max_total_tokens=10),
+    ).run("finish at the exact token budget")
+
+    assert goal.status is GoalStatus.DONE
+    assert goal.metadata["accepted"] is True
+
+
+def test_cooperative_cancellation_prevents_late_completion_from_being_accepted(
+    tmp_path: Path,
+) -> None:
+    cancel = {"requested": False}
+
+    class CancellingWorker:
+        def run(self, goal: Goal) -> WorkerResult:
+            cancel["requested"] = True
+            return WorkerResult(
+                success=True,
+                summary="finished after stop was requested",
+                outcome=complete_outcome(),
+            )
+
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=CancellingWorker(),
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(
+        supervisor,
+        cancel_requested=lambda: cancel["requested"],
+    ).step("stop safely at the next boundary")
+
+    assert goal.status is GoalStatus.FAILED
+    assert goal.metadata["cancelled"] is True
+    assert goal.metadata["accepted"] is False
+    assert goal.metadata["autonomy"]["status"] == "stopped"
 
 
 def test_changing_checkpoint_does_not_hide_a_repeated_blocker(tmp_path: Path) -> None:

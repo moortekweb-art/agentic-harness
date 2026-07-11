@@ -4,13 +4,33 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-agentic-harness"
-version = "0.6.29"
-description = "A local-first goal execution harness with deterministic review gates."
+version = "0.7.0"
+description = "A local-first, provider-neutral goal runner with a CLI, GUI, bounded tools, and deterministic review gates."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 license = "MIT"
 authors = [{ name = "Michael / Moortekweb" }]
+keywords = ["agents", "ai", "automation", "local-first", "orchestration"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = ["PyYAML>=6.0"]
+
+[project.urls]
+Homepage = "https://github.com/moortekweb-art/agentic-harness"
+Repository = "https://github.com/moortekweb-art/agentic-harness"
+Issues = "https://github.com/moortekweb-art/agentic-harness/issues"
+Changelog = "https://github.com/moortekweb-art/agentic-harness/blob/main/docs/RELEASE_NOTES_0.7.0.md"
 
 [project.optional-dependencies]
 test = [
@@ -30,7 +50,6 @@ files = ["agentic_harness"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["legacy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

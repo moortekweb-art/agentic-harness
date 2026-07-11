@@ -1,159 +1,187 @@
 # GUI Architecture
 
-## Release Shape
+## Release shape
 
-Agentic Harness is one Python application with a local browser interface. The
-single PyPI distribution and package, `local-agentic-harness`, provides one
-shared Python engine and project state model, plus packaged static assets. It
-offers two interfaces from the same install: the `agentic-harness` CLI and the
-`agentic-harness-gui` long-running GUI service. Both use the same
-`.agentic-harness/` project state; do not split them into separate products or
-repositories.
+Agentic Harness is one Python application distributed as
+`local-agentic-harness`. The same install provides two interfaces:
 
-The Python process serves packaged HTML, CSS, and JavaScript from loopback and
-adapts an optional local-goal installation into a stable human-facing API.
+- `agentic-harness`, the command-line interface.
+- `agentic-harness-gui`, the long-running local browser interface.
 
-The v1 release deliberately does not require Electron, Tauri, Qt, GTK, a Node
-runtime, or a separately hosted web service.
+Both interfaces use the shared Python engine, the same project state model
+under `.agentic-harness/`, and the same deterministic review gates. The wheel
+contains the packaged static assets, so the GUI does not require Node,
+Electron, a desktop toolkit, or a separately hosted application.
+
+## Default execution path
+
+The default GUI backend is `EmbeddedExecutionBackend`. It constructs the same
+`Supervisor`, `AutonomousRunner`, `ArtifactStore`, worker, and reviewer used by
+the CLI. A task therefore follows one durable lifecycle:
+
+```text
+plain-language goal
+        |
+        v
+persist objective, scope, checks, plan, and requirements
+        |
+        v
+bounded worker cycles -> ordered sanitized events -> visible checkpoint
+        |
+        v
+structured completion claim
+        |
+        v
+independent deterministic review
+        |
+        +-- pass -> accepted result and preserved evidence
+        +-- fail -> repair cycle or explicit blocker
+```
+
+The embedded model worker supports user-selected OpenAI-compatible endpoints
+and arbitrary model identifiers. The same setup surface also supports an
+installed coding-agent executable. Model brand is not part of the execution
+contract.
+
+An external orchestration adapter remains available with
+`--backend local-goal`. It is optional, is not the default public product path,
+and is not installed by this distribution. See
+[Turnstone integration](TURNSTONE_INTEGRATION.md) for the supported boundary.
 
 ## Components
 
-### CLI Entry Point
+### Shared factory
 
-`agentic-harness gui` and `agentic-harness-gui` start the same local server.
-The latter is the service executable from the same install, not another package
-or product. Both bind to `127.0.0.1` and ask the operating system for a free
-port unless `--port` is supplied. The selected URL is printed after the bind
-succeeds and is opened automatically unless `--no-open` is used.
+`agentic_harness/core/factory.py` is the composition root for both interfaces.
+It loads `.agentic-harness/config.yml`, constructs the selected worker, creates
+deterministic review criteria, and maps configured goal budgets into an
+`AutonomyPolicy`.
 
-### Local Goal Bridge
+### Provider profile and credentials
 
-`agentic_harness/core/local_goal_bridge.py` is the replaceable backend adapter.
-It discovers the optional worker, maps the four human modes to supported
-execution routes, invokes commands without a shell, and returns structured
-command results.
+`agentic_harness/core/providers.py` validates the endpoint, model ID, and
+optional environment-variable reference. Model-agent configuration never
+accepts a plaintext key. A key is either:
 
-Discovery order is explicit `--doc-root`, non-empty
-`AGENTIC_HARNESS_DOC_ROOT`, then the current directory. The executable can be
-overridden with `AGENTIC_HARNESS_LOCAL_GOAL`.
+- resolved from the named environment variable when work starts; or
+- held only in server process memory for the current GUI session.
 
-### GUI API
+Session keys are never returned by the API, written to project state, placed in
+URLs, or included in session exports. After a service restart, a session-key
+profile reports that the credential must be re-entered. A remote endpoint also
+requires explicit persisted consent that selected file excerpts and tool
+results may leave the computer.
 
-`agentic_harness/gui/api.py` converts backend output into stable states:
+### Bounded model agent
 
-- `ready`
-- `starting`
-- `working`
-- `checking`
-- `needs_review`
-- `done`
-- `blocked`
-- `stopped`
+`agentic_harness/adapters/model_agent.py` implements a small structured-action
+loop. It exposes only these built-in actions:
 
-The API keeps human summaries separate from raw backend evidence. Internal
-actor names and route details are retained only in `advanced_details`.
+- list and search workspace files;
+- read bounded text files;
+- create a text file;
+- replace one exact text occurrence after a matching SHA-256 read;
+- inspect Git status and diff;
+- run an operator-configured check; and
+- report progress, a blocker, or a completion claim.
 
-### Local Server
+It does not provide arbitrary shell, delete, install, service-control, Git
+publish, or general network actions. Paths must remain inside the workspace and
+the selected safe areas. Repository metadata, harness state, common secret
+files, key material, symlink escapes, oversized files, and unowned pre-existing
+changes are protected.
 
-`agentic_harness/gui/server.py` serves package resources and JSON routes using
-the Python standard library. It also provides a small WebSocket status stream
-and an in-memory GUI session with export/import support.
+### Durable backend and event stream
 
-### Browser Client
+`agentic_harness/gui/backend.py` runs one background autonomy driver per
+project. Goal state and history survive browser or service restarts. Ordered
+task events are written atomically to:
 
-`agentic_harness/gui/static/` contains the browser application. It renders the
-four modes, readiness gate, current work, evidence, history search, session
-import/export, theme choice, shortcuts, and local form undo/redo.
+```text
+.agentic-harness/runs/<goal-id>/events/<sequence>.json
+```
 
-## API Surface
+Events carry stage, kind, plain summary, checkpoint, cycle, tool status, and an
+evidence ID. They omit tool arguments, file contents, provider payloads,
+prompts, raw check output, and credentials. The browser polls these durable
+records and never invents activity.
 
-Read routes:
+### Local server and browser client
 
-- `GET /api/health`
-- `GET /api/status` (deprecated compatibility alias for `/api/health`)
-- `GET /api/modes`
-- `GET /api/readiness`
-- `GET /api/tasks`
-- `GET /api/tasks/current`
-- `GET /api/tasks/history?q=...`
-- `GET /api/tasks/current/details`
-- `GET /api/session`
-- `GET /api/tasks/stream` with a WebSocket upgrade
+`agentic_harness/gui/server.py` serves the package resources and JSON API using
+the Python standard library. `agentic_harness/gui/static/` presents setup,
+current goal, plan, requirements, measured progress, timeline, verification,
+changed files, artifacts, recovery actions, and durable history in plain
+language.
 
-Write routes:
+## Public API
 
-- `POST /api/tasks`
-- `POST /api/tasks/bulk`
-- `POST /api/tasks/current/watch`
-- `POST /api/tasks/current/accept`
-- `POST /api/tasks/current/continue`
-- `POST /api/tasks/current/stop`
-- `POST /api/session/import`
+The embedded backend exposes:
 
-The main UI emphasizes one task decision at a time even though the API retains
-bulk support for controlled integrations.
+- `GET /api/health` and compatibility alias `GET /api/status`.
+- `GET /api/readiness`, `/api/setup`, and `/api/modes`.
+- `GET /api/tasks`, `/api/tasks/current`, and `/api/tasks/history`.
+- `GET /api/tasks/current/events`.
+- `GET /api/tasks/current/file` and `/api/tasks/current/artifact` for bounded
+  evidence previews.
+- `GET /api/tasks/stream` for an authenticated WebSocket when enabled.
+- `GET /api/session` for a redacted durable-history export.
+- `POST /api/setup`, `/api/setup/test`, and `/api/setup/credential`.
+- `POST /api/tasks`.
+- `POST /api/tasks/current/continue`, `/accept`, `/stop`, and `/watch`.
 
-`/api/health` is the canonical liveness and diagnostic route. `/api/status`
-returns the same payload for compatibility with older integrations; new clients
-should use `/api/health`. `/api/readiness` remains the readiness-specific route.
+The embedded product permits one active goal per project. Bulk task starts and
+raw session imports are rejected. Unknown `/api/*` routes return a JSON 404.
 
-## Task Contract
+Task records use `agentic_harness.gui_task.v2` and include stable identity,
+status, plan, requirements, current subgoal, checkpoint, cycle, events, changed
+files, verification, artifacts, allowed actions, safety boundaries, budget
+usage, and final-result evidence.
 
-Normalized task records include:
+## Progress and completion
 
-- Human title, status, label, summary, and progress.
-- Whether a human decision is required.
-- Changed files, verification, and artifacts.
-- Current local-loop stage and readiness gate.
-- Updated time and command metadata.
-- Advanced details containing raw evidence.
+Progress is determinate only when a persisted plan or requirement set supplies
+a countable denominator. Otherwise the GUI shows an active, indeterminate
+state. It reaches 100 percent only after the deterministic reviewer accepts the
+goal.
 
-The GUI consumes normalized fields instead of depending directly on the
-local-goal JSON shape. This boundary allows the worker implementation to evolve
-without rewriting the human interface.
+Worker text is not completion evidence. A strict result needs a completed plan,
+satisfied requirements with evidence, no blockers, and an independent passing
+review command. Budget exhaustion, malformed output, missing credentials,
+failed checks, cancellation, and repeated no-progress cycles remain visibly
+blocked or stopped.
 
-## Safety Model
+## Network boundary
 
-- Default network exposure is loopback only.
-- Non-loopback binding prints an explicit warning.
-- `AGENTIC_HARNESS_GUI_TOKEN` gates API actions and the WebSocket stream when
-  configured.
-- Token comparison is constant-time; browser token state is session-only.
-- Static assets never contain the configured token.
-- State-changing browser requests and WebSocket upgrades must be same-origin.
-- API writes require `application/json` bodies no larger than 1 MiB.
-- Requests are rate-limited and unknown API routes return JSON 404 responses.
-- New starts are blocked when current work requires review.
-- Raw commands, paths, and backend output stay in Advanced details.
+- Loopback is the default bind address.
+- A non-loopback bind is refused unless `AGENTIC_HARNESS_GUI_TOKEN` is set.
+- Authenticated requests use only `Authorization: Bearer`; credentials never
+  travel in query strings or WebSocket URLs.
+- Host validation limits DNS-rebinding attacks. Reverse-proxy hostnames must be
+  explicitly listed in `AGENTIC_HARNESS_GUI_ALLOWED_HOSTS`.
+- State-changing requests must be same-origin JSON and are size- and
+  rate-limited.
+- Session-key entry is accepted only from a loopback client.
+- API responses are redacted, non-cacheable JSON. Static and API responses set
+  content-security, framing, MIME-sniffing, referrer, and permissions headers.
 
-Bearer tokens and private-network membership are access gates, while the
-same-origin and JSON requirements defend the browser boundary. The server is
-still a local control surface, not a hardened public-internet deployment.
+This remains a local control surface. For remote access, keep the service bound
+to loopback and place an authenticated private-network proxy in front of it.
 
-## Upgrade Path
+## Release verification
 
-The local-goal bridge is backend adapter v1, not a permanent internal design.
-Future versions can move toward a Codex `/goal`-style experience by adding:
+A GUI release must prove:
 
-- Goal decomposition and explicit subgoal state.
-- Safe self-directed continuation after failed checks.
-- Recovery across worker exits and machine restarts.
-- Context summarization over long work windows.
-- Task-aware worker selection.
-- Durable session history and schema migrations.
-- Stronger normalized blocker and final-result contracts.
-
-These changes should preserve the current GUI API or introduce versioned
-contracts so old evidence and clients remain readable.
-
-## Release Verification
-
-GUI releases must prove:
-
-- Mode and route mappings with unit tests.
-- Every API action and token boundary with server tests.
-- Frontend token-race behavior with the JavaScript harness.
-- Desktop and narrow-browser rendering without overflow.
-- Wheel and source distributions both contain all static assets.
-- Each distribution installs and runs in a fresh virtual environment.
-- Loopback and explicit-port launch behavior work as documented.
+- the CLI and GUI both use the shared engine;
+- a fresh installed wheel completes a real file-changing goal without the
+  optional external backend;
+- arbitrary local and cloud-compatible model IDs work through a scripted
+  OpenAI-compatible provider;
+- keys do not enter configuration, URLs, events, history, exports, transcripts,
+  or API responses;
+- interruption, restart, continuation, budget exhaustion, repeated blockers,
+  failed review, and successful acceptance have honest durable states;
+- desktop and narrow layouts expose setup, progress, evidence, and recovery
+  without overflow; and
+- wheel and source distributions contain both entry points and all browser
+  assets.

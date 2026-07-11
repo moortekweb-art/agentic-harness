@@ -298,7 +298,7 @@ def _agent_loop_for_status(status: str) -> dict[str, Any]:
         "description": {
             "Perceive": "Understand the request and current machine state.",
             "Plan": "Choose the safest work route and boundaries.",
-            "Act": "Run the selected local or GLM-backed worker.",
+            "Act": "Run the configured worker inside its task boundaries.",
             "Check": "Verify results before asking for acceptance.",
             "Review": "Ask for a human decision only when needed.",
         }[current],

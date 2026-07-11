@@ -7,7 +7,9 @@ import os
 import subprocess
 from pathlib import Path
 
+from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.redaction import redact_secrets
+from agentic_harness.core.secure_io import write_private_text
 from agentic_harness.core.state import Goal
 from agentic_harness.core.worker import WorkerResult
 
@@ -82,6 +84,12 @@ class CodingAgentWorker:
 
     def run(self, goal: Goal) -> WorkerResult:
         command = self.command_for(goal)
+        self._append_event(
+            goal,
+            kind="tool_started",
+            summary="Started the installed coding-agent process",
+            status="started",
+        )
         env = os.environ.copy()
         env["AGENTIC_HARNESS_GOAL_ID"] = goal.id
         env["AGENTIC_HARNESS_OBJECTIVE"] = goal.objective
@@ -97,6 +105,12 @@ class CodingAgentWorker:
                 env=env,
             )
         except subprocess.TimeoutExpired as exc:
+            self._append_event(
+                goal,
+                kind="tool_finished",
+                summary=f"Coding-agent process timed out after {self.timeout}s",
+                status="timed_out",
+            )
             return WorkerResult(
                 success=False,
                 summary=f"coding agent timed out after {self.timeout}s",
@@ -106,23 +120,38 @@ class CodingAgentWorker:
             )
         except OSError as exc:
             executable = command[0] if command else "coding agent"
+            self._append_event(
+                goal,
+                kind="tool_finished",
+                summary=f"Coding-agent process could not start: {executable}",
+                status="failed",
+            )
             return WorkerResult(
                 success=False,
                 summary=f"{executable} could not start: {exc}",
                 stderr=str(exc),
                 returncode=127,
             )
+        self._append_event(
+            goal,
+            kind="tool_finished",
+            summary=(
+                "Installed coding-agent process completed"
+                if proc.returncode == 0
+                else f"Installed coding-agent process failed with exit code {proc.returncode}"
+            ),
+            status="completed" if proc.returncode == 0 else "failed",
+        )
         outcome = _parse_harness_outcome(proc.stdout)
         try:
             transcript = self.transcript_for(goal)
-            transcript.parent.mkdir(parents=True, exist_ok=True)
-            transcript.write_text(
+            write_private_text(
+                transcript,
                 redact_secrets(
                     "$ "
                     + " ".join(command)
                     + f"\n\n[stdout]\n{proc.stdout}\n[stderr]\n{proc.stderr}"
                 ),
-                encoding="utf-8",
             )
         except (OSError, ValueError) as exc:
             # Transcript write failure is a logging issue, not a work failure.
@@ -158,6 +187,32 @@ class CodingAgentWorker:
             returncode=proc.returncode,
             outcome=outcome,
         )
+
+    def _append_event(
+        self,
+        goal: Goal,
+        *,
+        kind: str,
+        summary: str,
+        status: str,
+    ) -> None:
+        autonomy = goal.metadata.get("autonomy")
+        cycle = int(autonomy.get("cycle") or 0) + 1 if isinstance(autonomy, dict) else 0
+        checkpoint = (
+            str(autonomy.get("checkpoint") or "") if isinstance(autonomy, dict) else ""
+        )
+        try:
+            TaskEventStore(self.cwd, goal.id).append(
+                stage="act",
+                kind=kind,
+                summary=summary,
+                tool_name="coding_agent",
+                tool_status=status,
+                cycle=cycle,
+                checkpoint=checkpoint,
+            )
+        except (OSError, ValueError):
+            return
 
 
 def _parse_harness_outcome(stdout: str) -> dict[str, object]:

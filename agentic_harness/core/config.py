@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+import json
 import sys
 from typing import Any
 
@@ -28,6 +29,10 @@ ALLOWED_KEYS = {
     "llm_endpoint",
     "llm_model",
     "llm_api_key",
+    "llm_api_key_env",
+    "llm_credential_source",
+    "llm_remote_data_confirmed",
+    "llm_max_steps",
     "llm_timeout",
     "llm_retries",
     "llm_retry_delay",
@@ -45,6 +50,11 @@ ALLOWED_KEYS = {
     "review_artifact",
     "review_file_changed",
     "review_git_clean",
+    "goal_max_cycles",
+    "goal_max_elapsed_seconds",
+    "goal_max_total_tokens",
+    "goal_max_provider_calls",
+    "goal_max_tool_calls",
 }
 ALLOWED_WORKER_DICT_KEYS = {
     "type",
@@ -57,6 +67,10 @@ ALLOWED_WORKER_DICT_KEYS = {
     "llm_endpoint",
     "llm_model",
     "llm_api_key",
+    "llm_api_key_env",
+    "llm_credential_source",
+    "llm_remote_data_confirmed",
+    "llm_max_steps",
     "llm_timeout",
     "llm_retries",
     "llm_retry_delay",
@@ -86,6 +100,10 @@ ALLOWED_LLM_DICT_KEYS = {
     "endpoint",
     "model",
     "api_key",
+    "api_key_env",
+    "credential_source",
+    "remote_data_confirmed",
+    "max_steps",
     "timeout",
 }
 ALLOWED_REVIEW_DICT_KEYS = {
@@ -95,7 +113,22 @@ ALLOWED_REVIEW_DICT_KEYS = {
     "file_changed",
     "git_clean",
 }
-ALLOWED_WORKERS = {"noop", "shell", "coding_agent", "tmux", "local_llm", "github_actions"}
+ALLOWED_AUTONOMY_DICT_KEYS = {
+    "max_cycles",
+    "max_elapsed_seconds",
+    "max_total_tokens",
+    "max_provider_calls",
+    "max_tool_calls",
+}
+ALLOWED_WORKERS = {
+    "noop",
+    "shell",
+    "coding_agent",
+    "tmux",
+    "local_llm",
+    "model_agent",
+    "github_actions",
+}
 LIST_KEYS = {"shell_command", "coding_agent_command", "review_command"}
 
 
@@ -113,6 +146,10 @@ class HarnessConfig:
     llm_endpoint: str = ""
     llm_model: str = ""
     llm_api_key: str = "local"
+    llm_api_key_env: str = ""
+    llm_credential_source: str = "none"
+    llm_remote_data_confirmed: bool = False
+    llm_max_steps: int = 8
     llm_timeout: int = 120
     llm_retries: int = 2
     llm_retry_delay: float = 1.0
@@ -130,6 +167,11 @@ class HarnessConfig:
     review_artifact: str = ""
     review_file_changed: str = ""
     review_git_clean: bool = False
+    goal_max_cycles: int = 100
+    goal_max_elapsed_seconds: int = 7_200
+    goal_max_total_tokens: int = 500_000
+    goal_max_provider_calls: int = 200
+    goal_max_tool_calls: int = 1_000
 
     @property
     def config_path(self) -> Path:
@@ -280,7 +322,43 @@ def write_tool_config(
 def _tool_config_content(project_dir: Path, tool: str) -> str:
     if tool == "shell" and (project_dir / "mock_coding_agent.py").exists():
         return demo_shell_config()
-    return TOOL_CONFIGS[tool]
+    content = TOOL_CONFIGS[tool]
+    if tool == "shell":
+        return content
+    payload = yaml.safe_load(content)
+    if not isinstance(payload, dict):
+        raise ConfigError(f"invalid built-in config template for {tool}")
+    detected = detect_review_command(project_dir)
+    if detected:
+        payload["review_command"] = detected
+        payload["review_command_timeout"] = 300
+    else:
+        payload.pop("review_command", None)
+        payload.pop("review_command_timeout", None)
+    return f"# agentic-harness {tool} starter config\n" + yaml.safe_dump(
+        payload,
+        sort_keys=False,
+    )
+
+
+def detect_review_command(project_dir: str | Path) -> list[str]:
+    root = Path(project_dir)
+    package_json = root / "package.json"
+    if package_json.exists():
+        try:
+            payload = json.loads(package_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        scripts = payload.get("scripts") if isinstance(payload, dict) else None
+        if isinstance(scripts, dict) and isinstance(scripts.get("test"), str):
+            return ["npm", "test"]
+    if (root / "Cargo.toml").exists():
+        return ["cargo", "test"]
+    if (root / "go.mod").exists():
+        return ["go", "test", "./..."]
+    if (root / "pyproject.toml").exists() or (root / "tests").is_dir():
+        return ["python", "-m", "pytest", "-q"]
+    return []
 
 
 def demo_shell_config(*, python_executable: str | None = None) -> str:
@@ -313,6 +391,7 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
     if not isinstance(payload, dict):
         raise ConfigError("config root must be a mapping")
     values = _flatten_config(payload)
+    provided_keys = set(values)
     version = str(values.pop("version", ""))
     if not version:
         raise ConfigError("missing required config key: version")
@@ -330,14 +409,20 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
             config.allow_noop_success = _parse_bool(value, key)
         elif key in LIST_KEYS:
             setattr(config, key, _parse_list(value, key))
-        elif key in {"github_wait", "review_git_clean"}:
+        elif key in {"github_wait", "review_git_clean", "llm_remote_data_confirmed"}:
             setattr(config, key, _parse_bool(value, key))
         elif key in {
             "coding_agent_timeout",
             "llm_timeout",
             "llm_retries",
+            "llm_max_steps",
             "github_timeout",
             "review_command_timeout",
+            "goal_max_cycles",
+            "goal_max_elapsed_seconds",
+            "goal_max_total_tokens",
+            "goal_max_provider_calls",
+            "goal_max_tool_calls",
         }:
             setattr(config, key, _parse_int(value, key))
         elif key in {"llm_retry_delay", "github_poll_interval"}:
@@ -356,12 +441,45 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
         raise ConfigError("local_llm worker requires llm_endpoint")
     if config.worker == "local_llm" and not config.llm_model:
         raise ConfigError("local_llm worker requires llm_model")
+    if config.worker == "model_agent" and not config.llm_endpoint:
+        raise ConfigError("model_agent worker requires llm_endpoint")
+    if config.worker == "model_agent" and not config.llm_model:
+        raise ConfigError("model_agent worker requires llm_model")
+    if config.worker == "model_agent" and "llm_api_key" in provided_keys:
+        raise ConfigError("model_agent credentials must use llm.api_key_env, not plaintext api_key")
+    if config.worker == "model_agent":
+        from agentic_harness.core.providers import ProviderProfile
+
+        profile = ProviderProfile(
+            endpoint=config.llm_endpoint,
+            model=config.llm_model,
+            api_key_env=config.llm_api_key_env,
+        )
+        if profile.data_location == "cloud" and not config.llm_remote_data_confirmed:
+            raise ConfigError(
+                "cloud model config requires llm.remote_data_confirmed: true"
+            )
+        if config.llm_api_key_env and config.llm_credential_source == "none":
+            config.llm_credential_source = "env"
+        if config.llm_credential_source not in {"none", "env", "session"}:
+            raise ConfigError("llm_credential_source must be none, env, or session")
+        if config.llm_credential_source == "env" and not config.llm_api_key_env:
+            raise ConfigError("env credential source requires llm_api_key_env")
     if config.worker == "github_actions" and not config.github_owner:
         raise ConfigError("github_actions worker requires github_owner")
     if config.worker == "github_actions" and not config.github_repo:
         raise ConfigError("github_actions worker requires github_repo")
     if config.worker == "github_actions" and not config.github_workflow_id:
         raise ConfigError("github_actions worker requires github_workflow_id")
+    for key in (
+        "goal_max_cycles",
+        "goal_max_elapsed_seconds",
+        "goal_max_total_tokens",
+        "goal_max_provider_calls",
+        "goal_max_tool_calls",
+    ):
+        if int(getattr(config, key)) < 0:
+            raise ConfigError(f"{key} must not be negative")
     return config
 
 
@@ -418,6 +536,16 @@ def _flatten_config(payload: dict[str, Any]) -> dict[str, Any]:
             if target in values:
                 raise ConfigError(
                     f"conflicting config: both top-level '{target}' and llm.{key} are set; pick one"
+                )
+            values[target] = value
+    autonomy = values.pop("autonomy", None)
+    if isinstance(autonomy, dict):
+        _check_unknown_keys(autonomy, ALLOWED_AUTONOMY_DICT_KEYS, "autonomy")
+        for key, value in autonomy.items():
+            target = f"goal_{key}"
+            if target in values:
+                raise ConfigError(
+                    f"conflicting config: both top-level '{target}' and autonomy.{key} are set; pick one"
                 )
             values[target] = value
     return values

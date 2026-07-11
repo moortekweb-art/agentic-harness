@@ -1,195 +1,187 @@
 # Codex `/goal` Parity Contract
 
-## Purpose
+## Scope
 
-Agentic Harness cannot copy Codex's private runtime. It can implement the
-observable engineering contract that matters to an operator: provide one full
-objective, let the system plan and repair without routine prompting, and stop
-only when completion is proven or a real blocker needs a person.
+Agentic Harness does not copy a private agent runtime or expose hidden model
+reasoning. It implements the observable operator contract that makes a long
+goal useful: one complete objective, durable planning, bounded autonomous
+repair, visible progress, preserved evidence, and acceptance only after an
+independent check.
 
-The versioned public contracts are:
+The public persisted contracts are:
 
-- `agentic_harness.autonomy.v1` for durable execution state.
-- `agentic_harness.completion_audit.v1` for the final acceptance decision.
+- `agentic_harness.autonomy.v1` for execution state.
+- `agentic_harness.completion_audit.v1` for acceptance evidence.
+- `agentic_harness.task_event.v1` for ordered progress evidence.
+- `agentic_harness.gui_task.v2` for the human-facing task view.
 
-Changing these persisted shapes requires an explicit compatibility or migration
-decision. Provider prompts, model names, and local sidecars may evolve without
-changing the contract.
+Changing these shapes requires an explicit compatibility or migration decision.
+Endpoint, model ID, and worker implementation may change without changing the
+goal contract.
 
-## Operator Contract
+## Operator contract
 
-The operator supplies one plain-English objective:
+The operator supplies one plain-English objective through either interface:
 
 ```bash
-agentic-harness goal "implement the requested change and verify it end to end"
+agentic-harness do "implement the requested change and verify it end to end"
+agentic-harness-gui --project-dir .
 ```
 
 The runner then owns routine execution decisions. It must:
 
-1. Preserve the complete original objective across continuation and recovery.
-2. Derive and persist a plan, requirement list, current subgoal, and checkpoint.
-3. Inspect current workspace state instead of trusting stale narrative state.
+1. Preserve the immutable original objective across continuation and recovery.
+2. Persist a plan, requirements, current subgoal, and checkpoint.
+3. Inspect current workspace state rather than trust stale narrative state.
 4. Treat worker errors, failed checks, and review findings as repair input.
-5. Continue for as many cycles as useful progress requires.
-6. Request a person only when the same blocker repeats without progress for the
-   configured number of consecutive cycles.
-7. Reject completion based only on effort, elapsed time, attempts, context, or
-   token use.
-8. Accept completion only after the structured audit and at least one
-   independent deterministic review criterion both pass.
+5. Record actual tool activity as ordered, sanitized events.
+6. Continue while useful progress and configured resource budgets remain.
+7. Escalate only after a repeated no-progress blocker, a hard safety boundary,
+   cancellation, missing authority, or a depleted budget.
+8. Accept completion only after a structured audit and at least one independent
+   deterministic criterion pass.
 
-The default repeated-blocker threshold is three. A workspace change alters the
-progress signature and resets the consecutive count. Checkpoint text remains
-useful durable context, but changing it alone does not prove progress or reset a
-repeated blocker.
+Elapsed time, token use, attempt count, worker exit code, or confident prose can
+never establish completion by themselves.
 
-## Durable State
+## Perceive, plan, act, evaluate, iterate
 
-Autonomy state lives in the active goal artifact below
-`.agentic-harness/runs/<goal-id>/state.json`. It includes:
+The built-in loop applies the useful parts of the supplied agent-loop analysis:
 
-- SHA-256 identity of the immutable original objective.
-- Cycle count and latest heartbeat.
-- Current plan, requirements, subgoal, and checkpoint.
-- Last structured worker outcome.
-- Completion-audit evidence.
-- Normalized blocker signature and consecutive count.
-- Whether operator intervention is genuinely required.
+- **Perceive** through bounded workspace reads, search, Git state, and prior
+  durable events.
+- **Plan** through a persisted checklist and explicit requirements.
+- **Act** through a narrow tool registry or a separately installed coding agent.
+- **Evaluate** through configured checks and the independent reviewer.
+- **Iterate** from the checkpoint until acceptance or an honest terminal state.
 
-An interrupted foreground `agentic-harness goal` process can be resumed by
-running `agentic-harness goal` with no new objective. The original goal ID,
-workspace baseline, checkpoint, and history are retained.
+The GUI renders those observable stages. It does not display or persist private
+chain-of-thought, raw prompts, or model-provider payloads.
 
-## Structured Worker Result
+## Durable state and events
 
-A strict autonomy worker ends its output with one line:
+The active goal lives below `.agentic-harness/runs/<goal-id>/state.json` and
+includes:
 
-```text
-HARNESS_RESULT_JSON={"status":"complete","summary":"verified","plan":[{"step":"verify","status":"completed"}],"current_subgoal":"final audit","checkpoint":"verified","requirements":[{"id":"requested-outcome","status":"satisfied","evidence":["tests passed"]}],"blockers":[]}
-```
+- SHA-256 identity of the original objective;
+- cycle, heartbeat, plan, requirements, subgoal, and checkpoint;
+- last structured worker outcome and completion audit;
+- blocker signature and consecutive count;
+- budget limits and measured usage;
+- cancellation and operator-intervention state; and
+- acceptance metadata.
 
-Valid statuses are `progress`, `blocked`, and `complete`.
+Each activity event is a separate atomic file below
+`.agentic-harness/runs/<goal-id>/events/`. Separate event files let the GUI
+observe activity while a worker cycle is running without contending for the
+goal-state lock.
 
-- `progress` means useful work occurred and another cycle should start.
-- `blocked` records the condition but does not immediately ask a person.
-- `complete` is a claim to audit, not permission to mark the goal done.
+An interrupted CLI run or restarted GUI service retains the goal ID, objective,
+workspace baseline, checkpoint, history, and evidence. Environment-referenced
+credentials resolve again at use time. Memory-only credentials must be
+re-entered and are never reconstructed from disk.
 
-Every completion requirement must be a structured item with a stable ID,
-`status: satisfied`, and a non-empty evidence list. A malformed or incomplete
-claim becomes repair feedback.
+## Worker result
 
-## Completion Gate
+Installed coding agents end a strict cycle with a machine-readable
+`HARNESS_RESULT_JSON` record. The embedded model worker uses its bounded
+`report_outcome` action. Both normalize to the same fields:
 
-Strict completion requires all of the following:
+- `status`: `progress`, `blocked`, or `complete`;
+- non-empty plain summary, current subgoal, and checkpoint;
+- plan items with explicit status;
+- stable requirement IDs with status and evidence;
+- blocker list; and
+- measured usage and check evidence where available.
 
-- The worker claims `complete` in the structured result.
-- Summary, current subgoal, and checkpoint fields are non-empty.
-- The structured plan is non-empty and every plan item is completed.
-- At least one derived requirement is present.
-- Every requirement has an ID, is satisfied, and contains non-empty evidence.
-- The result contains an explicit empty blockers list.
-- The deterministic reviewer ran at least one criterion.
-- Every deterministic criterion passed.
-- At least one passing criterion is independent of the worker's own success
-  claim.
-- Acceptance metadata is persisted after the audit.
+`progress` means another cycle is useful. `blocked` records the condition and
+its repeated signature. `complete` is a claim to audit, never permission to set
+Done directly. Malformed or incomplete output becomes repair feedback.
 
-If one condition fails, the goal returns to repair. It becomes human-blocked
-only when the resulting no-progress condition repeats at the configured
-threshold.
+## Completion gate
 
-## Concurrency And Recovery
+Strict acceptance requires all of the following:
 
-The harness uses two project-local locks:
+- a structured `complete` claim;
+- non-empty summary, current subgoal, and checkpoint;
+- a non-empty plan with every item completed;
+- at least one derived requirement;
+- every requirement satisfied with non-empty evidence;
+- an explicit empty blocker list;
+- at least one deterministic review criterion executed;
+- every deterministic criterion passed; and
+- at least one passing criterion independent of the worker's own claim.
 
-- `state.lock` protects short atomic state transitions and artifact writes.
-- `autonomy.lock` leases planning and continuation decisions to one autonomous
-  driver for the complete run or single resumed step.
+If a condition fails, the goal returns to repair. It becomes human-blocked only
+when the same no-progress condition reaches the configured threshold or a hard
+boundary already requires a person.
 
-Every mutating Supervisor entry point acquires the autonomy lease for its
-operation or proves that it owns the existing long-running lease. This prevents
-a GUI process, CLI process, and scheduler from running duplicate workers or
-reviewing different snapshots of the same goal. Atomic writes and the
-current-goal marker allow process restart without reconstructing state from
-terminal output.
+## Resource budgets
 
-The original workspace snapshot is immutable across failed-attempt restarts so
-the final report still shows all work performed for the goal.
+The operator may bound:
 
-## Foreground And Background Ownership
+- autonomy cycles;
+- elapsed seconds;
+- total provider tokens;
+- provider calls; and
+- tool calls.
 
-`agentic-harness goal` is an autonomous foreground driver. It requires no
-routine decisions while running, and it is resumable after interruption.
+Usage is accumulated across cycles and shown in task metadata. Reaching a limit
+persists a blocked or failed state with evidence; it never converts unfinished
+work into Done. A completion claim delivered exactly at a permitted limit may
+still pass the independent audit.
 
-Human Mode commands such as `agentic-harness do` use the local-goal bridge. They
-queue only when `capabilities --json` proves an active background watcher. Once
-queued, the watcher owns continuation, repair, dispatch, review, and acceptance,
-so the terminal and browser may be closed. `check` reports status; `watch` and
-`mode3a-monitor` are diagnostic controls, not required workflow steps.
+## Concurrency, cancellation, and recovery
 
-## Turnstone Boundary
+`state.lock` protects short atomic transitions. `autonomy.lock` leases the full
+decision cycle to one driver, so CLI, GUI, and scheduler processes cannot
+interleave mutations. A project supports one active goal pointer; separate
+project roots are required for independent concurrent goals.
 
-Turnstone is an optional machine-local sidecar, not a Python dependency and not
-part of the public repository. Integration uses this narrow boundary:
+Stop is cooperative. The cancellation token is checked at safe boundaries and
+again before acceptance. Evidence remains, the terminal state is recorded, and
+a late worker result cannot turn a stopped task into Done. Continue preserves
+the original objective and accepts an optional operator note as new context.
 
-```text
-Agentic Harness GUI/CLI
-        |
-        | LocalGoalBridge command contract
-        v
-AGENTIC_HARNESS_LOCAL_GOAL
-        |
-        +-- stock local-goal implementation, or
-        +-- Turnstone-compatible wrapper on this machine
-```
+## Safety boundary
 
-The wrapper must preserve the local-goal commands used by the bridge and expose
-watcher truth through `capabilities --json`. Turnstone-specific services,
-configuration, state, and release history stay in their own repository. This
-avoids GitHub conflicts while allowing private operational improvements.
+The embedded model worker has bounded text, Git-inspection, and configured-check
+actions. It has no arbitrary shell, delete, install, service control, publish,
+or general network tool. It enforces workspace containment, selected path
+scope, protected secret/state files, optimistic-concurrency hashes, and
+pre-existing-change ownership.
 
-## Parity And Known Limits
+An installed coding-agent executable runs under that tool's own authorization
+and sandbox policy; Agentic Harness can pass scope and inspect results but
+cannot enforce the embedded path policy inside another executable. The GUI
+states that distinction.
 
-Implemented parity:
+Remote-compatible providers require explicit data-transfer consent. API keys
+are environment references or memory-only session values. Destructive machine
+operations, account changes, billing, provider dashboards, secrets, and public
+deployment remain outside implied goal authority.
 
-- One full objective instead of manually authored goal packets.
-- Durable plan, requirement, subgoal, checkpoint, and heartbeat state.
-- Progress-aware continuation with no total-attempt cutoff.
-- Repair loops for worker and review failures.
-- Repeated identical-blocker escalation.
-- Strict evidence plus deterministic completion review.
-- Process-resumable state and single-driver concurrency control.
-- Verified background ownership for Human Mode and the GUI.
+## Turnstone boundary
 
-Deliberate limits:
+Turnstone may be used as an optional external orchestration backend. It is not
+bundled, is not required for the default CLI or GUI flow, and cannot self-accept
+a result: normalized evidence must still cross the harness completion gate. See
+[Turnstone integration](TURNSTONE_INTEGRATION.md).
 
-- The generic `goal` command is foreground, not a system daemon.
-- A model can propose inaccurate evidence; at least one independent
-  deterministic project check remains required for strict completion.
-- Destructive operations, secrets, provider dashboards, billing, and broad
-  machine changes still require explicit policy and are not implied by autonomy.
-- Multiple independent simultaneous goals in one project are not supported; one
-  project has one active-goal pointer.
+## Upgrade verification
 
-These limits are safety and architecture boundaries, not instructions for the
-operator to babysit normal work.
+Changes to the goal system must test:
 
-## Upgrade Checklist
-
-When changing the harness or a sidecar:
-
-1. Preserve or migrate both versioned contract shapes.
-2. Test more than five workspace-backed progress cycles without false loop
-   failure.
-3. Test three identical no-progress cycles and verify escalation occurs only on
-   the third observation.
-4. Test a process restart from a persisted checkpoint.
-5. Test competing autonomous drivers and verify only one acquires the lease.
-6. Test missing or malformed completion evidence and verify it cannot be
-   accepted.
-7. Test deterministic review failure followed by autonomous repair.
-8. Test GUI task creation with the watcher active and inactive.
-9. Run the complete test, lint, type, compile, and installed-package smoke suite.
-10. Test that a strict goal cannot be downgraded by a compatibility resume path.
-11. Test direct Supervisor mutation while another driver owns the autonomy
-    lease.
+1. More than five evidence-backed progress cycles without false loop failure.
+2. Repeated identical no-progress escalation at the configured threshold.
+3. Restart from a persisted checkpoint.
+4. Competing drivers and single-lease enforcement.
+5. Missing or invented evidence rejection.
+6. Deterministic review failure followed by repair.
+7. Exact budget boundaries and non-completion on exhaustion.
+8. Cooperative cancellation before acceptance.
+9. Durable, ordered, sanitized progress events.
+10. Local no-key and cloud bearer provider flows with arbitrary model IDs.
+11. Session credential absence from state, events, history, URLs, exports, and
+    transcripts.
+12. A clean installed-wheel start-to-result journey through both interfaces.

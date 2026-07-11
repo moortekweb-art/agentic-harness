@@ -53,7 +53,8 @@ body {
 
 button,
 textarea,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -176,6 +177,33 @@ h3 {
   align-items: stretch;
 }
 
+.workspace-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -10px 0 18px;
+  padding: 10px 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 88%, var(--accent) 12%);
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.workspace-strip strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-strip span:last-child {
+  margin-left: auto;
+  text-align: right;
+}
+
 .start-panel,
 .status-panel {
   background: var(--panel);
@@ -220,6 +248,26 @@ textarea {
   outline: none;
 }
 
+input[type="text"],
+input[type="url"],
+input[type="password"],
+select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--ink);
+  background: #fbfbf8;
+  outline: none;
+}
+
+.help-text {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 #objective {
   min-height: 220px;
   flex: 1 1 220px;
@@ -238,6 +286,10 @@ input[type="search"] {
 
 :root[data-theme="dark"] textarea,
 :root[data-theme="dark"] input[type="search"],
+:root[data-theme="dark"] input[type="text"],
+:root[data-theme="dark"] input[type="url"],
+:root[data-theme="dark"] input[type="password"],
+:root[data-theme="dark"] select,
 :root[data-theme="dark"] button,
 :root[data-theme="dark"] .mode-card,
 :root[data-theme="dark"] .health {
@@ -245,7 +297,8 @@ input[type="search"] {
 }
 
 textarea:focus,
-input[type="search"]:focus {
+input:focus,
+select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(39, 105, 93, 0.14);
 }
@@ -506,7 +559,8 @@ button:disabled {
 
 .status-indicator.working,
 .status-indicator.starting,
-.status-indicator.checking {
+.status-indicator.checking,
+.status-indicator.stopping {
   background: rgba(39, 105, 93, 0.1);
   color: var(--accent-strong);
 }
@@ -525,6 +579,7 @@ button:disabled {
 .status-indicator.working .icon,
 .status-indicator.starting .icon,
 .status-indicator.checking .icon,
+.status-indicator.stopping .icon,
 .health:not(.ok):not(.blocked):not(.review) .icon {
   animation: spin 1.2s linear infinite;
 }
@@ -533,6 +588,98 @@ button:disabled {
   min-height: 72px;
   margin: 18px 0 0;
   color: var(--muted);
+}
+
+.current-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(64px, 0.35fr);
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.current-card > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(39, 105, 93, 0.05);
+}
+
+.current-card span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.current-card strong {
+  overflow-wrap: anywhere;
+  font-size: 0.88rem;
+}
+
+.work-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.plain-list,
+.timeline {
+  display: grid;
+  gap: 7px;
+  margin: 8px 0 0;
+  padding-left: 22px;
+  color: var(--muted);
+}
+
+.plain-list li,
+.timeline li {
+  overflow-wrap: anywhere;
+}
+
+.plain-list .completed,
+.plain-list .complete,
+.plain-list .satisfied,
+.verification .passed {
+  color: var(--accent-strong);
+}
+
+.plain-list .in_progress,
+.plain-list .pending {
+  color: var(--muted);
+}
+
+.timeline {
+  max-height: 240px;
+  overflow: auto;
+}
+
+.timeline li::marker {
+  color: var(--accent);
+}
+
+.empty-item {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.final-result {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid rgba(39, 105, 93, 0.35);
+  border-radius: 8px;
+  background: rgba(39, 105, 93, 0.08);
+}
+
+.final-result h3 {
+  margin-top: 0;
+}
+
+.final-result p {
+  margin: 8px 0 0;
 }
 
 .progress-group {
@@ -570,6 +717,30 @@ button:disabled {
   margin: 8px 0 0;
   padding-left: 20px;
   color: var(--muted);
+}
+
+.evidence-link {
+  min-height: 30px;
+  border: 0;
+  padding: 2px 0;
+  background: transparent;
+  color: var(--accent-strong);
+  text-align: left;
+  text-decoration: underline;
+}
+
+#previewDialog {
+  width: min(900px, calc(100vw - 32px));
+}
+
+#previewContent {
+  max-height: 70vh;
+  overflow: auto;
+  padding: 14px;
+  border-radius: 8px;
+  background: #222827;
+  color: #edf5f1;
+  white-space: pre-wrap;
 }
 
 .history-tools {
@@ -629,6 +800,58 @@ dialog {
   background: var(--panel);
   color: var(--ink);
   box-shadow: var(--panel-shadow);
+}
+
+#setupDialog {
+  width: min(680px, calc(100vw - 32px));
+}
+
+#setupForm,
+#continueForm {
+  margin: 0;
+}
+
+.confirm-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 14px;
+  color: var(--muted);
+}
+
+.confirm-row input {
+  margin-top: 4px;
+}
+
+.form-error {
+  min-height: 1.5em;
+  margin: 10px 0 0;
+  color: var(--danger);
+}
+
+.limit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.limit-grid label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.limit-grid input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  color: var(--ink);
+  background: var(--panel);
 }
 
 dialog::backdrop {
@@ -696,9 +919,13 @@ dialog::backdrop {
 }
 
 @media (max-width: 860px) {
-  .topbar,
-  .workbench {
+  .topbar {
     display: block;
+  }
+
+  .workbench {
+    display: flex;
+    flex-direction: column;
   }
 
   .top-actions {
@@ -723,6 +950,11 @@ dialog::backdrop {
     position: static;
     margin-top: 18px;
   }
+
+  body[data-task-active="true"] .status-panel {
+    order: -1;
+    margin: 0 0 18px;
+  }
 }
 
 @media (max-width: 620px) {
@@ -732,6 +964,21 @@ dialog::backdrop {
   }
 
   .mode-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-strip {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .workspace-strip span:last-child {
+    margin-left: 0;
+    text-align: left;
+  }
+
+  .current-card,
+  .work-detail-grid {
     grid-template-columns: 1fr;
   }
 

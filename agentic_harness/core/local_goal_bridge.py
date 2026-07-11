@@ -1,4 +1,4 @@
-"""Bridge to the local Node1/Hermes goal harness.
+"""Bridge to an optional external goal-orchestration executable.
 
 This module intentionally keeps the public CLI small while delegating execution
 to the existing local-goal runtime when it is installed on the machine.
@@ -55,22 +55,22 @@ HUMAN_MODES: tuple[HumanMode, ...] = (
     HumanMode(
         key="guided",
         number=2,
-        title="Let GLM guide the plan",
-        best_for="important local work where GLM should help shape the approach",
+        title="Plan, then execute",
+        best_for="important work where an external planner should shape the approach",
         caution="keeps review in the loop before the work is called done",
     ),
     HumanMode(
         key="cloud",
         number=3,
-        title="Let GLM carry a long task",
-        best_for="longer work where GLM should carry most of the task",
+        title="Use a long-running orchestrator",
+        best_for="longer work owned by a configured external orchestration service",
         caution="keeps results reviewable before they are accepted",
     ),
     HumanMode(
         key="experimental",
         number=4,
-        title="Try experimental GLM",
-        best_for="tiny sandbox checks when you want to test a newer GLM path",
+        title="Try an experimental executor",
+        best_for="tiny sandbox checks with a separately configured experimental path",
         caution="not the default for broad source edits or important production work",
     ),
 )
@@ -140,7 +140,11 @@ class LocalGoalBridge:
 
     def enqueue_mode3a(self, options: Mode3AGoalOptions) -> CommandResult:
         goal = build_mode3a_goal(options)
-        return self.enqueue_cloud_goal(goal, worker="opencode-glm-build", planner="glm-5.2")
+        return self.enqueue_cloud_goal(
+            goal,
+            worker=_external_setting("AGENTIC_HARNESS_EXTERNAL_LONG_WORKER", "long-horizon"),
+            planner=_external_setting("AGENTIC_HARNESS_EXTERNAL_PLANNER", "planner"),
+        )
 
     def start_human_goal(
         self,
@@ -167,23 +171,44 @@ class LocalGoalBridge:
             goal = build_experimental_goal(objective, safe_areas=safe_areas, checks=checks)
             return self.enqueue_cloud_goal(
                 goal,
-                worker="glm52-direct-implementation-canary",
+                worker=_external_setting(
+                    "AGENTIC_HARNESS_EXTERNAL_EXPERIMENTAL_WORKER",
+                    "experimental",
+                ),
                 planner="none",
             )
         raise ValueError(f"unsupported mode {mode.key}")
 
     def start_local_goal(self, goal: str) -> CommandResult:
-        return self.run(["quick-start", "--executor", "opencode", "--goal", goal])
+        return self.run(
+            [
+                "quick-start",
+                "--executor",
+                _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", "executor"),
+                "--goal",
+                goal,
+            ]
+        )
 
     def start_guided_goal(self, goal: str) -> CommandResult:
-        return self.run(["premium-start", "--planner", "glm-5.2", "--executor", "opencode", "--goal", goal])
+        return self.run(
+            [
+                "premium-start",
+                "--planner",
+                _external_setting("AGENTIC_HARNESS_EXTERNAL_PLANNER", "planner"),
+                "--executor",
+                _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", "executor"),
+                "--goal",
+                goal,
+            ]
+        )
 
     def enqueue_cloud_goal(
         self,
         goal: str,
         *,
         worker: str,
-        planner: str = "glm-5.2",
+        planner: str = "planner",
     ) -> CommandResult:
         return self.run(
             [
@@ -191,7 +216,7 @@ class LocalGoalBridge:
                 "--planner",
                 planner,
                 "--executor",
-                "opencode",
+                _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", "executor"),
                 "--executor-worker",
                 worker,
                 "--goal",
@@ -275,14 +300,12 @@ def build_mode3a_goal(options: Mode3AGoalOptions) -> str:
 
     return "\n".join(
         [
-            "Mode 3A: Cloud Long-Horizon Goal",
+            "External long-horizon goal",
             "",
-            "Use the GLM-backed cloud executor lane as a Codex /goal-style worker.",
+            "Use the configured external orchestrator as a durable, evidence-driven goal worker.",
             "",
-            "Planner: glm-5.2",
-            "Executor: opencode",
-            "Executor worker: opencode-glm-build",
-            "Boundary: bounded cloud goal, reviewable artifacts, deterministic review/acceptance gates.",
+            "Planner, executor, and worker names come from the external backend configuration.",
+            "Boundary: bounded external goal, reviewable artifacts, deterministic review and acceptance gates.",
             "",
             "Autonomy contract:",
             "- Preserve the full original objective across every continuation and recovery.",
@@ -329,7 +352,7 @@ def build_experimental_goal(
     verification = checks or ("run one narrow verification command and record the result",)
     return "\n".join(
         [
-            "Mode 4: Experimental Direct GLM Canary",
+            "Experimental external executor canary",
             "",
             "Use this only as a tiny bounded canary, not a broad production edit.",
             "",
@@ -371,12 +394,16 @@ def format_human_modes() -> str:
     lines.extend(
         [
             "",
-            "Beginner default: 2 for important local work, 3 when you want GLM/cloud to carry it.",
+            "These modes apply only to the optional external backend; the embedded GUI uses one verified goal flow.",
             'Interactive: agentic-harness work',
-            'One line: agentic-harness do --mode cloud "make Jarvis voice startup more reliable"',
+            'Portable default: agentic-harness goal "describe one verified outcome"',
         ]
     )
     return "\n".join(lines)
+
+
+def _external_setting(name: str, default: str) -> str:
+    return os.environ.get(name, "").strip() or default
 
 
 def format_command_result(result: CommandResult) -> str:
@@ -404,8 +431,8 @@ def format_popos_setup(bridge: LocalGoalBridge) -> str:
         "Run a local smoke test:",
         "  agentic-harness selftest",
         "",
-        "Run a GLM long-horizon task:",
-        '  agentic-harness do --mode cloud "fix one small verified issue"',
+        "Run a portable verified goal:",
+        '  agentic-harness do "fix one small verified issue"',
         "",
         "Useful commands:",
         "  agentic-harness check",
@@ -419,7 +446,7 @@ def format_popos_setup(bridge: LocalGoalBridge) -> str:
         "  export AGENTIC_HARNESS_DOC_ROOT=/path/to/compatible/checkout",
         "",
         "If neither is set, Agentic Harness checks the current directory. The",
-        "Python package does not install the optional local-goal/Mode 3A backend.",
+        "Python package does not install the optional external local-goal backend.",
         "",
         f"Detected local-goal: {bridge.local_goal}",
         f"Detected local-goal usable: {bridge.available()}",

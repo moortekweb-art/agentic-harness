@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from agentic_harness.core.safety import subprocess_environment
 from agentic_harness.core.state import Goal
 
 CriterionCheck = Callable[[Goal], tuple[bool, str]]
@@ -98,7 +99,11 @@ def artifact_exists(project_dir: str | Path, artifact_path: str) -> ReviewCriter
 
 
 def command_passes(
-    command: list[str], *, cwd: str | Path = ".", timeout: int = 60
+    command: list[str],
+    *,
+    cwd: str | Path = ".",
+    timeout: int = 60,
+    secret_env_names: list[str] | tuple[str, ...] = (),
 ) -> ReviewCriterion:
     """Require a command to exit successfully."""
 
@@ -107,6 +112,7 @@ def command_passes(
             proc = subprocess.run(
                 command,
                 cwd=str(cwd),
+                env=subprocess_environment(secret_env_names),
                 text=True,
                 capture_output=True,
                 timeout=timeout,
@@ -136,6 +142,7 @@ def file_changed(project_dir: str | Path, path: str) -> ReviewCriterion:
             proc = subprocess.run(
                 ["git", "status", "--porcelain", "--", path],
                 cwd=str(project_dir),
+                env=subprocess_environment(),
                 text=True,
                 capture_output=True,
                 check=False,
@@ -159,6 +166,7 @@ def git_clean(project_dir: str | Path = ".") -> ReviewCriterion:
             proc = subprocess.run(
                 ["git", "status", "--porcelain"],
                 cwd=str(project_dir),
+                env=subprocess_environment(),
                 text=True,
                 capture_output=True,
                 check=False,
