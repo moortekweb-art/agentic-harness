@@ -9,7 +9,7 @@
 ## Income-Generating
 
 ### 1. Automated Code Review Service
-Feed it PRs from GitHub repos via webhooks. Planner → reviewer → feedback automatically. Multi-reviewer cross-checking (Codex + GLM + Kimi) is better than single-model review. Offer as a service: "every PR reviewed within 5 minutes."
+Feed it PRs from GitHub repos via webhooks. Planner → reviewer → feedback automatically. Provider-neutral multi-reviewer cross-checking can be stronger than relying on one model. Offer as a service: "every PR reviewed within 5 minutes."
 
 ### 2. Client Project Automation
 Create a `/goal` with a spec, let the harness plan → execute → review. Works for Earl's portfolio, future client work, internal tools. Start simple: "add responsive breakpoints to Earl's portfolio."
@@ -29,7 +29,7 @@ Point harness at any codebase, say "write comprehensive tests for this module." 
 Feed source files → generates API docs, README sections, architecture diagrams. Auto-update docs on every commit.
 
 ### 7. Model Evaluation Harness
-Run structured evals: same prompt to GLM-5.2, Kimi, MiniMax, Codex → reviewer scores on correctness, speed, cost. Build a leaderboard using local GPU pool.
+Run structured evals against user-configured model profiles, then score correctness, speed, and cost without baking provider names or private hardware into the product.
 
 ## Experimental — Expanding Capabilities
 

@@ -7,7 +7,7 @@ Type=simple
 User=<USER>
 WorkingDirectory=<WORKDIR>
 EnvironmentFile=-<TOKEN_ENV_FILE>
-ExecStart=<EXECUTABLE> --host 127.0.0.1 --port <PORT> --doc-root <DOC_ROOT> --no-open
+ExecStart=<EXECUTABLE> --project-dir <WORKDIR> --host 127.0.0.1 --port <PORT> --no-open
 Restart=on-failure
 
 [Install]

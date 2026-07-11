@@ -7,6 +7,7 @@ import urllib.error
 import pytest
 
 from agentic_harness.adapters.coding_agent import CodingAgentWorker
+from agentic_harness.core.events import TaskEventStore
 from agentic_harness.adapters.github_actions import GitHubActionsAdapter
 from agentic_harness.adapters.local_llm import LocalLLMAdapter
 from agentic_harness.adapters.shell import ShellWorker
@@ -142,6 +143,9 @@ def test_coding_agent_worker_formats_command_and_writes_transcript(monkeypatch, 
         "goal-123",
     ]
     assert calls[0][1]["cwd"] == str(tmp_path)
+    events = TaskEventStore(tmp_path, goal.id).read()
+    assert [event["tool"]["status"] for event in events] == ["started", "completed"]
+    assert all(event["tool"]["name"] == "coding_agent" for event in events)
 
 
 def test_coding_agent_worker_uses_durable_continuation_instruction_for_autonomy(
@@ -272,7 +276,10 @@ def test_coding_agent_worker_reports_transcript_write_error(monkeypatch, tmp_pat
         raise OSError("disk full")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr("pathlib.Path.write_text", fake_write_text)
+    monkeypatch.setattr(
+        "agentic_harness.adapters.coding_agent.write_private_text",
+        fake_write_text,
+    )
     worker = CodingAgentWorker(["codex", "exec"], cwd=tmp_path)
 
     result = worker.run(Goal("write transcript"))

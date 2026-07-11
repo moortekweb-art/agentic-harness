@@ -93,8 +93,9 @@ def test_build_mode3a_goal_hides_worker_details_behind_plain_objective() -> None
     )
 
     assert "make Jarvis voice startup more reliable" in goal
-    assert "Planner: glm-5.2" in goal
-    assert "Executor worker: opencode-glm-build" in goal
+    assert "configured external orchestrator" in goal
+    assert "worker names come from the external backend configuration" in goal
+    assert "glm" not in goal.lower()
     assert "- services/voice-assistant" in goal
     assert "- python3 -m pytest tests/test_voice.py" in goal
     assert "Do not expose or modify secrets" in goal
@@ -126,11 +127,11 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
         str(local_goal),
         "enqueue",
         "--planner",
-        "glm-5.2",
+        "planner",
         "--executor",
-        "opencode",
+        "executor",
         "--executor-worker",
-        "opencode-glm-build",
+        "long-horizon",
     ]
     assert "--goal" in command
     assert "fix one thing" in command[-1]

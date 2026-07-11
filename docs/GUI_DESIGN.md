@@ -1,144 +1,134 @@
 # GUI Design
 
-## Purpose
+## Product promise
 
-Agentic Harness gives a non-programmer a calm local workbench for starting,
-watching, and reviewing AI-assisted work. The main interface answers five
-questions without requiring command-line or harness knowledge:
+The GUI turns one plain-language goal into a visible, evidence-backed work
+session. A user should be able to answer these questions without reading a
+script, prompt, or internal agent transcript:
 
-- What can I ask it to do?
-- Which kind of help should I use?
-- Is it working?
-- Does it need me?
-- What finished, passed, or remains blocked?
+- What workspace and execution method will be used?
+- What is the current subgoal?
+- What has actually happened?
+- Which checks passed or failed?
+- What changed, and where is the evidence?
+- Is the result accepted, blocked, or safely stopped?
 
-The GUI is a human layer over the existing review-oriented execution harness.
-It does not remove evidence or safety gates. It moves technical evidence into
-Advanced details so the default surface stays readable.
+The browser app is a human layer over the same durable engine used by the CLI.
+It simplifies language; it does not weaken review or invent progress.
 
-## Shipped Interface
+## Setup
 
-![Agentic Harness v0.6.29 desktop interface](assets/agentic-harness-gui.png)
+The first-run dialog asks for four decisions:
 
-The same workbench stacks into a single readable column at narrow widths. See
-the [mobile capture](assets/agentic-harness-gui-mobile.png).
+1. **Execution method** — an installed coding agent, a local
+   OpenAI-compatible model, or a cloud OpenAI-compatible model.
+2. **Provider details** — endpoint and arbitrary model ID when a model is used.
+3. **Credential source** — no key, an environment-variable name, or a key held
+   only for this GUI process.
+4. **Independent check** — a command that can prove the result outside the
+   worker's own claim.
 
-## Selected Direction
+Remote model setup explicitly states that selected file excerpts and tool
+results may leave the computer. Saving is disabled until the user confirms
+that boundary. The interface never offers to save a plaintext API key.
 
-The selected visual direction is **Calm Local Operations**: a quiet, practical
-local control panel with compact typography, visible state, restrained color,
-and no terminal-shaped main surface.
+The setup dialog also exposes bounded cycle, elapsed-time, token, provider-call,
+and tool-call limits. Reaching a limit produces an honest blocked result.
 
-Two supporting ideas are retained:
+## Main journey
 
-- **Friendly Assistant Control** contributes plain recovery and review text.
-- **Power User Cockpit** contributes the progress trail, evidence groups, and
-  disciplined Advanced details drawer.
+### Ready
 
-The generated images below are concept references, not screenshots of the
-shipped application. Their copy is illustrative; the product source is
-authoritative.
+- Show the selected workspace and execution method.
+- Accept one complete goal in ordinary language.
+- Let the user narrow safe areas or checks.
+- Disable Start until setup, objective, and independent verification are valid.
 
-### Calm Local Operations
+### Working
 
-![Calm Local Operations concept](assets/gui-concepts/workbench-start.png)
+- Put the active goal above the new-goal form, including on narrow screens.
+- Show the current subgoal, checkpoint, and cycle.
+- Render the persisted plan and requirements.
+- Stream sanitized, ordered activity events.
+- Use determinate progress only when plan or requirement counts support it;
+  otherwise show an indeterminate working state.
+- Offer only actions that the backend says are currently valid.
 
-The selected direction for mode choice, task entry, boundaries, and local
-status.
+### Checking and review
 
-### Friendly Assistant Control
+- Separate worker-reported checks from independent review.
+- Show pass/fail state and a short, redacted message.
+- Never turn worker text such as “done” into acceptance.
+- If repair is possible, continue automatically within the configured budgets.
+- If a genuine human decision is needed, explain it and expose Continue or Stop.
 
-![Friendly Assistant Control concept](assets/gui-concepts/review-desk.png)
+### Done
 
-Reference for review evidence and clear Accept, Continue, and Stop decisions.
+- Show the accepted result summary.
+- List changed files and independent checks.
+- Link to bounded previews of changed text and recorded artifacts.
+- Preserve the run in history across refreshes and service restarts.
 
-### Power User Cockpit
+### Blocked or stopped
 
-![Power User Cockpit concept](assets/gui-concepts/run-room-active.png)
+- State the concrete missing credential, failed check, repeated blocker, budget,
+  or safety boundary.
+- Keep all evidence already produced.
+- A stopped task must not become Done because a late worker cycle returned.
+- Permit a fresh goal after the terminal state is durable.
 
-Reference for long-running status, progress, and evidence hierarchy.
+## Language boundary
 
-## Human Modes
+The default surface uses goal, plan, current step, activity, check, changed
+file, evidence, result, blocked, and stopped. It hides model prompts, raw JSON,
+shell output, provider payloads, queue internals, and worker identities.
 
-The main interface exposes four choices. Backend route names are never part of
-the mode cards.
+Technical details remain available only where they help diagnose a problem.
+They are redacted and never include credentials, raw provider traffic, file
+contents from tool calls, or hidden reasoning. The product shows observable
+actions and evidence rather than private chain-of-thought.
 
-| Mode | Use it for | Boundary |
-| --- | --- | --- |
-| Use this computer | Small, bounded local work | Best when one clear task should move |
-| Let GLM guide the plan | Important local work that benefits from planning | Review remains part of completion |
-| Let GLM carry a long task | Longer work that may need several passes | Results remain reviewable before acceptance |
-| Try experimental GLM | Tiny sandbox checks on a newer route | Not the default for broad or important work |
+## Visual direction
 
-## Screen States
+The selected direction is a calm local workbench:
 
-The v1 GUI is a single-page workbench with state-based views rather than a
-multi-step wizard.
+- warm neutral canvas and high-contrast text;
+- restrained teal for primary actions and active progress;
+- amber for attention and review;
+- red only for destructive or failed states;
+- compact information hierarchy without a terminal-shaped main surface;
+- no decorative gradients or activity animation that implies work not recorded
+  by the backend.
 
-### Start Work
+The earlier concept assets remain useful visual references:
 
-- Plain-language task field.
-- Four visible mode cards.
-- Optional safe areas and expected checks.
-- Start, Run checks, undo, and redo controls.
-- Readiness gate showing whether another task can begin.
+- [workbench start](assets/gui-concepts/workbench-start.png)
+- [review desk](assets/gui-concepts/review-desk.png)
+- [active run room](assets/gui-concepts/run-room-active.png)
 
-### Active Work
+They are concepts, not authoritative screenshots. Current behavior and copy are
+defined by the packaged static assets and browser tests.
 
-- Starting, Working, or Checking work status.
-- Progress and current plain-language summary.
-- Perceive, Plan, Act, Check, Review loop indicator.
-- One safe manual action to check or move work forward.
+## Accessibility and responsive behavior
 
-### Needs Review
+- Use semantic headings, forms, labels, buttons, details, and dialogs.
+- Keep all controls keyboard reachable with visible focus.
+- Accompany color with status text.
+- Clear password fields immediately after submission.
+- Wrap long objectives and paths.
+- Keep the layout free of horizontal overflow at mobile widths.
+- Respect reduced-motion preferences.
+- Move active status ahead of the start form on a narrow screen so current work
+  is never hidden below input controls.
 
-- Short outcome summary before technical evidence.
-- Changed files, checks, and artifacts when available.
-- Accept, Ask to continue, and Stop decisions.
-- No automatic acceptance of broad or uncertain changes.
+## Decision record
 
-### Done, Blocked, And Stopped
-
-- Done appears only after the harness reports accepted completion.
-- Blocked explains the human decision or missing dependency.
-- Stopped preserves evidence and reports that work is no longer running.
-
-## Language Boundary
-
-The default interface may use terms such as task, assistant, checking, review,
-and blocked. It must not expose internal actor names, planner or executor names,
-queue mechanics, raw JSON, shell commands, run directories, or Mode 3A wording.
-
-Those details remain available in Advanced details for debugging and audit.
-When a backend summary contains internal terminology, the API replaces the main
-summary with a status-appropriate human explanation while retaining the raw
-payload in Advanced details.
-
-## Visual Rules
-
-- Warm neutral canvas with charcoal text.
-- Muted teal for progress and primary actions.
-- Amber for review and attention states.
-- Restrained red for destructive Stop actions.
-- Cards use an 8px radius or less and are never nested.
-- Compact headings inside work surfaces; no marketing hero treatment.
-- No decorative gradients, blobs, terminal-black panels, or raw log surfaces.
-- Layout remains usable at narrow mobile widths without horizontal overflow.
-
-## Accessibility
-
-- Semantic headings, labels, buttons, details, and dialog elements.
-- Keyboard-reachable controls and visible focus treatment.
-- Text accompanies every color-based status.
-- Mode cards expose selection state to assistive technology.
-- Long task text and local paths wrap instead of forcing horizontal scrolling.
-- Motion remains limited and respects reduced-motion preferences.
-
-## Decision Record
-
-- Local browser GUI first; native wrappers can reuse it later.
-- One visible task decision at a time.
-- Technical evidence is retained but collapsed by default.
-- Review gates remain real even under the no-babysitting policy.
-- Static packaged HTML, CSS, and JavaScript are sufficient for v1 and avoid a
-  separate Node or desktop runtime.
+- One distribution and shared engine, with CLI and browser interfaces.
+- One visible goal per workspace.
+- Provider-neutral setup based on capability, not model brand.
+- Real durable events instead of cosmetic progress.
+- Evidence previews are bounded by workspace and artifact ownership.
+- Session credentials are memory-only; environment references are durable.
+- Local browser delivery first; a future native wrapper may reuse the API.
+- The optional external orchestration backend remains an adapter, not a public
+  prerequisite.

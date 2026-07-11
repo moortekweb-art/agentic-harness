@@ -1,37 +1,100 @@
 # GUI Deployment Guide
 
-`agentic-harness-gui` is the long-running GUI service executable from the same
-`local-agentic-harness` install as the `agentic-harness` CLI. Both use the
-shared Python engine, `.agentic-harness/` project state, and packaged static
-assets; deploying the GUI does not create a second package or repository.
+`agentic-harness-gui` is the service executable from the same
+`local-agentic-harness` install as the CLI. It serves packaged static assets and
+uses the selected workspace's `.agentic-harness/` state.
 
-## Local Service
+## Local service
 
-Install `local-agentic-harness` in the environment you want the service to use,
-then copy and customize
+Install the release in a dedicated environment, choose the workspace, and copy
 [`agentic-harness-gui.service.template`](agentic-harness-gui.service.template).
-Replace its placeholders for the service user, working directory, executable or
-virtual environment, and port. Remove the optional `--doc-root` argument when
-the optional local-goal backend is not in use. Remove the optional token
-environment-file line when no token is configured.
+Replace:
 
-The template binds to `127.0.0.1` and includes `--no-open`, which is suitable
-for a background service. Keep loopback binding by default. If you deliberately
-expose the service beyond the host, use the GUI token and appropriate network
-access controls.
+- `<USER>` with the unprivileged service account;
+- `<WORKDIR>` with the workspace;
+- `<EXECUTABLE>` with the absolute `agentic-harness-gui` path;
+- `<PORT>` with a stable local port; and
+- `<TOKEN_ENV_FILE>` with an owner-readable environment file, or remove that
+  line when the service is strictly loopback-only and no proxy will access it.
 
-## Private-Network Access
+The template binds to loopback and passes `--project-dir <WORKDIR> --no-open`.
+The service user needs write access to the workspace and `.agentic-harness/`
+state, but should not have broader machine privileges.
 
-Tailscale Serve can publish a loopback-bound GUI to an authenticated private
-network without changing the service binding. Configure Tailscale Serve for the
-local GUI URL according to the Tailscale documentation, preserve the original
-`Host` header, and treat Tailnet membership or a GUI token as the access-control
-boundary. This is generic guidance: choose the Serve configuration, access
-policy, and operational ownership appropriate for your machine.
+Verify the exact installed candidate before switching a service:
+
+```bash
+agentic-harness-gui --help
+agentic-harness --version
+agentic-harness selftest
+```
+
+## Provider credentials
+
+Prefer an environment-variable reference for a background service. Put the key
+in an owner-readable environment file outside the repository and enter only the
+variable name in GUI setup. Do not place a plaintext key in
+`.agentic-harness/config.yml`, the unit file, command-line arguments, or a URL.
+
+A session key is intentionally memory-only. It disappears on restart and is
+suitable for an interactive loopback launch, not an unattended service.
+
+## Network boundary
+
+Keep the process on `127.0.0.1` whenever possible. A non-loopback bind is
+refused unless `AGENTIC_HARNESS_GUI_TOKEN` is set. For a reverse proxy:
+
+- set a strong GUI token and send it as an `Authorization: Bearer` header;
+- add each proxy-facing hostname to `AGENTIC_HARNESS_GUI_ALLOWED_HOSTS`;
+- preserve a trustworthy `Host` header;
+- enforce authentication and transport encryption at the proxy or private
+  network; and
+- do not expose the control surface directly to the public internet.
+
+Tailscale Serve can proxy a loopback service to an authenticated tailnet. Use
+the current Tailscale documentation for the exact command and ACL syntax,
+because those interfaces may change. Keep the harness itself loopback-bound and
+verify the health, status alias, authenticated task reads, and unknown-route
+behavior through the private URL.
+
+## Safe rollout
+
+1. Record the currently installed version, executable path, unit contents, and
+   health response.
+2. Back up `.agentic-harness/config.yml` and preserve every existing run
+   directory.
+3. Install the candidate in a separate virtual environment.
+4. Run the full source or release-smoke verification before changing the unit.
+5. Update the executable path, reload the unit manager, and restart once.
+6. Verify `GET /api/health`, compatibility `GET /api/status`, readiness, setup,
+   history, security headers, and JSON 404 behavior.
+7. Complete a harmless bounded goal and confirm the final independent check and
+   evidence preview.
+
+Rollback by restoring the prior executable path and restarting. Do not delete
+the workspace state during rollback; a schema-compatible prior version can
+still inspect preserved evidence, and an incompatible case should be diagnosed
+from a copy.
 
 ## Recovery
 
-Run `agentic-harness init` in a project to write
-`.agentic-harness/config.yml`. If a goal fails, inspect `agentic-harness report`
-first. `agentic-harness restart` retries the same failed goal while preserving
-its evidence. Start a fresh goal only when the work is intentionally separate.
+Configuration lives at `.agentic-harness/config.yml`. Run
+`agentic-harness report` before changing failed state. `agentic-harness restart`
+retries the same failed goal while preserving its evidence and original
+workspace baseline. A GUI Continue action retains the same goal identity and
+may add an operator note.
+
+After a process interruption, history and checkpoints remain durable. If the
+profile used a session credential, re-enter it before continuing. Start a fresh
+goal only when the work is intentionally separate or the prior goal is already
+terminal.
+
+## Release authority
+
+Publishing and production restart are separate approvals. Before publishing,
+protect both the `github-release` and `pypi` GitHub environments with an
+appropriate deployment-branch/tag policy and required reviewers. The workflow
+itself verifies the package version, exact tag commit, default-branch ancestry,
+trusted CI result, distributions, installed package, release assets, and
+checksums; repository owners must still configure the external environment and
+branch protections.

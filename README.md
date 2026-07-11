@@ -1,28 +1,101 @@
 # Agentic Harness
 
-![Agentic Harness social preview](docs/assets/agentic-harness-social-preview.png)
+![Agentic Harness social preview](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-social-preview.png)
 
 [![CI](https://github.com/moortekweb-art/agentic-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/moortekweb-art/agentic-harness/actions)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Support](https://img.shields.io/badge/support-Buy%20Me%20a%20Coffee-ffdd00.svg)](https://buymeacoffee.com/moortekweb3)
+[![Python](https://img.shields.io/badge/python-3.11--3.14-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/moortekweb-art/agentic-harness/blob/main/LICENSE)
 
-Coding agents say "done" too early. Agentic Harness makes "done" mean checks
-passed.
+A local-first execution harness that lets an agent work toward a complete goal
+without treating its own claim of success as proof.
 
-Agentic Harness runs coding agents and automation jobs as bounded, reviewable
-goals. It captures transcripts and artifacts, prevents runaway loops, and only
-marks work done when deterministic review passes.
+Agentic Harness provides one project-local engine for two interfaces: a CLI and
+a browser GUI. It can supervise an installed coding-agent CLI or run a bounded
+tool-using agent against a user-selected OpenAI-compatible local or cloud model.
+In both cases, durable progress, resource limits, recorded evidence, and an
+independent verification command determine whether the result is done.
 
-## Fastest Demo
+## Product Boundary
 
-Run a complete supervised fix-tests workflow from any directory:
+`local-agentic-harness` is one Python distribution with a shared Python engine,
+project state model, packaged static browser assets, and two executable
+interfaces:
+
+- `agentic-harness` is the CLI.
+- `agentic-harness-gui` is the browser service.
+
+This is the same install, not two products. Both interfaces use
+`.agentic-harness/` inside the selected workspace. The portable embedded engine
+is the default for both new CLI goals and the GUI; a private controller or
+machine-specific sidecar is not required.
+
+## Quick Start
+
+Install the released distribution and open the GUI in a project:
+
+```bash
+pipx install local-agentic-harness
+cd /path/to/your/project
+agentic-harness selftest
+agentic-harness gui
+```
+
+The GUI asks you to choose one execution method:
+
+- an installed coding agent: Codex, OpenCode, Aider, or CodeWhale;
+- a local OpenAI-compatible chat-completions endpoint; or
+- a cloud OpenAI-compatible chat-completions endpoint.
+
+You also choose an independent verification command before work can start. For
+a model endpoint, enter the exact chat-completions URL and any model identifier
+the endpoint accepts. Local endpoints may be keyless. When an endpoint requires
+a key, use an environment-variable reference or a session-only key. Cloud setup
+also requires explicit confirmation that selected workspace content may be sent
+to that endpoint.
+
+After setup, describe one complete outcome and start it. The GUI shows the
+current subgoal, checkpoint, cycle, durable tool events, changed files, checks,
+and final evidence. It does not invent progress while the worker is quiet.
+
+The same configured workspace can run from the CLI:
+
+```bash
+agentic-harness do "fix the failing tests and verify the result"
+agentic-harness check
+agentic-harness report
+```
+
+If the GUI profile uses a session-only model key, that credential belongs to
+the GUI process and the CLI cannot reuse it. Choose an environment-variable
+reference when both interfaces need to run the same model profile.
+
+Use a complete autonomous goal directly when a project is already configured:
+
+```bash
+agentic-harness goal "implement the requested change, preserve unrelated work, and verify it"
+```
+
+If that foreground process is interrupted, resume the same durable goal by
+omitting a new objective:
+
+```bash
+agentic-harness goal
+```
+
+To see the shortest path detected for the current project:
+
+```bash
+agentic-harness quickstart
+```
+
+The packaged failure-to-fix demo remains available and auto-creates config for
+its mock worker:
 
 ```bash
 agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
 ```
 
-Or inspect the no-hidden-YAML path yourself:
+Or inspect each step:
 
 ```bash
 agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force
@@ -35,162 +108,9 @@ agentic-harness report
 python -m pytest tests/ -q   # should pass
 ```
 
-No prompt design. No dashboard. No controller.
-
-## Quick Start
-
-```bash
-pipx install git+https://github.com/moortekweb-art/agentic-harness.git
-agentic-harness --version
-agentic-harness selftest
-agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
-```
-
-## Human Mode
-
-On a Linux/Ubuntu machine that has the optional local-goal/Mode 3A backend
-installed, you do not need to write goal packets or remember planner names:
-
-```bash
-agentic-harness setup
-agentic-harness do "make Jarvis voice startup more reliable"
-# The background supervisor owns the task now; this terminal may be closed.
-agentic-harness check
-```
-
-The Python package does not install that optional backend. Commands that use it
-look for `scripts/local-goal` under the configured document root. Pass
-`--doc-root /path/to/compatible/checkout` for a single command, set
-`AGENTIC_HARNESS_DOC_ROOT` for a shell session, or launch from the compatible
-checkout and let the current directory be used. For a standalone executable,
-set `AGENTIC_HARNESS_LOCAL_GOAL=/path/to/local-goal`; that executable override
-wins over the document-root lookup. `~` is expanded in configured paths.
-
-`do` accepts plain English, wraps it in the safe Mode 3A GLM cloud-lane format,
-verifies that the background supervisor is active, queues the task, and prints
-a work ticket. The supervisor owns continuation, repair, review, and acceptance;
-`check` is informational and is not required to keep the task moving. Advanced
-commands such as `watch`, `mode3a-run`, `mode3a-status`, and `mode3a-monitor`
-remain available as diagnostics when you need the underlying details.
-
-The public repository does not depend on Turnstone. This machine may place a
-Turnstone-compatible executable behind `AGENTIC_HARNESS_LOCAL_GOAL`; the bridge
-uses only the documented local-goal command and `capabilities --json` contract.
-That keeps private machine supervision outside the GitHub package while letting
-the installed GUI verify and use it.
-
-For a local browser interface:
-
-![Agentic Harness local GUI](docs/assets/agentic-harness-gui.png)
-
-```bash
-agentic-harness gui
-```
-
-This is the same program and same install: the `local-agentic-harness` distribution
-provides the shared Python engine, project state model, and packaged static
-assets for both interfaces. Use `agentic-harness` for the CLI, or use
-`agentic-harness-gui` as the long-running GUI service executable; they share
-the same `.agentic-harness/` project state. They are not separate products or
-repositories.
-
-The GUI binds to `127.0.0.1` by default and asks the OS for a free local port.
-Use the exact URL printed at startup. For scripts or operators that need a
-stable URL, pass an explicit port:
-
-```bash
-agentic-harness-gui --port 8765
-```
-
-Use `--no-open` for headless terminals, SSH sessions, and automation:
-
-```bash
-agentic-harness-gui --no-open
-```
-
-Use `agentic-harness gui --doc-root /path/to/compatible/checkout` or
-`AGENTIC_HARNESS_DOC_ROOT=/path/to/compatible/checkout agentic-harness gui` when
-the optional local-goal backend lives outside the directory where you launch the
-GUI. Without that backend, the GUI still serves, but backend task actions report
-the missing optional executable and how to configure it.
-
-Agentic Harness is a Python application. Its GUI is rendered by packaged
-HTML/CSS/JS files served by the Python backend; there is no Node, Electron,
-Tauri, or native widget runtime in the v0.6.29 GUI. The packaged browser app
-includes live status updates over WebSocket, progress indicators, task history
-search, dark/light theme switching, keyboard shortcuts, session export/import,
-and local form undo/redo.
-
-The GUI presents the same four human modes as plain choices, keeps technical
-details in an advanced drawer, and uses the local background worker under the
-hood. It also exposes a readiness gate based on the local agent loop: it shows
-whether the harness is ready, acting, checking, or waiting for review, and it
-keeps new simple-UI starts behind review when the active local-goal run needs a
-human decision.
-
-The public interface decisions and upgrade boundary are documented in
-[GUI Design](docs/GUI_DESIGN.md) and
-[GUI Architecture](docs/GUI_ARCHITECTURE.md). A narrow-screen capture is also
-available in [the GUI assets](docs/assets/agentic-harness-gui-mobile.png).
-
-Keep the default loopback binding unless you have a specific reason to expose
-the GUI beyond this computer. If you bind to a non-loopback host such as
-`0.0.0.0`, set `AGENTIC_HARNESS_GUI_TOKEN` before launch to require a bearer
-token for API actions and the WebSocket status stream, and still treat the
-server as a local control surface. The static browser shell remains visible so
-the app can load; API calls, task controls, session import/export, and the
-status stream remain gated. In token mode, enter the configured token when the
-browser asks for it, or append it once as a `token` query parameter when opening
-the page. The browser removes that query parameter from visible history
-immediately and keeps the token only for the current tab session. Bearer tokens
-are a basic access gate. State-changing requests and WebSockets also reject
-cross-origin browser traffic, API writes require JSON, and request bodies are
-capped at 1 MiB. When reverse proxying the loopback GUI through a private network
-such as Tailscale Serve, preserve the original `Host` header and keep network
-membership or a GUI token as the access-control boundary.
-
-### Autonomous Goals
-
-For a project configured with Codex, OpenCode, Aider, or another supported
-coding-agent backend, give the harness one complete objective:
-
-```bash
-agentic-harness goal "fix the failing tests, preserve unrelated work, and verify the result"
-```
-
-`goal` preserves the original objective and durable plan/checkpoint state across
-cycles. Failed checks and review findings become repair input. Progress may use
-any number of cycles; the runner stops for a person only after the same
-no-progress blocker repeats three consecutive times. A repeated `progress`
-claim without a workspace change counts as no progress.
-Completion requires a finished plan, structured requirement audit, evidence for
-every requirement, and at least one passing independent deterministic review
-criterion. If the foreground
-process is interrupted, run
-`agentic-harness goal` without a new objective to resume the same project goal.
-
-To inspect the demo files instead of running them immediately:
-
-```bash
-agentic-harness create-demo fix-tests /tmp/agentic-harness-demo --force
-cd /tmp/agentic-harness-demo
-python -m pip install -r requirements-dev.txt
-python -m pytest tests/ -q   # expected to fail
-agentic-harness fix-tests     # auto-creates config when it can pick a backend
-agentic-harness status
-python -m pytest tests/ -q   # should pass
-```
-
-Or ask the installed CLI to print the shortest path for this machine:
-
-```bash
-agentic-harness quickstart
-```
-
-Advanced users can still hand-write `.agentic-harness/config.yml`; the
-configuration format is documented below.
-
 ### Recipes
+
+Common workflows have direct commands:
 
 ```bash
 agentic-harness recipes
@@ -201,143 +121,233 @@ agentic-harness update-docs
 agentic-harness changelog
 agentic-harness verify-tests
 agentic-harness run-recipe fix-tests --explain
-agentic-harness fix-tests --until-done --max-attempts 3
 ```
 
-Recipes hide the common prompt and review-command setup for beginner workflows.
-Run recipes such as `fix-tests`, `lint-fix`, `typecheck-fix`, `update-docs`,
-and `changelog` directly. If no project config exists, recipe commands create
-one automatically when they can select a supported coding backend; demos use
-the packaged shell mock. Use `init` when you want to choose or replace the
-backend explicitly.
-Each built-in recipe has a direct command; `run-recipe <name>` remains available
-for scripts that prefer one generic entrypoint or want `--explain`.
-Recipe runs write `.agentic-harness/runs/<goal-id>/report.md` automatically,
-so the operator-readable handoff exists even if you do not run
-`agentic-harness report` afterward.
-Add `--until-done --max-attempts N` when a recipe should keep repairing while
-the workspace is progressing. `N` is the number of consecutive observations of
-the same no-progress blocker before stopping; it is not a total-attempt budget.
+Recipes auto-create config when a supported installed coding agent is available.
+Each run writes an operator-readable report at
+`.agentic-harness/runs/<goal-id>/report.md`.
 
-For legacy non-structured goals that may need more than one pass, use the
-progress-aware compatibility driver:
-
-```bash
-agentic-harness run-until-done "fix the failing tests" --max-attempts 3
-```
-
-It starts or resumes one active goal, runs worker/review cycles, continues while
-the workspace changes, writes
-`.agentic-harness/runs/<goal-id>/report.md`, and stops only at deterministic
-completion or the configured repeated no-progress blocker threshold. Prefer
-`agentic-harness goal` when the backend can return structured completion
-evidence.
-
-## Not a Coding Agent
-
-Agentic Harness does not replace Codex, Aider, CodeWhale, OpenCode, or your
-shell scripts. It wraps them in a deterministic goal loop with state,
-transcripts, artifacts, loop limits, and review gates.
-
-## Project Links
-
-- [Examples](examples/) include shell, coding-agent, the fix-failing-tests demo, local LLM, tmux, GitHub Actions, and real-world recipe examples.
-- [Release checklist](docs/RELEASE_CHECKLIST.md) documents the v0.6.29 release checks.
-- [GUI deployment guide](docs/GUI_DEPLOYMENT.md) provides a portable service template.
-- [Codex `/goal` parity contract](docs/CODEX_GOAL_PARITY.md) documents autonomous continuation, completion, recovery, and sidecar boundaries.
-- [Autonomy audit](docs/AUTONOMY_AUDIT_2026-07-10.md) records findings, fixes, verification evidence, and residual limits.
-- [PyPI trusted publishing](docs/PYPI_TRUSTED_PUBLISHING.md) documents the active tokenless workflow and its verified release path.
-- [Repo artwork](docs/assets/) includes a social preview banner and square icon.
-- [Support the project](https://buymeacoffee.com/moortekweb3) via Buy Me a Coffee.
-- [Attraction plan](ATTRACTION_PLAN.md) captures public project positioning and follow-up ideas.
-- [CI workflow](.github/workflows/ci.yml) runs tests, ruff, mypy, compile smoke checks, package builds, wheel installs, and CLI smoke checks on Linux, Windows, and macOS.
-
-## Release Smoke
-
-Before tagging a release, run:
-
-```bash
-python -m pip install -e ".[test]"
-python -m pytest tests/ -q
-python -m ruff check
-python -m mypy agentic_harness
-python -m compileall agentic_harness
-python -m agentic_harness.cli release-smoke
-```
-
-`release-smoke` builds the wheel and sdist, installs each into a fresh virtual
-environment, runs `twine check` on the distributions, verifies direct recipe
-commands, runs the packaged demo, checks the transcript/report artifacts, and
-writes `SHA256SUMS` next to the verified release artifacts.
-
-## Why This Exists
-
-Most agent tooling lands in one of two places:
-
-- Frameworks that are flexible but abstract enough that you still need to build the operational loop yourself.
-- Internal scripts that work on one machine, with one naming scheme, one set of paths, and one operator.
-
-Agentic Harness is the middle ground: a small state machine, adapter interface, artifact store, CLI, and deterministic review contract. It is meant for developers who already have useful local tools and want a safer way to run them as repeatable goals.
-
-## How It Works
+## How Completion Works
 
 ```text
-goal text
+objective
    |
    v
-pending -> planning -> in_progress -> review -> done
-                         |             |
-                         v             v
-                       failed <----- failed
+plan -> act -> record progress -> evaluate -> repair if needed
+                                      |
+                                      v
+                           independent verification
+                                      |
+                         pass --------+-------- fail
+                           |                     |
+                           v                     +--> continue or block
+                     accepted done
 ```
 
-```text
-CLI ──> Supervisor ──> Worker adapter ──> local tool / tmux / CI / LLM
-          |
-          ├── state.json
-          ├── markdown reports
-          ├── deterministic review result
-          └── loop guard
+The original objective remains attached to the goal across cycles and recovery.
+The worker maintains a plan, requirement audit, current subgoal, and checkpoint.
+Tool use produces durable redacted events. A completion claim is accepted only
+when every requirement has evidence and at least one configured deterministic
+review criterion passes.
+
+Limits on cycles, elapsed time, model tokens, provider calls, and tool calls are
+resource budgets, not success conditions. Exhausting a budget produces a
+blocked or failed result; it never converts unfinished work into done.
+
+One workspace has one active goal. Use separate project roots when truly
+independent goals must run concurrently.
+
+## Execution Methods
+
+### Installed coding agents
+
+The GUI can configure Codex, OpenCode, Aider, or CodeWhale. From the CLI, create
+or replace a starter config explicitly:
+
+```bash
+agentic-harness init-agent codex
+agentic-harness init-agent opencode
+agentic-harness init-agent aider
+agentic-harness init-agent codewhale
 ```
 
-The core package has no systemd, Cloudflare, GPU, or server-specific assumptions. Runtime state lives in `.agentic-harness/` inside your project.
+The harness owns lifecycle, evidence, and independent review. The selected
+coding-agent process still owns its own credentials, tool permissions, and
+runtime policy. Safe-area labels are enforced by the embedded model agent; for
+an external coding-agent CLI they are operator guidance unless that CLI enforces
+the same boundary.
 
-## Features
+### Local and cloud models
 
-- Evidence-driven autonomous goals: durable plans and checkpoints continue until
-  deterministic completion or a repeated no-progress blocker.
-- Deterministic review gates: pass/fail criteria are code, not model vibes.
-- Artifact-first execution: every goal writes structured JSON state and review data.
-- Loop guard: auto-continue has a project-local circuit breaker persisted at
-  `.agentic-harness/guard.json`, so repeated CLI invocations share the same
-  safety window.
-- State lock and active-goal guard: mutating commands acquire
-  `.agentic-harness/state.lock`, and `start` refuses to overwrite an unfinished
-  active goal.
-- Adapter system: shell, coding-agent CLI, tmux, GitHub Actions, and OpenAI-compatible local LLM adapters are included.
-- Local-model friendly: any model served through an OpenAI-compatible chat
-  endpoint can be wrapped with deterministic review, including current
-  30B-40B local-model experiments such as Ornith 35B.
-- Project-local config: no hardcoded absolute paths.
-- Small public API: `Goal`, `Supervisor`, and `Worker`.
+The embedded model agent accepts an exact OpenAI-compatible chat-completions
+endpoint and an arbitrary model ID. This covers local servers such as vLLM,
+llama.cpp, Ollama-compatible gateways, and LM Studio when they expose that API,
+as well as compatible cloud gateways.
+
+Native Anthropic Messages and Google Gemini transports are not built into the
+embedded engine. Use an OpenAI-compatible gateway, an installed coding agent,
+or an optional external orchestrator if those native APIs are required.
+
+The GUI is the recommended way to create a model profile. This equivalent cloud
+profile uses an environment-variable reference and contains no API key:
+
+```yaml
+version: 1
+worker: model_agent
+llm:
+  endpoint: https://provider.example/v1/chat/completions
+  model: organization/model-name-or-any-provider-id
+  api_key_env: MODEL_PROVIDER_API_KEY
+  credential_source: env
+  remote_data_confirmed: true
+  max_steps: 8
+  timeout: 120
+review:
+  command:
+    - python
+    - -m
+    - pytest
+    - -q
+  command_timeout: 300
+autonomy:
+  max_cycles: 100
+  max_elapsed_seconds: 7200
+  max_total_tokens: 500000
+  max_provider_calls: 200
+  max_tool_calls: 1000
+```
+
+Set the key outside the project before running the CLI or GUI:
+
+```bash
+export MODEL_PROVIDER_API_KEY="use-your-secret-entry-path"
+agentic-harness do "complete and verify one bounded goal"
+```
+
+Do not put a literal API key in `.agentic-harness/config.yml`. Model-agent
+config rejects plaintext keys. A session key entered in the loopback GUI stays
+only in that server process, is not returned by the API, and must be re-entered
+after restart. Environment-variable references survive restarts without writing
+the secret to project state.
+
+Cloud profiles require HTTPS and `remote_data_confirmed: true`. That consent
+means selected file excerpts, tool observations, and prompts may leave the
+machine for the endpoint you chose. It is not inferred from the provider name.
+
+## Embedded Safety Boundary
+
+The built-in model agent intentionally exposes a narrow tool set:
+
+- list, read, and search workspace files;
+- create text files and replace previously read text inside allowed paths;
+- inspect Git status and diff;
+- run only the verification commands supplied for the goal; and
+- report a structured outcome with requirement evidence.
+
+It does not expose arbitrary shell, delete, package-install, service-control, or
+network tools. Writes are contained to the workspace, protect repository and
+credential paths, reject symlink escapes, require a current file hash before
+replacement, and protect pre-existing dirty files unless they were explicitly
+placed in scope. Configured checks run in a minimal environment without provider
+keys or other unrelated process secrets. Provider redirects, URL credentials, URL query credentials, and
+oversized responses are rejected.
+
+Transcripts and task events are redacted, written atomically, and stored with
+owner-only permissions. Redaction is defense in depth, not permission to place
+secrets in prompts or source files.
+
+External coding-agent, shell, tmux, GitHub Actions, and optional orchestration
+adapters can have broader authority. Their tool policy is not silently upgraded
+to the embedded agent's enforcement; review their configuration before use.
+
+## GUI Operation and Network Safety
+
+The GUI binds to loopback and asks the OS for a free port by default. Use the
+exact URL printed at startup:
+
+```bash
+agentic-harness-gui --project-dir /path/to/project --no-open
+```
+
+Choose a stable loopback port when a service or private reverse proxy needs one:
+
+```bash
+agentic-harness-gui --project-dir /path/to/project --port 8765 --no-open
+```
+
+Keep loopback as the default. A non-loopback bind is refused unless
+`AGENTIC_HARNESS_GUI_TOKEN` is set. Authenticated clients send that value in the
+`Authorization: Bearer ...` header; query-string tokens are not supported. If a
+reverse proxy uses another hostname, add only that expected hostname to
+`AGENTIC_HARNESS_GUI_ALLOWED_HOSTS` and preserve the original `Host` header.
+
+See [GUI deployment](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_DEPLOYMENT.md) for the portable systemd and private
+network pattern.
+
+## Recovery and Evidence
+
+Project configuration lives at `.agentic-harness/config.yml`. Goal state,
+redacted events, transcripts, reports, and verification evidence live below the
+same `.agentic-harness/` directory.
+
+After a failed or blocked goal, inspect `agentic-harness report` before deciding
+what to do next. Use `agentic-harness restart` to retry that same failed goal
+while preserving its evidence. Start a fresh goal only when the objective is
+intentionally separate.
+
+GUI stop is cooperative: the current bounded tool step finishes, then the task
+is recorded as stopped. A late worker result cannot be accepted as done after
+cancellation. Session-only API keys are deliberately absent after a GUI process
+restart and must be entered again.
+
+## Optional Turnstone Integration
+
+[Turnstone](https://github.com/turnstonelabs/turnstone) is a separate,
+self-hosted orchestration framework. It is not bundled, imported, or installed
+by `local-agentic-harness`, and the default embedded GUI does not need it.
+
+Operators who already run Turnstone may place an operator-maintained
+Turnstone-compatible wrapper behind the explicit `local-goal` backend:
+
+```bash
+export AGENTIC_HARNESS_LOCAL_GOAL=/absolute/path/to/compatible-wrapper
+agentic-harness-gui --backend local-goal --project-dir /path/to/project --no-open
+```
+
+That path uses a narrow command contract and is opt-in. A direct Turnstone
+REST/SDK adapter is not part of this release. See
+[Turnstone integration](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/TURNSTONE_INTEGRATION.md) for the exact boundary,
+capability preflight, lifecycle expectations, and private-deployment note.
+
+## Other Adapters
+
+The shared engine also supports shell, tmux, GitHub Actions, the legacy
+single-response local LLM adapter, and custom Python workers. See
+[examples](https://github.com/moortekweb-art/agentic-harness/tree/main/examples) for project-local configurations and safety notes.
+
+The small public API remains available:
+
+```python
+from agentic_harness import Goal, Supervisor, Worker
+```
 
 ## Installation
 
-Install as a CLI with pipx:
-
-```bash
-pipx install git+https://github.com/moortekweb-art/agentic-harness.git
-```
-
-Install the released distribution from PyPI with:
+Install the released distribution from PyPI:
 
 ```bash
 pipx install local-agentic-harness
 ```
 
-The Python distribution name is `local-agentic-harness` so it can be reserved
-on PyPI without colliding with the unrelated existing `agentic-harness` package.
-The installed CLI command remains `agentic-harness`.
+The distribution name avoids a collision with the unrelated
+`agentic-harness` package on PyPI. The installed CLI command remains `agentic-harness`.
+The same installation also provides `agentic-harness-gui`.
+
+Install the current GitHub source with:
+
+```bash
+pipx install git+https://github.com/moortekweb-art/agentic-harness.git
+```
 
 For development:
 
@@ -350,261 +360,51 @@ python -m pip install -e ".[test]"
 python -m pytest tests/ -q
 ```
 
-On Ubuntu or other Debian-family Linux systems, install Python 3.11+ and
-`pipx` from your package manager first if they are not already present. The v1
-GUI ships inside the Python wheel/sdist as package data, so no frontend build
-step is required.
+The GUI frontend ships as packaged static assets in the wheel and sdist. No
+Node, Electron, Tauri, or frontend build step is required to run it.
 
-## Usage Examples
+## Release Verification
 
-See [examples/](examples/) for complete project-local examples with READMEs, safety notes, and expected output.
-For the critique-driven demo, see
-[examples/fix-failing-tests-demo](examples/fix-failing-tests-demo/).
-
-### Shell Worker
-
-`.agentic-harness/config.yml`
-
-```yaml
-version: 1
-worker: shell
-shell_command:
-  - python
-  - -c
-  - "import os; print('goal:', os.environ['AGENTIC_HARNESS_OBJECTIVE'])"
-```
+Before tagging a release:
 
 ```bash
-agentic-harness start "summarize open TODOs"
-agentic-harness continue
-agentic-harness review
-agentic-harness status
+python -m pip install -e ".[test]"
+python -m pytest tests/ -q
+python -m ruff check
+python -m mypy agentic_harness
+python -m compileall agentic_harness
+python -m agentic_harness.cli release-smoke
 ```
 
-For machine-readable output:
+`release-smoke` builds and checks a wheel and sdist, installs each into a fresh
+virtual environment, verifies both entry points and packaged assets, runs a
+goal/report smoke test, and writes `SHA256SUMS` beside the artifacts.
 
-```bash
-agentic-harness status --format json
-```
+## Documentation
 
-### Local LLM Worker
-
-```python
-from agentic_harness import Supervisor
-from agentic_harness.adapters import LocalLLMAdapter
-
-worker = LocalLLMAdapter(
-    endpoint="http://127.0.0.1:4000/v1/chat/completions",
-    model="local-model",
-)
-
-supervisor = Supervisor(project_dir=".", worker=worker)
-supervisor.start("draft release notes for v0.6.15")
-supervisor.continue_goal()
-supervisor.review()
-```
-
-## Adapters
-
-Adapters implement one method: `run(goal) -> WorkerResult`.
-
-```python
-from agentic_harness.core.worker import WorkerResult
-
-class MyWorker:
-    def run(self, goal):
-        path = f".agentic-harness/runs/{goal.id}/output.txt"
-        # call your tool here
-        return WorkerResult(success=True, summary="done", artifacts=[path])
-```
-
-Then wire it into the supervisor:
-
-```python
-from agentic_harness import Supervisor
-
-supervisor = Supervisor(project_dir=".", worker=MyWorker())
-```
-
-## Configuration
-
-`agentic-harness init` creates `.agentic-harness/config.yml`. When Codex,
-CodeWhale, OpenCode, or Aider is available on `PATH`, bare `init` selects that
-backend automatically.
-
-```bash
-agentic-harness init
-agentic-harness init-agent shell
-agentic-harness init-agent codex
-```
-
-If no supported coding-agent backend is available, bare `init` creates a safe
-placeholder config. The `init <tool>` variant and `init-agent <tool>` variants
-write a pre-configured template for the named backend.
-
-After a failed goal, run `agentic-harness report` before deciding what to do
-next so you can inspect the recorded evidence. Use `agentic-harness restart`
-to retry that same failed goal while preserving its evidence; start a fresh
-goal only for intentionally separate work.
-
-```yaml
-version: 1
-worker: noop
-```
-
-`noop` is a safe placeholder. It does not pass review by default because no real
-worker ran. For a demo-only path, opt in explicitly:
-
-```yaml
-version: 1
-worker: noop
-allow_noop_success: true
-```
-
-Shell worker configuration:
-
-```yaml
-version: 1
-worker:
-  type: shell
-  shell_command:
-    - make
-    - agent-goal
-```
-
-The shell adapter exposes:
-
-- `AGENTIC_HARNESS_GOAL_ID`
-- `AGENTIC_HARNESS_OBJECTIVE`
-
-Coding-agent worker configuration:
-
-```yaml
-version: 1
-worker:
-  type: coding_agent
-  coding_agent_command:
-    - codex
-    - exec
-    - --skip-git-repo-check
-    - "{objective}"
-  coding_agent_transcript: .agentic-harness/runs/{goal_id}/coding-agent.log
-review:
-  command:
-    - python
-    - -m
-    - pytest
-    - tests/
-    - -q
-```
-
-Tmux worker configuration:
-
-```yaml
-version: 1
-worker: tmux
-tmux_command: "python worker.py --goal {goal_id}"
-tmux_session_prefix: agentic-harness
-```
-
-Local LLM worker configuration:
-
-```yaml
-version: 1
-worker: local_llm
-llm_endpoint: http://127.0.0.1:4000/v1/chat/completions
-llm_model: local-model
-```
-
-GitHub Actions worker configuration:
-
-```yaml
-version: 1
-worker: github_actions
-github_owner: moortekweb-art
-github_repo: agentic-harness
-github_workflow_id: ci.yml
-github_token: token-from-your-secret-store
-github_wait: true
-github_api_version: 2026-03-10
-```
-
-Configuration is intentionally small and strict: unsupported schema versions,
-unknown keys, unsupported workers, malformed values, and workers without their
-required settings are rejected instead of silently ignored. Config files are
-parsed with PyYAML, so flat keys and grouped sections are both supported.
-
-## Review Helpers
-
-The core review module includes small deterministic criteria factories:
-
-```python
-from agentic_harness.core import (
-    DeterministicReviewer,
-    artifact_exists,
-    command_passes,
-    file_changed,
-    git_clean,
-)
-
-reviewer = DeterministicReviewer([
-    artifact_exists(".", ".agentic-harness/runs/example/report.md"),
-    command_passes(["python", "-m", "pytest", "tests/", "-q"]),
-    file_changed(".", "CHANGELOG.md"),
-    git_clean("."),
-])
-```
-
-You can also configure common review gates in `.agentic-harness/config.yml`:
-
-```yaml
-version: 1
-worker:
-  type: shell
-  shell_command:
-    - make
-    - agent-goal
-review:
-  command:
-    - python
-    - -m
-    - pytest
-    - tests/
-    - -q
-  git_clean: true
-```
-
-`GitHubActionsAdapter` dispatches workflows by default. Set `github_wait: true`
-or `wait_for_completion=True` to wait for the exact workflow run returned by
-GitHub's modern workflow dispatch API. Older GitHub API responses that do not
-return a run URL fall back to polling workflow_dispatch runs created after the
-dispatch request.
-
-## Public API
-
-```python
-from agentic_harness import Goal, Supervisor, Worker
-```
+- [GUI architecture](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_ARCHITECTURE.md)
+- [GUI design](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_DESIGN.md)
+- [GUI deployment](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_DEPLOYMENT.md)
+- [Autonomous goal contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/CODEX_GOAL_PARITY.md)
+- [Turnstone integration boundary](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/TURNSTONE_INTEGRATION.md)
+- [Release checklist](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/RELEASE_CHECKLIST.md)
+- [PyPI trusted publishing](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/PYPI_TRUSTED_PUBLISHING.md)
+- [Examples](https://github.com/moortekweb-art/agentic-harness/tree/main/examples)
 
 ## Contributing
 
-Issues and pull requests are welcome. Good first contributions:
-
-- Add adapter examples for common local coding agents.
-- Improve the deterministic review helpers.
-- Improve examples for common local workflows.
-- Write docs for running the harness in a small team.
-
-Keep the core small. If a feature assumes a particular server, model provider, or operator workflow, it probably belongs in an adapter or example.
+Issues and pull requests are welcome. Keep the public core portable and
+provider-neutral. Machine-specific services, model names, credentials, and
+operator workflows belong in adapters or private deployment configuration, not
+in default product behavior.
 
 ## License
 
-MIT. Copyright (c) 2026 Michael / Moortekweb. See [LICENSE](LICENSE) and
-[AUTHORS.md](AUTHORS.md).
+MIT. Copyright (c) 2026 Michael / Moortekweb. See
+[LICENSE](https://github.com/moortekweb-art/agentic-harness/blob/main/LICENSE) and
+[AUTHORS.md](https://github.com/moortekweb-art/agentic-harness/blob/main/AUTHORS.md).
 
 ## Support
 
-If Agentic Harness helps your local AI workflow, you can support the project
-here:
-
-https://buymeacoffee.com/moortekweb3
+If Agentic Harness helps your local AI workflow, you can support the project at
+[Buy Me a Coffee](https://buymeacoffee.com/moortekweb3).

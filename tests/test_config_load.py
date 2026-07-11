@@ -572,6 +572,33 @@ def test_write_tool_config_opencode(tmp_path) -> None:
     assert "opencode" in config.coding_agent_command
 
 
+def test_write_tool_config_detects_node_review_command(tmp_path) -> None:
+    (tmp_path / "package.json").write_text(
+        '{"scripts":{"test":"vitest run"}}',
+        encoding="utf-8",
+    )
+
+    write_tool_config(tmp_path, tool="codex")
+
+    assert load_config(tmp_path).review_command == ["npm", "test"]
+
+
+def test_write_tool_config_detects_rust_review_command(tmp_path) -> None:
+    (tmp_path / "Cargo.toml").write_text("[package]\nname='demo'\n", encoding="utf-8")
+
+    write_tool_config(tmp_path, tool="aider")
+
+    assert load_config(tmp_path).review_command == ["cargo", "test"]
+
+
+def test_write_tool_config_leaves_review_unconfigured_when_project_has_no_known_check(
+    tmp_path,
+) -> None:
+    write_tool_config(tmp_path, tool="opencode")
+
+    assert load_config(tmp_path).review_command == []
+
+
 def test_write_tool_config_invalid_tool_raises(tmp_path) -> None:
     """write_tool_config with unknown tool must raise ConfigError."""
     with pytest.raises(ConfigError) as exc_info:

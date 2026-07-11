@@ -8,6 +8,7 @@ import importlib.util
 import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+import time
 from typing import Any, Iterator, cast
 
 from agentic_harness.core.errors import StateLockError
@@ -77,12 +78,13 @@ class ArtifactStore:
         goal_id = goal.id if isinstance(goal, Goal) else goal
         return self.runs_dir / goal_id
 
-    def write_goal(self, goal: Goal) -> Path:
+    def write_goal(self, goal: Goal, *, make_current: bool = True) -> Path:
         run_dir = self.goal_dir(goal)
         run_dir.mkdir(parents=True, exist_ok=True)
         state_path = run_dir / "state.json"
         self._write_json(state_path, goal.to_dict())
-        self._write_json(self.current_path, {"goal_id": goal.id})
+        if make_current:
+            self._write_json(self.current_path, {"goal_id": goal.id})
         return state_path
 
     def read_goal(self, goal_id: str) -> Goal:
@@ -102,6 +104,21 @@ class ArtifactStore:
         if not isinstance(goal_id, str):
             return None
         return self.read_goal(goal_id)
+
+    def list_goals(self) -> list[Goal]:
+        """Return readable durable goals, newest first."""
+
+        goals: list[Goal] = []
+        if not self.runs_dir.exists():
+            return goals
+        for state_path in self.runs_dir.glob("*/state.json"):
+            try:
+                goal = Goal.from_dict(self._read_json(state_path))
+            except (json.JSONDecodeError, OSError, ValueError):
+                continue
+            goals.append(goal)
+        goals.sort(key=lambda goal: (goal.updated_at, goal.created_at, goal.id), reverse=True)
+        return goals
 
     def write_report(self, goal: Goal, content: str, name: str = "report.md") -> Path:
         run_dir = self.goal_dir(goal)
@@ -154,18 +171,37 @@ class ArtifactStore:
         self._write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
     def _read_json(self, path: Path) -> dict[str, Any]:
-        return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
+        for attempt in range(3):
+            try:
+                content = path.read_text(encoding="utf-8")
+                return cast(dict[str, Any], json.loads(content))
+            except (FileNotFoundError, PermissionError):
+                if attempt == 2:
+                    raise
+                time.sleep(0.01)
+        raise AssertionError("unreachable")
 
     def _write_text(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp: Path | None = None
         try:
             with NamedTemporaryFile(
-                "w", encoding="utf-8", dir=str(path.parent), delete=False
+                "w",
+                encoding="utf-8",
+                newline="\n",
+                dir=str(path.parent),
+                delete=False,
             ) as handle:
                 handle.write(redact_secrets(content))
                 tmp = Path(handle.name)
-            tmp.replace(path)
+            for attempt in range(5):
+                try:
+                    tmp.replace(path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.01 * (2**attempt))
         except Exception:
             if tmp is not None and tmp.exists():
                 try:

@@ -15,10 +15,18 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from agentic_harness.core.local_goal_bridge import CommandResult, LocalGoalBridge
 from agentic_harness.gui import server as gui_server_module
 from agentic_harness.gui.api import modes_payload, start_task, task_from_command_result
-from agentic_harness.gui.server import GuiPortUnavailable, create_gui_server, make_handler
+from agentic_harness.gui.server import (
+    GuiPortUnavailable,
+    GuiSecurityError,
+    create_gui_server,
+    make_handler,
+)
+from agentic_harness.gui.backend import EmbeddedExecutionBackend
 
 
 MAX_REQUEST_BYTES = 1_048_576
@@ -32,9 +40,9 @@ def test_gui_modes_use_human_labels() -> None:
 
     assert labels == [
         "Use this computer",
-        "Let GLM guide the plan",
-        "Let GLM carry a long task",
-        "Try experimental GLM",
+        "Plan, then execute",
+        "Use a long-running orchestrator",
+        "Try an experimental executor",
     ]
 
 
@@ -47,7 +55,7 @@ def test_default_gui_surface_has_no_manual_babysitting_control() -> None:
     assert "Move forward" not in html
     assert "Ctrl M" not in html
     assert "watchButton.addEventListener" not in javascript
-    assert 'id="startButton" title="Start the task" disabled' in html
+    assert 'id="startButton" title="Start this verified goal" disabled' in html
     assert 'id="continueButton" hidden' in html
     assert 'id="acceptButton" hidden' in html
 
@@ -77,10 +85,10 @@ def test_gui_uses_local_custom_icons_across_primary_controls() -> None:
     assert 'id="icon-rocket"' in html
     assert 'id="icon-flask"' in html
     assert html.count('href="#icon-') >= 12
-    assert 'local: "zap"' in javascript
-    assert 'guided: "map"' in javascript
-    assert 'cloud: "rocket"' in javascript
-    assert 'experimental: "flask"' in javascript
+    assert 'ready: "circle-check"' in javascript
+    assert 'working: "loader-circle"' in javascript
+    assert 'blocked: "octagon-alert"' in javascript
+    assert 'id="setupButton"' in html
     assert ".mode-card .mode-card-title" in css
     assert ".mode-card .mode-card-note" in css
 
@@ -105,15 +113,15 @@ def test_gui_status_encodings_are_labeled_and_idle_progress_is_hidden() -> None:
     javascript = (static_root / "app.js").read_text(encoding="utf-8")
 
     assert 'id="statusIndicator"' in html
-    assert 'aria-label="Supervisor is running"' in html
-    assert 'title="Supervisor is running"' in html
+    assert 'aria-label="Ready"' in html
+    assert 'title="Ready"' in html
     assert 'id="progressGroup" class="progress-group" hidden' in html
     assert 'role="progressbar"' in html
     assert 'id="progressValue"' in html
-    assert 'class="loop-legend"' in html
-    assert "Current step" in html
-    assert "els.progressGroup.hidden = progress <= 0" in javascript
-    assert 'const statusDescription = status === "ready" ? "Supervisor is running"' in javascript
+    assert 'id="currentSubgoal"' in html
+    assert 'id="checkpoint"' in html
+    assert "progress.determinate" in javascript
+    assert "Number.isFinite(percent)" in javascript
     assert "[hidden] {" in css
     assert "display: none !important" in css
 
@@ -125,12 +133,12 @@ def test_gui_microcopy_and_footer_use_distinct_status_metadata() -> None:
 
     assert "Check now" not in html
     assert "Refresh status" not in html
-    assert "Run checks" in html
+    assert ">Refresh<" in html
     assert 'class="status-footer"' in html
     assert 'id="statusUpdated"' in html
     assert 'id="statusContext"' not in html
-    assert "Last checked" in html
-    assert "formatLastCheckedAt" in javascript
+    assert "No progress recorded yet" in html
+    assert "Last meaningful update" in javascript
     assert "renderStatusFooter" in javascript
 
 
@@ -511,7 +519,19 @@ def test_gui_console_entrypoint_forwards_launch_options_without_opening(monkeypa
 
     assert (
         gui_cli.main(
-            ["--host", "0.0.0.0", "--port", "8765", "--doc-root", "~/docs", "--no-open"]
+            [
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8765",
+                "--project-dir",
+                "~/work",
+                "--backend",
+                "local-goal",
+                "--doc-root",
+                "~/docs",
+                "--no-open",
+            ]
         )
         == 0
     )
@@ -520,6 +540,8 @@ def test_gui_console_entrypoint_forwards_launch_options_without_opening(monkeypa
             "host": "0.0.0.0",
             "port": 8765,
             "doc_root": home / "docs",
+            "project_dir": home / "work",
+            "backend": "local-goal",
             "open_browser": False,
             "allow_port_fallback": False,
         }
@@ -537,8 +559,30 @@ def test_gui_console_entrypoint_help_documents_server_options(capsys) -> None:
         raise AssertionError("GUI help should exit successfully")
 
     output = capsys.readouterr().out
-    for option in ("--host", "--port", "--doc-root", "--no-open"):
+    for option in (
+        "--host",
+        "--port",
+        "--project-dir",
+        "--backend",
+        "--doc-root",
+        "--no-open",
+    ):
         assert option in output
+
+
+def test_gui_console_defaults_to_portable_embedded_backend(monkeypatch, tmp_path) -> None:
+    from agentic_harness.gui import cli as gui_cli
+
+    calls: list[dict[str, object]] = []
+
+    def fake_serve_gui(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(gui_server_module, "serve_gui", fake_serve_gui)
+
+    assert gui_cli.main(["--project-dir", str(tmp_path), "--no-open"]) == 0
+    assert calls[0]["backend"] == "embedded"
+    assert calls[0]["project_dir"] == tmp_path
 
 
 def test_gui_console_entrypoint_is_packaged_by_local_distribution() -> None:
@@ -558,7 +602,7 @@ def test_gui_token_mode_keeps_static_shell_public_and_gates_api(monkeypatch) -> 
         styles = get_text(base_url, "/static/styles.css")
         unauthorized = get_http_error(base_url, "/api/health")
         health = get_json(base_url, "/api/health", token="test-token")
-        query_health = get_json(base_url, "/api/health?token=test-token")
+        query_health = get_http_error(base_url, "/api/health?token=test-token")
         unknown_unauthorized = get_http_error(base_url, "/api/not-real")
         unknown_authenticated = get_http_error(base_url, "/api/not-real", token="test-token")
 
@@ -569,14 +613,15 @@ def test_gui_token_mode_keeps_static_shell_public_and_gates_api(monkeypatch) -> 
     assert unauthorized.code == 401
     assert unauthorized.payload == {"ok": False, "error": "unauthorized"}
     assert health["ok"] is True
-    assert query_health["ok"] is True
+    assert query_health.code == 401
+    assert query_health.payload == {"ok": False, "error": "unauthorized"}
     assert unknown_unauthorized.code == 401
     assert unknown_unauthorized.payload == {"ok": False, "error": "unauthorized"}
     assert unknown_authenticated.code == 404
     assert unknown_authenticated.payload == {"ok": False, "error": "not found"}
 
 
-def test_gui_token_mode_websocket_accepts_query_token(monkeypatch) -> None:
+def test_gui_token_mode_websocket_rejects_query_token(monkeypatch) -> None:
     monkeypatch.setenv(GUI_TOKEN_ENV, "test-token")
 
     with gui_server(FakeBridge()) as base_url:
@@ -594,10 +639,77 @@ def test_gui_token_mode_websocket_accepts_query_token(monkeypatch) -> None:
                 ).encode("ascii")
             )
             response = client.recv(4096)
-            response += client.recv(4096)
 
-    assert b"101 Switching Protocols" in response
-    assert b'"status": "working"' in response
+    assert b"401 Unauthorized" in response
+    assert b"101 Switching Protocols" not in response
+
+
+def test_gui_api_rejects_untrusted_host_header() -> None:
+    with gui_server(FakeBridge()) as base_url:
+        request = urllib.request.Request(base_url + "/api/health")
+        request.add_header("Host", "attacker.example")
+        try:
+            urllib.request.urlopen(request, timeout=3)
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403
+            payload = json.loads(exc.read().decode("utf-8"))
+        else:  # pragma: no cover
+            raise AssertionError("untrusted Host header should be rejected")
+
+    assert payload == {"ok": False, "error": "untrusted host"}
+
+
+def test_gui_responses_include_control_plane_security_headers() -> None:
+    with gui_server(FakeBridge()) as base_url:
+        with urllib.request.urlopen(base_url + "/api/health", timeout=3) as response:
+            headers = response.headers
+
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["X-Frame-Options"] == "DENY"
+    assert headers["Referrer-Policy"] == "no-referrer"
+    assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+    assert headers["Cache-Control"] == "no-store"
+
+
+def test_gui_refuses_non_loopback_binding_without_token(monkeypatch) -> None:
+    monkeypatch.delenv(GUI_TOKEN_ENV, raising=False)
+
+    with pytest.raises(GuiSecurityError, match="GUI_TOKEN"):
+        gui_server_module.serve_gui(
+            host="0.0.0.0",
+            port=0,
+            project_dir=".",
+            open_browser=False,
+        )
+
+
+def test_gui_rejects_session_key_on_connection_test_from_non_loopback_client(tmp_path) -> None:
+    handler = make_handler(EmbeddedExecutionBackend(tmp_path))
+    handler._client_is_loopback = lambda self: False  # type: ignore[attr-defined,method-assign]
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        result = post_error(
+            base_url,
+            "/api/setup/test",
+            json.dumps(
+                {
+                    "endpoint": "https://api.example.test/v1/chat/completions",
+                    "model": "chosen-model",
+                    "api_key": "must-not-be-forwarded",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert result.code == 400
+    assert "loopback" in str(result.payload["error"]).lower()
 
 
 def test_gui_frontend_plumbs_token_without_persisting_or_exporting_it() -> None:
@@ -611,7 +723,7 @@ def test_gui_frontend_plumbs_token_without_persisting_or_exporting_it() -> None:
     assert "Bearer" in app
     assert "new Headers" in app
     assert "new WebSocket" in app
-    assert "encodeURIComponent(token)" in app
+    assert "encodeURIComponent(token)" not in app
     assert "status === 401" in app
     assert "showTokenDialog" in app
     assert "retry" in app
@@ -621,14 +733,15 @@ def test_gui_frontend_plumbs_token_without_persisting_or_exporting_it() -> None:
     assert "response.status === 401 && retry" in app
     assert "localStorage.setItem(TOKEN" not in app
     assert "localStorage.getItem(TOKEN" not in app
-    assert "token:" not in app
+    assert "tokenQuery" not in app
 
 
-def test_gui_frontend_defaults_to_guided_mode() -> None:
+def test_gui_frontend_uses_one_verified_goal_without_model_named_modes() -> None:
     app = Path("agentic_harness/gui/static/app.js").read_text(encoding="utf-8")
 
-    assert 'mode: "guided"' in app
-    assert 'snapshot.mode || "guided"' in app
+    assert "mode:" not in app
+    assert 'objective: els.objective.value.trim()' in app
+    assert "allowed_actions" in app
 
 
 def test_gui_frontend_token_prompt_concurrent_race_regression() -> None:
@@ -807,7 +920,7 @@ def test_gui_server_post_task_workflow_routes() -> None:
     assert accepted["status"] == "done"
     assert stopped["status"] == "stopped"
     assert bridge.commands == [
-        ["enqueue", "--planner", "glm-5.2", "--executor", "opencode", "--executor-worker", "opencode-glm-build", "--goal", "GOAL_CONTENT"],
+        ["enqueue", "--planner", "planner", "--executor", "executor", "--executor-worker", "long-horizon", "--goal", "GOAL_CONTENT"],
         ["monitor", "--auto-accept", "--auto-continue", "--auto-dispatch", "--auto-commit-owned", "--json"],
         ["continue", "--feedback", "keep going"],
         ["accept"],
@@ -847,6 +960,16 @@ def test_gui_server_rejects_cross_origin_task_post() -> None:
     assert bridge.commands == []
 
 
+def test_gui_history_selection_survives_live_updates_and_previews_its_own_evidence() -> None:
+    app = Path("agentic_harness/gui/static/app.js").read_text(encoding="utf-8")
+
+    assert "viewingHistoryId" in app
+    assert "goal_id" in app
+    assert "if (force || !state.viewingHistoryId)" in app
+    assert "state.viewingHistoryId = task.id" in app
+    assert "state.viewingHistoryId = \"\"" in app
+
+
 def test_gui_server_rejects_non_json_task_post() -> None:
     bridge = FakeBridge()
     with gui_server(bridge) as base_url:
@@ -882,7 +1005,8 @@ def test_gui_server_rejects_oversized_task_post() -> None:
             while chunk := client.recv(4096):
                 response += chunk
 
-    assert b"413 Request Entity Too Large" in response
+    status_line = response.partition(b"\r\n")[0]
+    assert status_line.split()[1] == b"413"
     assert b"request body too large" in response
     assert bridge.commands == []
 
@@ -1013,7 +1137,7 @@ class FakeBridge:
             checks=checks,
         )
         command = list(result.args[1:])
-        if command and command[-1].startswith("Mode 3A:"):
+        if command and command[-1].startswith("External long-horizon goal"):
             command[-1] = "GOAL_CONTENT"
         self.commands.append(command)
         return CommandResult(result.args, 0, "queued\n", "")
