@@ -1,0 +1,45 @@
+{
+  "arms": {
+    "baseline": {
+      "acceptance_precision": 0.333333,
+      "accepted": 18,
+      "caught_false_claim_rate": 0.0,
+      "caught_false_claims": 0,
+      "false_claim_cases": 12,
+      "false_success_rate": 1.0,
+      "false_successes": 12,
+      "mean_attempts": 1.0,
+      "mean_elapsed_seconds": 0.062563,
+      "recovered_tasks": 0,
+      "runs": 24,
+      "verified_accepts": 6,
+      "verifier_pass_rate": 0.25,
+      "verifier_passes": 6
+    },
+    "harness": {
+      "acceptance_precision": 1.0,
+      "accepted": 18,
+      "caught_false_claim_rate": 1.0,
+      "caught_false_claims": 12,
+      "false_claim_cases": 12,
+      "false_success_rate": 0.0,
+      "false_successes": 0,
+      "mean_attempts": 2.0,
+      "mean_elapsed_seconds": 0.148361,
+      "recovered_tasks": 12,
+      "runs": 24,
+      "verified_accepts": 18,
+      "verifier_pass_rate": 0.75,
+      "verifier_passes": 18
+    }
+  },
+  "disclaimer": "Controlled completion-gate efficacy evaluation using a scripted process; not real-model performance.",
+  "evaluation_type": "controlled_completion_gate_efficacy",
+  "pristine_arm_mismatches": 0,
+  "record_count": 48,
+  "repetitions": 1,
+  "schema": "agentic_harness.gate_evaluation_summary.v1",
+  "seed": 20260711,
+  "task_count": 24,
+  "token_metrics_available": false
+}
