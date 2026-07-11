@@ -4,8 +4,8 @@
     "evaluation/scripted_coding_agent.py"
   ],
   "evaluation_type": "controlled_completion_gate_efficacy",
-  "finished_at": "2026-07-11T18:21:02.586247Z",
-  "git_commit": "0d870ca19a7dd434bf77820e54aa15acae5a6200",
+  "finished_at": "2026-07-11T18:22:10.004452Z",
+  "git_commit": "ab4c048a20c0c6b3b72d4f0e46a760b36080e1ee",
   "git_dirty": false,
   "git_status_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "harness_version": "0.7.1",
@@ -21,12 +21,12 @@
     "agentic_harness/core/review.py": "e8fb79c75a03697157d7b7abd35fdceaded92287a5818b8124931ba534cf5227",
     "agentic_harness/core/supervisor.py": "92149de5e3f51d42d60b10acb0362f89719b26ace27022ea552e00300e1efb82",
     "evaluation/fixture_support.py": "f903e4b7ec08f953c1ff9dbd5ceacebd70ff0c18624b5cb6e3a60497c03237cb",
-    "evaluation/run_gate_benchmark.py": "231039247a7b9b9cc05ab0cc116055bdbebd3201fea022d8ff0820eb403fb53d",
+    "evaluation/run_gate_benchmark.py": "a2f83248bf49b03f72dd581b06003abebf2677afdfbda0df589d10d0272d9f25",
     "evaluation/scripted_coding_agent.py": "26b18f8a5467cdd2e9581e36ed6002e7afed13959237c8115c1782f25b51d357",
     "evaluation/tasks.json": "d226693b37f3c7b528942723ea0796902dd2fbd81d31865c0076173d9a301241",
     "evaluation/verify_fixture.py": "233678175369dc2e9ff1d341e4f8006244b65b43e556805fc3f988f1ac88752d"
   },
-  "started_at": "2026-07-11T18:20:57.793015Z",
+  "started_at": "2026-07-11T18:22:05.136882Z",
   "verifier_command": [
     "python",
     "evaluation/verify_fixture.py"
