@@ -80,7 +80,7 @@ multi-step wizard.
 - Plain-language task field.
 - Four visible mode cards.
 - Optional safe areas and expected checks.
-- Start, refresh, undo, and redo controls.
+- Start, Run checks, undo, and redo controls.
 - Readiness gate showing whether another task can begin.
 
 ### Active Work
