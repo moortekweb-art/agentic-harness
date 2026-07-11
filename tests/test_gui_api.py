@@ -476,7 +476,7 @@ def test_gui_server_get_api_routes_return_json() -> None:
         "contract": "agentic_harness.gui_setup.v1",
         "configured": True,
         "editable": False,
-        "workspace": "/tmp/docs",
+        "workspace": str(FakeBridge.doc_root),
         "worker": {
             "type": "local_goal",
             "label": "Existing local-goal runtime",

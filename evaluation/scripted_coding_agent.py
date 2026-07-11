@@ -49,7 +49,7 @@ def main() -> int:
         if behavior != "false_then_repair":
             raise ValueError(f"unsupported fixture behavior: {behavior}")
     content = task.get("expected") if should_complete else task.get("incorrect")
-    target.write_text(str(content or ""), encoding="utf-8")
+    target.write_text(str(content or ""), encoding="utf-8", newline="")
 
     task_id = str(task.get("id") or "fixture")
     outcome = {
