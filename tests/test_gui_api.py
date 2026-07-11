@@ -1005,7 +1005,8 @@ def test_gui_server_rejects_oversized_task_post() -> None:
             while chunk := client.recv(4096):
                 response += chunk
 
-    assert b"413 Request Entity Too Large" in response
+    status_line = response.partition(b"\r\n")[0]
+    assert status_line.split()[1] == b"413"
     assert b"request body too large" in response
     assert bridge.commands == []
 

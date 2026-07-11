@@ -850,6 +850,29 @@ def test_artifact_store_read_goal_raises_on_corrupted_state(tmp_path) -> None:
         store.read_goal("deadbeef")
 
 
+def test_artifact_store_retries_a_transient_state_read_error(tmp_path, monkeypatch) -> None:
+    from agentic_harness.core.artifacts import ArtifactStore
+
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    goal = Goal(objective="survive a concurrent atomic replacement")
+    state_path = store.write_goal(goal)
+    original_read_text = Path.read_text
+    attempts = 0
+
+    def flaky_read_text(path, *args, **kwargs):
+        nonlocal attempts
+        if path == state_path and attempts == 0:
+            attempts += 1
+            raise PermissionError("state file is being atomically replaced")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky_read_text)
+
+    assert store.read_goal(goal.id).id == goal.id
+    assert attempts == 1
+
+
 def test_artifact_store_repair_skips_corrupted_state_files(tmp_path) -> None:
     from agentic_harness.core.artifacts import ArtifactStore
 

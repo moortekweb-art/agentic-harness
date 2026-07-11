@@ -23,7 +23,8 @@ def test_shell_transcript_is_private_and_redacted(tmp_path: Path) -> None:
         os.umask(old_umask)
 
     transcript = tmp_path / result.artifacts[0]
-    assert transcript.stat().st_mode & 0o077 == 0
+    if os.name != "nt":
+        assert transcript.stat().st_mode & 0o077 == 0
     assert "very-secret-value" not in transcript.read_text(encoding="utf-8")
 
 
@@ -41,5 +42,6 @@ def test_coding_agent_transcript_is_private_and_redacted(tmp_path: Path) -> None
         os.umask(old_umask)
 
     transcript = tmp_path / result.artifacts[0]
-    assert transcript.stat().st_mode & 0o077 == 0
+    if os.name != "nt":
+        assert transcript.stat().st_mode & 0o077 == 0
     assert "very-secret-value" not in transcript.read_text(encoding="utf-8")

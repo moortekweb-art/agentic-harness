@@ -635,7 +635,9 @@ def test_git_changes_preserves_exact_newline_and_quote_paths(tmp_path) -> None:
         ["git", "config", "user.email", "test@example.test"], cwd=tmp_path, check=True
     )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
-    names = ['line\nbreak.txt', 'quote"name.txt']
+    names = ['quote"name.txt']
+    if os.name != "nt":
+        names.append("line\nbreak.txt")
     for name in names:
         (tmp_path / name).write_text("before\n", encoding="utf-8")
     subprocess.run(["git", "add", "--", *names], cwd=tmp_path, check=True)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import sys
 import threading
@@ -12,7 +13,30 @@ import pytest
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.adapters.model_agent import ProviderResponse
 from agentic_harness.core.factory import build_supervisor
-from agentic_harness.core.safety import goal_safety_metadata
+from agentic_harness.core.safety import format_command, goal_safety_metadata, split_command
+
+
+def test_windows_command_split_preserves_backslashes_and_removes_outer_quotes() -> None:
+    command = (
+        '"C:\\Program Files\\Python\\python.exe" -c '
+        '"from pathlib import Path; print(Path(\'result.txt\'))"'
+    )
+
+    assert split_command(command, windows=True) == [
+        "C:\\Program Files\\Python\\python.exe",
+        "-c",
+        "from pathlib import Path; print(Path('result.txt'))",
+    ]
+
+
+def test_windows_command_format_and_split_round_trip() -> None:
+    command = [
+        "C:\\Program Files\\Python\\python.exe",
+        "-c",
+        'print("verified")',
+    ]
+
+    assert split_command(format_command(command, windows=True), windows=True) == command
 
 
 def test_setup_detects_project_specific_check_without_assuming_pytest(tmp_path: Path) -> None:
@@ -60,7 +84,11 @@ def test_model_setup_keeps_entered_api_key_in_memory_only(tmp_path: Path) -> Non
     assert "top-secret-api-key" not in config_text
     assert "top-secret-api-key" not in serialized
     assert "llm_credential_source: session" in config_text
-    assert stat.S_IMODE((tmp_path / ".agentic-harness" / "config.yml").stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert (
+            stat.S_IMODE((tmp_path / ".agentic-harness" / "config.yml").stat().st_mode)
+            == 0o600
+        )
 
 
 def test_model_setup_refuses_preexisting_config_symlink(tmp_path: Path) -> None:

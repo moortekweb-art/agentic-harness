@@ -8,6 +8,7 @@ import importlib.util
 import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+import time
 from typing import Any, Iterator, cast
 
 from agentic_harness.core.errors import StateLockError
@@ -170,14 +171,26 @@ class ArtifactStore:
         self._write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
     def _read_json(self, path: Path) -> dict[str, Any]:
-        return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
+        for attempt in range(3):
+            try:
+                content = path.read_text(encoding="utf-8")
+                return cast(dict[str, Any], json.loads(content))
+            except (FileNotFoundError, PermissionError):
+                if attempt == 2:
+                    raise
+                time.sleep(0.01)
+        raise AssertionError("unreachable")
 
     def _write_text(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp: Path | None = None
         try:
             with NamedTemporaryFile(
-                "w", encoding="utf-8", dir=str(path.parent), delete=False
+                "w",
+                encoding="utf-8",
+                newline="\n",
+                dir=str(path.parent),
+                delete=False,
             ) as handle:
                 handle.write(redact_secrets(content))
                 tmp = Path(handle.name)

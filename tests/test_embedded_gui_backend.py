@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from agentic_harness.cli import write_goal_report
+from agentic_harness.core.artifacts import ArtifactStore
 from agentic_harness.core.autonomy import AutonomousRunner
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.core.factory import build_supervisor
@@ -421,6 +422,25 @@ def test_terminal_payload_waits_for_its_durable_report(tmp_path, monkeypatch) ->
     assert visible["status"] == "checking"
     assert visible["final_result"]["accepted"] is False
     assert all(row["name"] != "report.md" for row in visible["artifacts"])
+
+
+def test_terminal_report_hash_uses_the_persisted_file_bytes(tmp_path, monkeypatch) -> None:
+    _configure_scripted_agent(tmp_path)
+    original_write_report = ArtifactStore.write_report
+
+    def write_crlf_report(self, goal, content, name="report.md"):
+        path = original_write_report(self, goal, content, name)
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+        return path
+
+    monkeypatch.setattr(ArtifactStore, "write_report", write_crlf_report)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    backend.start({"objective": "Create a report with platform newlines"})
+    finished = _wait_for_terminal(backend)
+
+    assert finished["status"] == "done"
+    assert finished["final_result"]["accepted"] is True
 
 
 def test_terminal_report_is_refreshed_after_blocked_goal_recovers(tmp_path) -> None:

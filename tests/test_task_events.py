@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from agentic_harness.core.events import TaskEventStore
@@ -38,7 +39,8 @@ def test_task_events_are_ordered_private_and_sanitized(tmp_path: Path) -> None:
     ]
     paths = sorted(store.events_dir.glob("*.json"))
     assert [path.name for path in paths] == ["000001.json", "000002.json"]
-    assert all(path.stat().st_mode & 0o077 == 0 for path in paths)
+    if os.name != "nt":
+        assert all(path.stat().st_mode & 0o077 == 0 for path in paths)
 
 
 def test_task_event_store_rejects_path_traversal_goal_id(tmp_path: Path) -> None:

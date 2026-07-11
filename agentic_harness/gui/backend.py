@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shlex
 import stat
 from threading import Event, Lock, RLock, Thread
 from typing import Any
@@ -29,7 +28,7 @@ from agentic_harness.core.factory import autonomy_policy_from_config, build_supe
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.providers import ProviderProfile, resolve_api_key
 from agentic_harness.core.redaction import redact_secrets
-from agentic_harness.core.safety import goal_safety_metadata
+from agentic_harness.core.safety import format_command, goal_safety_metadata, split_command
 from agentic_harness.core.secure_io import write_private_text
 from agentic_harness.core.workspace import workspace_change_summary
 
@@ -203,7 +202,7 @@ class EmbeddedExecutionBackend:
         if config is not None:
             result["worker"] = self._public_worker()
             result["credential"] = self._credential_status(config)
-            result["verification_command"] = " ".join(config.review_command)
+            result["verification_command"] = format_command(config.review_command)
             result["limits"] = {
                 "max_cycles": config.goal_max_cycles,
                 "max_elapsed_seconds": config.goal_max_elapsed_seconds,
@@ -228,7 +227,7 @@ class EmbeddedExecutionBackend:
         verification_text = str(
             body.get("verification_command") or _detect_check(self.project_dir)
         ).strip()
-        verification = shlex.split(verification_text) if verification_text else []
+        verification = split_command(verification_text) if verification_text else []
         if not verification:
             raise ValueError("Choose an independent verification command before saving setup.")
         if execution in {"local_model", "cloud_model"}:
@@ -853,16 +852,18 @@ class EmbeddedExecutionBackend:
                     and _legacy_report_matches(current, existing_content)
                 ):
                     current.metadata["terminal_report_state_sha256"] = desired_state
+                    if existing_report is None:
+                        return current
                     current.metadata["terminal_report_content_sha256"] = hashlib.sha256(
-                        existing_content.encode("utf-8")
+                        existing_report.read_bytes()
                     ).hexdigest()
                     self.store.write_goal(current, make_current=is_current)
                     return current
                 content = _terminal_report_content(self.project_dir, current)
-                self.store.write_report(current, content)
+                report_path = self.store.write_report(current, content)
                 current.metadata["terminal_report_state_sha256"] = desired_state
                 current.metadata["terminal_report_content_sha256"] = hashlib.sha256(
-                    redact_secrets(content).encode("utf-8")
+                    report_path.read_bytes()
                 ).hexdigest()
                 self.store.write_goal(current, make_current=is_current)
                 return current
@@ -992,7 +993,7 @@ def _checks(value: Any) -> list[list[str]]:
         text = str(item).strip()
         if not text:
             continue
-        command = shlex.split(text)
+        command = split_command(text)
         if not command:
             continue
         commands.append(command)
@@ -1360,7 +1361,7 @@ def _review_commands_from_goal(goal: Goal) -> list[list[str]]:
 
 
 def _detect_check(project_dir: Path) -> str:
-    return " ".join(detect_review_command(project_dir))
+    return format_command(detect_review_command(project_dir))
 
 
 def _coding_agent_command(agent: str) -> list[str]:

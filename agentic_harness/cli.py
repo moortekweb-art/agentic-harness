@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -45,7 +44,7 @@ from agentic_harness.gui.server import run_server_from_args
 from agentic_harness.core.recipes import Recipe, explain_recipe, list_recipes, load_recipe
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.supervisor import Supervisor
-from agentic_harness.core.safety import goal_safety_metadata
+from agentic_harness.core.safety import goal_safety_metadata, split_command
 from agentic_harness.core.workspace import format_workspace_change_lines, workspace_change_summary
 
 
@@ -465,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 config = load_config(project_dir)
                 review_commands = [
-                    shlex.split(value) for value in args.check if value.strip()
+                    split_command(value) for value in args.check if value.strip()
                 ]
                 if not review_commands and config.review_command:
                     review_commands = [config.review_command]
@@ -710,7 +709,7 @@ def run_easy_do_command(args: argparse.Namespace, project_dir: Path) -> int:
     try:
         initialized = ensure_execution_config(project_dir)
         config = load_config(project_dir)
-        review_commands = [shlex.split(value) for value in args.check if value.strip()]
+        review_commands = [split_command(value) for value in args.check if value.strip()]
         if not review_commands and config.review_command:
             review_commands = [config.review_command]
         if not review_commands:
