@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -29,6 +31,38 @@ def test_release_identity_matches_exact_package_tag_and_commit(tmp_path: Path) -
     _git(tmp_path, "tag", "v0.7.0")
 
     assert validate_release_identity(tmp_path, "v0.7.0")
+
+
+def test_release_identity_script_runs_without_site_packages(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "example"\nversion = "0.7.0"\n',
+        encoding="utf-8",
+    )
+    _git(tmp_path, "init", "-b", "main")
+    _git(tmp_path, "config", "user.name", "Release Test")
+    _git(tmp_path, "config", "user.email", "release@example.invalid")
+    _git(tmp_path, "add", "pyproject.toml")
+    _git(tmp_path, "commit", "-m", "release")
+    _git(tmp_path, "tag", "v0.7.0")
+    release_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    script = Path(__file__).resolve().parents[1] / "agentic_harness/core/release_validation.py"
+    env = {
+        **os.environ,
+        "RELEASE_TAG": "v0.7.0",
+        "RELEASE_SHA": release_sha,
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-S", str(script), "identity", "--project-dir", str(tmp_path)],
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_release_identity_rejects_untrusted_tag_text_before_git_lookup(tmp_path: Path) -> None:

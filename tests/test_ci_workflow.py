@@ -120,8 +120,27 @@ def test_active_publish_workflow_gates_oidc_on_exact_verified_release_commit() -
     text = (REPO_ROOT / ".github/workflows/publish.yml").read_text(encoding="utf-8")
     workflow = yaml.safe_load(text)
 
-    assert "workflow_dispatch" not in workflow["on"]
+    recovery_input = workflow["on"]["workflow_dispatch"]["inputs"]["release_tag"]
+    assert recovery_input["required"] is True
+    assert recovery_input["type"] == "string"
+    assert "default" not in recovery_input
+    recovery_sha_input = workflow["on"]["workflow_dispatch"]["inputs"]["release_sha"]
+    assert recovery_sha_input["required"] is True
+    assert recovery_sha_input["type"] == "string"
+    assert "default" not in recovery_sha_input
+    assert workflow["env"]["RELEASE_TAG"] == "${{ inputs.release_tag || github.ref_name }}"
+    assert workflow["env"]["RELEASE_SHA"] == "${{ inputs.release_sha || github.sha }}"
     assert "validate" in workflow["jobs"]
+    source_gate = next(
+        step
+        for step in workflow["jobs"]["validate"]["steps"]
+        if step.get("name") == "Require protected default-branch recovery source"
+    )
+    assert source_gate["if"] == "github.event_name == 'workflow_dispatch'"
+    assert source_gate["env"]["DEFAULT_BRANCH"] == (
+        "${{ github.event.repository.default_branch }}"
+    )
+    assert '"$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH"' in source_gate["run"]
     publish = workflow["jobs"]["publish"]
     assert set(publish["needs"]) == {"validate", "stage_release"}
     assert publish["permissions"]["id-token"] == "write"
@@ -129,9 +148,24 @@ def test_active_publish_workflow_gates_oidc_on_exact_verified_release_commit() -
     assert "Verify release tag and package version" in text
     assert "Verify exact release commit passed CI" in text
     assert "Verify release commit is on the default branch" in text
-    assert "agentic_harness.core.release_validation identity" in text
-    assert "agentic_harness.core.release_validation ancestry" in text
-    assert "agentic_harness.core.release_validation ci" in text
+    validation_script = "python agentic_harness/core/release_validation.py"
+    assert f"{validation_script} identity" in text
+    assert f"{validation_script} ancestry" in text
+    assert f"{validation_script} ci" in text
+    assert "python -m agentic_harness.core.release_validation" not in text
+    validate_steps = workflow["jobs"]["validate"]["steps"]
+    first_install = next(
+        index
+        for index, step in enumerate(validate_steps)
+        if "python -m pip install" in str(step.get("run", ""))
+    )
+    for gate in ("identity", "ancestry", "ci"):
+        gate_index = next(
+            index
+            for index, step in enumerate(validate_steps)
+            if f"{validation_script} {gate}" in str(step.get("run", ""))
+        )
+        assert gate_index < first_install
     assert "actions/upload-artifact@" in text
     assert "actions/download-artifact@" in text
     assert "gh release upload" in text
@@ -139,27 +173,58 @@ def test_active_publish_workflow_gates_oidc_on_exact_verified_release_commit() -
     assert stage["needs"] == "validate"
     assert stage["permissions"] == {"contents": "write", "actions": "read"}
     assert "environment" not in stage
+    assert "github.ref_name" not in str(stage)
     final = workflow["jobs"]["publish_release"]
     assert set(final["needs"]) == {"stage_release", "publish"}
     assert final["environment"]["name"] == "github-release"
+    assert "github.ref_name" not in str(final)
     assert "--draft=false" in text
     assert "gh release create" in text
     assert "--draft" in text
     assert workflow["concurrency"] == {
-        "group": "publish-${{ github.ref }}",
+        "group": "publish-${{ inputs.release_tag || github.ref_name }}",
         "cancel-in-progress": False,
     }
-    checkout = workflow["jobs"]["validate"]["steps"][0]
-    assert checkout["with"]["ref"] == "${{ github.sha }}"
-    assert "RELEASE_SHA: ${{ github.sha }}" in text
+    checkout = next(
+        step
+        for step in workflow["jobs"]["validate"]["steps"]
+        if step.get("name") == "Check out exact release commit"
+    )
+    assert checkout["with"]["ref"] == "${{ inputs.release_sha || github.sha }}"
+    bind = next(
+        step
+        for step in workflow["jobs"]["validate"]["steps"]
+        if step.get("name") == "Bind checked-out release commit"
+    )
+    assert "id" not in bind
+    assert 'checked_out_sha="$(git rev-parse HEAD)"' in bind["run"]
+    assert '"$checked_out_sha" != "$RELEASE_SHA"' in bind["run"]
+    assert "steps.release.outputs.sha" not in text
+    assert (
+        workflow["jobs"]["publish_release"]["environment"]["url"]
+        == "https://github.com/${{ github.repository }}/releases/tag/${{ env.RELEASE_TAG }}"
+    )
     assert "--clobber" not in text
+    assert "skip-existing" not in text
+    for job_name, job in workflow["jobs"].items():
+        if job_name == "publish":
+            assert job["permissions"]["id-token"] == "write"
+        else:
+            assert job["permissions"].get("id-token") is None
 
 
 def test_publish_template_never_interpolates_release_tag_inside_python_source() -> None:
     text = (REPO_ROOT / "docs/templates/publish.yml").read_text(encoding="utf-8")
 
-    assert 'RELEASE_TAG: ${{ github.ref_name }}' in text
+    assert 'RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}' in text
     assert "github.event.release" not in text
+
+
+def test_active_publish_workflow_matches_documented_template() -> None:
+    active = (REPO_ROOT / ".github/workflows/publish.yml").read_text(encoding="utf-8")
+    template = (REPO_ROOT / "docs/templates/publish.yml").read_text(encoding="utf-8")
+
+    assert active == template
 
 
 def test_workflows_pin_third_party_actions_to_full_commit_shas() -> None:
