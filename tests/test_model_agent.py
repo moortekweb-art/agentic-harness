@@ -16,6 +16,7 @@ from agentic_harness.adapters.model_agent import (
     EmbeddedModelAgent,
     OpenAICompatibleProvider,
     ProviderResponse,
+    _atomic_write,
 )
 from agentic_harness.core.config import HarnessConfig, load_config
 from agentic_harness.core.errors import ConfigError
@@ -36,6 +37,27 @@ class SequenceProvider:
     def complete(self, messages: list[dict[str, str]]) -> ProviderResponse:
         self.requests.append(messages)
         return ProviderResponse(content=self.responses.pop(0), usage={"total_tokens": 7})
+
+
+def test_atomic_write_retries_a_transient_replace_denial(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "value.txt"
+    target.write_text("before", encoding="utf-8")
+    original_replace = Path.replace
+    attempts = 0
+
+    def flaky_replace(path, destination):
+        nonlocal attempts
+        if destination == target and attempts == 0:
+            attempts += 1
+            raise PermissionError("target is briefly held by another reader")
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+
+    _atomic_write(target, "after")
+
+    assert target.read_text(encoding="utf-8") == "after"
+    assert attempts == 1
 
 
 def _goal(tmp_path: Path) -> Goal:

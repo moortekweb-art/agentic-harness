@@ -950,7 +950,14 @@ def _atomic_write(path: Path, content: str) -> None:
             tmp = Path(handle.name)
         if mode is not None:
             tmp.chmod(mode)
-        tmp.replace(path)
+        for attempt in range(5):
+            try:
+                tmp.replace(path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.01 * (2**attempt))
     except Exception:
         if tmp is not None and tmp.exists():
             tmp.unlink(missing_ok=True)

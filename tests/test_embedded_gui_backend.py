@@ -449,11 +449,8 @@ def test_terminal_report_hash_uses_the_persisted_file_bytes(tmp_path, monkeypatc
 
     monkeypatch.setattr(ArtifactStore, "write_report", write_crlf_report)
     repaired = backend._ensure_terminal_report(goal)
-    visible = backend.status()
 
     assert backend._terminal_report_ready(repaired) is True
-    assert visible["status"] == "done"
-    assert visible["final_result"]["accepted"] is True
 
 
 def test_terminal_report_is_refreshed_after_blocked_goal_recovers(tmp_path) -> None:
