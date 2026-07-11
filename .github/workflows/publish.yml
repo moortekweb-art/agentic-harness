@@ -3,9 +3,23 @@ name: Publish
 "on":
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Immutable release tag to recover
+        required: true
+        type: string
+      release_sha:
+        description: Full audited commit SHA for the immutable release tag
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+  RELEASE_SHA: ${{ inputs.release_sha || github.sha }}
 
 concurrency:
-  group: publish-${{ github.ref }}
+  group: publish-${{ inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -17,10 +31,20 @@ jobs:
       actions: read
 
     steps:
-      - name: Check out release tag
+      - name: Require protected default-branch recovery source
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "recovery dispatch must run from the protected default branch" >&2
+            exit 1
+          fi
+
+      - name: Check out exact release commit
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.release_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -29,23 +53,28 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Bind checked-out release commit
+        run: |
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [ "$checked_out_sha" != "$RELEASE_SHA" ]; then
+            echo "checked-out commit does not match the audited release SHA" >&2
+            exit 1
+          fi
+
       - name: Verify release tag and package version
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_SHA: ${{ github.sha }}
-        run: python -m agentic_harness.core.release_validation identity
+        run: python agentic_harness/core/release_validation.py identity
 
       - name: Verify release commit is on the default branch
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: python -m agentic_harness.core.release_validation ancestry
+        run: python agentic_harness/core/release_validation.py ancestry
 
       - name: Verify exact release commit passed CI
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-        run: python -m agentic_harness.core.release_validation ci
+        run: python agentic_harness/core/release_validation.py ci
 
       - name: Build and smoke-test distributions
         run: |
@@ -94,7 +123,7 @@ jobs:
       - name: Create or update draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
         run: |
           if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > draft-state 2>/dev/null; then
             test "$(cat draft-state)" = "true" || {
@@ -152,7 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-release
-      url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ env.RELEASE_TAG }}
     permissions:
       contents: write
 
@@ -160,5 +189,5 @@ jobs:
       - name: Make the verified release public
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
         run: gh release edit "$RELEASE_TAG" --draft=false --latest

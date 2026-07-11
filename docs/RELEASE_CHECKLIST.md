@@ -105,6 +105,29 @@ a failed validation or PyPI upload from leaving a broken public latest release.
 The final release job is separate, so it can be retried without attempting to
 republish an immutable PyPI version.
 
+### Immutable-tag workflow recovery
+
+Use the manual `Publish` dispatch only when an immutable release tag already
+exists and its tag-triggered run failed before PyPI publication because of a
+workflow defect. Merge the workflow repair through the protected default
+branch, wait for CI on that exact default-branch commit, then dispatch the
+workflow from the default branch with the existing tag as `release_tag` and
+its independently audited full 40-character commit as `release_sha`.
+
+The recovery run uses the protected default-branch workflow definition but
+checks out the supplied commit SHA and builds that immutable tree. It requires
+the selected tag to resolve to the same `HEAD`, requires tag/package version
+equality, verifies default-branch ancestry, and requires successful
+default-branch CI for the exact tagged commit. Never derive the audited SHA
+from the recovery checkout, or move, delete, or recreate the release tag.
+
+A manually dispatched run has a default-branch deployment ref even though it
+builds the tag. If the protected `pypi` and `github-release` environments allow
+only `v*` tag refs, temporarily add an exact default-branch deployment policy
+for the approved recovery run. Keep required reviewers enabled, approve each
+environment separately, and remove the temporary branch policies immediately
+after the run reaches a terminal state.
+
 ## Post-release readback
 
 - Confirm the GitHub Release is public and contains the wheel, sdist, and
@@ -115,6 +138,7 @@ republish an immutable PyPI version.
   packaged-asset, and harmless loopback HTTP probes.
 - Record the release workflow URL and readback evidence.
 
-If a gate fails before PyPI publication, keep or remove the draft and correct a
-new commit/version deliberately. After PyPI publication, the version is
-immutable; never overwrite or reuse it.
+If a product or artifact gate fails before PyPI publication, keep or remove the
+draft and correct a new commit/version deliberately. If only the workflow
+failed after an immutable tag was created, use the bounded recovery path above.
+After PyPI publication, the version is immutable; never overwrite or reuse it.

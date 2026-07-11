@@ -45,7 +45,8 @@ The observed GitHub/PyPI trusted-publishing claims use:
 - `repository`: `moortekweb-art/agentic-harness`
 - `repository_owner`: `moortekweb-art`
 - `workflow_ref`: `moortekweb-art/agentic-harness/.github/workflows/publish.yml@<release-ref>`
-- `ref`: the pushed release tag
+- `ref`: normally the pushed release tag; the bounded recovery path uses the
+  protected default branch
 - `environment`: `pypi`
 
 Pushing an annotated or lightweight `v<version>` tag starts the `Publish`
@@ -53,8 +54,17 @@ workflow. The workflow checks out the immutable triggering event SHA, verifies
 that the tag and package version identify that exact commit, requires trusted
 default-branch CI for it, builds once, and stages a draft GitHub release. The
 same verified artifacts are then published to PyPI before the protected
-`github-release` job makes the draft public. There is deliberately no manual
-dispatch path.
+`github-release` job makes the draft public.
+
+The manual dispatch is an immutable-tag recovery path, not an alternate way to
+choose release contents. It is used only after a tag-triggered run fails before
+PyPI publication because the workflow itself needs repair. The repaired
+workflow must first merge through the protected default branch. A recovery run
+requires both `release_tag` and an independently audited full 40-character
+`release_sha`, checks out that SHA, proves the tag resolves to the same `HEAD`,
+and applies the same version, ancestry, exact-CI, build, artifact, and
+environment gates. The expected SHA must not be derived from the recovery
+checkout, and the tag must not be moved or recreated.
 
 Before publishing v0.7.0, repository owners must configure both protected
 GitHub environments:
@@ -62,6 +72,13 @@ GitHub environments:
 - `pypi`, restricted to release tags and protected with the desired reviewers;
 - `github-release`, with the same release-tag policy and final-publication
   reviewers.
+
+GitHub evaluates an environment deployment policy against the workflow-run
+ref, not the ref checked out by a later step. A recovery dispatch therefore
+uses a temporary exact-default-branch deployment policy on both environments.
+Required reviewers remain enabled. Remove those temporary branch policies as
+soon as the recovery run finishes; the normal steady state is the `v*` tag
+policy only.
 
 The default branch and release tags also need repository rulesets that require
 CI, prevent force updates/deletion, and make release tags immutable in normal
