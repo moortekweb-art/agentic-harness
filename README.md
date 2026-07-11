@@ -329,7 +329,7 @@ Install as a CLI with pipx:
 pipx install git+https://github.com/moortekweb-art/agentic-harness.git
 ```
 
-After the first PyPI publish, install the released distribution with:
+Install the released distribution from PyPI with:
 
 ```bash
 pipx install local-agentic-harness

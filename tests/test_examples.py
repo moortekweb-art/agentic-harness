@@ -89,6 +89,15 @@ def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
     assert "cat > .agentic-harness/config.yml" not in quick_start
 
 
+def test_readme_documents_released_distribution_install() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    installation = readme.split("## Installation", 1)[1].split("For development:", 1)[0]
+
+    assert "pipx install local-agentic-harness" in installation
+    assert "The installed CLI command remains `agentic-harness`." in installation
+    assert "After the first PyPI publish" not in installation
+
+
 def test_gui_docs_describe_one_install_with_two_interfaces() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     architecture = (REPO_ROOT / "docs/GUI_ARCHITECTURE.md").read_text(encoding="utf-8")
