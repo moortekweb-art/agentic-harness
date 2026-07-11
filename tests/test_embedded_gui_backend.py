@@ -478,6 +478,45 @@ def test_retryable_failed_goal_is_not_exposed_as_terminal(tmp_path, monkeypatch)
     assert visible["final_result"]["accepted"] is False
 
 
+def test_retryable_failed_goal_resumes_without_terminal_evidence_after_restart(
+    tmp_path, monkeypatch
+) -> None:
+    _configure_scripted_agent(tmp_path)
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    goal = Goal(objective="Resume after an interrupted blocker decision")
+    goal.transition(GoalStatus.PLANNING, reason="started")
+    goal.transition(GoalStatus.IN_PROGRESS, reason="planned")
+    goal.transition(GoalStatus.REVIEW, reason="worker completed")
+    goal.transition(GoalStatus.FAILED, reason="review failed")
+    goal.metadata["autonomy"] = {
+        "contract": "agentic_harness.autonomy.v1",
+        "status": "checking",
+        "operator_intervention_required": False,
+    }
+    goal.metadata["worker_outcome"] = {"summary": "untrusted worker success"}
+    store.write_goal(goal)
+    resumed_with: list[list[list[str]]] = []
+
+    def record_resume(self, review_commands):
+        resumed_with.append(review_commands)
+
+    monkeypatch.setattr(EmbeddedExecutionBackend, "_start_thread", record_resume)
+
+    backend = EmbeddedExecutionBackend(tmp_path)
+    readiness = backend.readiness()
+    visible = backend.status()
+    persisted = store.read_current_goal()
+
+    assert resumed_with
+    assert readiness["state"] == "working"
+    assert readiness["can_start"] is False
+    assert visible["status"] == "checking"
+    assert not list(store.runs_dir.rglob("report.md"))
+    assert persisted is not None
+    assert all(Path(path).name != "report.md" for path in persisted.artifacts)
+
+
 def test_terminal_report_is_refreshed_after_blocked_goal_recovers(tmp_path) -> None:
     _configure_scripted_agent(tmp_path)
     config_path = tmp_path / ".agentic-harness" / "config.yml"

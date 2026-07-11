@@ -69,7 +69,7 @@ class EmbeddedExecutionBackend:
             if self._thread is not None and self._thread.is_alive():
                 return
             goal = self.store.read_current_goal()
-            if goal is None or goal.status in {GoalStatus.DONE, GoalStatus.FAILED}:
+            if goal is None or _durably_terminal(goal):
                 return
             config = self._config()
             if self._credential_status(config)["configured"] is not True:
@@ -128,10 +128,7 @@ class EmbeddedExecutionBackend:
                 "next_action": "Open Setup and enter the key again.",
             }
         current = self.store.read_current_goal()
-        if current is not None and current.status not in {
-            GoalStatus.DONE,
-            GoalStatus.FAILED,
-        }:
+        if current is not None and not _durably_terminal(current):
             return {
                 "state": "working",
                 "label": "Work in progress",
@@ -141,7 +138,7 @@ class EmbeddedExecutionBackend:
                 "summary": "The current task is still in progress.",
                 "next_action": "Follow its progress or stop it before starting another task.",
             }
-        if current is not None and current.status.is_terminal:
+        if current is not None and _durably_terminal(current):
             current = self._ensure_terminal_report(current)
             if not self._terminal_report_ready(current):
                 return {
@@ -351,7 +348,7 @@ class EmbeddedExecutionBackend:
     ) -> None:
         with self._config_lock:
             current = self.store.read_current_goal()
-            if current is not None and not current.status.is_terminal:
+            if current is not None and not _durably_terminal(current):
                 raise ValueError("Cannot change execution setup while a task is active")
             self._write_config(payload)
             self.api_key = api_key
@@ -466,7 +463,7 @@ class EmbeddedExecutionBackend:
         frozen_changes = goal.metadata.get("terminal_workspace_changes")
         changes = (
             frozen_changes
-            if goal.status.is_terminal and isinstance(frozen_changes, dict)
+            if _durably_terminal(goal) and isinstance(frozen_changes, dict)
             else workspace_change_summary(
                 self.project_dir,
                 goal.metadata.get("workspace_snapshot")
@@ -633,7 +630,7 @@ class EmbeddedExecutionBackend:
                     isinstance(autonomy, dict)
                     and autonomy.get("operator_intervention_required") is True
                 )
-                if goal.status.is_terminal or intervention:
+                if _durably_terminal(goal) or intervention:
                     self._ensure_terminal_report(goal)
                     return
         except StateLockError:
@@ -714,14 +711,14 @@ class EmbeddedExecutionBackend:
         if not isinstance(autonomy, dict):
             autonomy = {}
         status = _task_status(goal, autonomy)
-        terminal = goal.status.is_terminal and status in {"done", "blocked", "stopped"}
+        terminal = _durably_terminal(goal) and status in {"done", "blocked", "stopped"}
         if terminal:
             goal = self._ensure_terminal_report(goal)
             autonomy = goal.metadata.get("autonomy")
             if not isinstance(autonomy, dict):
                 autonomy = {}
             status = _task_status(goal, autonomy)
-            terminal = goal.status.is_terminal and status in {
+            terminal = _durably_terminal(goal) and status in {
                 "done",
                 "blocked",
                 "stopped",
@@ -811,7 +808,7 @@ class EmbeddedExecutionBackend:
         }
 
     def _ensure_terminal_report(self, goal: Goal) -> Goal:
-        if not goal.status.is_terminal:
+        if not _durably_terminal(goal):
             return goal
         try:
             with self.store.locked():
@@ -822,7 +819,7 @@ class EmbeddedExecutionBackend:
                 else:
                     current = self.store.read_goal(goal.id)
                     is_current = False
-                if not current.status.is_terminal:
+                if not _durably_terminal(current):
                     return current
                 desired_state = _terminal_report_state_sha256(
                     self.project_dir,
@@ -886,7 +883,7 @@ class EmbeddedExecutionBackend:
             return goal
 
     def _terminal_report_ready(self, goal: Goal) -> bool:
-        if not goal.status.is_terminal:
+        if not _durably_terminal(goal):
             return False
         state_digest = str(goal.metadata.get("terminal_report_state_sha256") or "")
         content_digest = str(goal.metadata.get("terminal_report_content_sha256") or "")
@@ -1063,7 +1060,7 @@ def _task_status(goal: Goal, autonomy: dict[str, Any]) -> str:
     if autonomy.get("operator_intervention_required") is True:
         return "blocked"
     if goal.status is GoalStatus.FAILED:
-        if autonomy.get("contract") == AUTONOMY_CONTRACT:
+        if _retryable_autonomy_failure(goal):
             return "checking"
         return "blocked"
     if goal.status is GoalStatus.REVIEW:
@@ -1071,6 +1068,21 @@ def _task_status(goal: Goal, autonomy: dict[str, Any]) -> str:
     if goal.status is GoalStatus.PLANNING:
         return "starting"
     return "working"
+
+
+def _retryable_autonomy_failure(goal: Goal) -> bool:
+    autonomy = goal.metadata.get("autonomy")
+    return (
+        goal.status is GoalStatus.FAILED
+        and goal.metadata.get("cancelled") is not True
+        and isinstance(autonomy, dict)
+        and autonomy.get("contract") == AUTONOMY_CONTRACT
+        and autonomy.get("operator_intervention_required") is not True
+    )
+
+
+def _durably_terminal(goal: Goal) -> bool:
+    return goal.status.is_terminal and not _retryable_autonomy_failure(goal)
 
 
 def _status_label(status: str) -> str:
