@@ -503,7 +503,7 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "The baseline trusts an exit-zero structured completion claim. The harness arm uses ",
+            "The baseline trusts an exit-zero structured completion claim. The harness arm uses "
             "`CodingAgentWorker`, `AutonomousRunner`, and an independent verifier process.",
             "The false-success rate denominator is the intentionally false-claim cases, not all runs.",
             "",

@@ -1,14 +1,14 @@
 {
   "agent_command": [
-    "/usr/local/bin/python",
-    "/mnt/raid0/home-ai-inference/agentic-harness/evaluation/scripted_coding_agent.py"
+    "python",
+    "evaluation/scripted_coding_agent.py"
   ],
   "evaluation_type": "controlled_completion_gate_efficacy",
-  "finished_at": "2026-07-11T17:42:44.698419Z",
-  "git_commit": "8a01ec5133ac5a1a70f3587014038cb03c63ee43",
-  "git_dirty": true,
-  "git_status_sha256": "2020aadc04536086076bc9c2cf3a05042ef311f44137d7a81c30f55ff90f6523",
-  "harness_version": "0.7.0",
+  "finished_at": "2026-07-11T18:21:02.586247Z",
+  "git_commit": "0d870ca19a7dd434bf77820e54aa15acae5a6200",
+  "git_dirty": false,
+  "git_status_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "harness_version": "0.7.1",
   "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39",
   "python": "3.12.3",
   "python_implementation": "CPython",
@@ -17,18 +17,18 @@
   "seed": 20260711,
   "source_checksums": {
     "agentic_harness/adapters/coding_agent.py": "903c560115b19c09490d401f9fa94e875bf218c0fbecdd0d2d0d6e895b38ebf7",
-    "agentic_harness/core/autonomy.py": "f308ddff1cfeda3d6890e74343dafad96d6fcc88d8944e4de9f98396584ec46a",
-    "agentic_harness/core/review.py": "e249225aa69d4ae81bd007fffa4adfaf4c8d1aad2f4d40e70f480c528130bfe1",
+    "agentic_harness/core/autonomy.py": "fe75f1ee51e6e8d35723e2187d749ab3570ecde069ac9e9b6794fb9d64419fca",
+    "agentic_harness/core/review.py": "e8fb79c75a03697157d7b7abd35fdceaded92287a5818b8124931ba534cf5227",
     "agentic_harness/core/supervisor.py": "92149de5e3f51d42d60b10acb0362f89719b26ace27022ea552e00300e1efb82",
     "evaluation/fixture_support.py": "f903e4b7ec08f953c1ff9dbd5ceacebd70ff0c18624b5cb6e3a60497c03237cb",
-    "evaluation/run_gate_benchmark.py": "3f35ce6025232ecf93b646c0ea8683ef90c46b4e61450bf3e4e5551efabfc9ea",
-    "evaluation/scripted_coding_agent.py": "110f553b2f1700c9a6109a5604671f109997e093c49f831b701413eaa6652fcf",
+    "evaluation/run_gate_benchmark.py": "231039247a7b9b9cc05ab0cc116055bdbebd3201fea022d8ff0820eb403fb53d",
+    "evaluation/scripted_coding_agent.py": "26b18f8a5467cdd2e9581e36ed6002e7afed13959237c8115c1782f25b51d357",
     "evaluation/tasks.json": "d226693b37f3c7b528942723ea0796902dd2fbd81d31865c0076173d9a301241",
     "evaluation/verify_fixture.py": "233678175369dc2e9ff1d341e4f8006244b65b43e556805fc3f988f1ac88752d"
   },
-  "started_at": "2026-07-11T17:42:39.604721Z",
+  "started_at": "2026-07-11T18:20:57.793015Z",
   "verifier_command": [
-    "/usr/local/bin/python",
-    "/mnt/raid0/home-ai-inference/agentic-harness/evaluation/verify_fixture.py"
+    "python",
+    "evaluation/verify_fixture.py"
   ]
 }
