@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Pre-push hook: run the GUI test slice so a test/HTML mismatch can never
+# reach CI again. Blocks the push if path discovery or any test fails.
+#
+# Scope: tests/test_gui_api.py -- the file that drifted between b810c3d and
+# c676f55 on 2026-07-11. Cheap locally; the full suite still runs in CI.
+
+set -euo pipefail
+
+REPO="$(git rev-parse --show-toplevel)"
+cd "$REPO"
+
+resolve_agentic_harness() {
+  local path_candidate
+  local user_base
+  local sysconfig_scripts
+
+  path_candidate="$(command -v agentic-harness 2>/dev/null || true)"
+  user_base="$(python3 -m site --user-base)"
+  sysconfig_scripts="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+
+  for candidate in \
+    "$path_candidate" \
+    "$user_base/bin/agentic-harness" \
+    "$sysconfig_scripts/agentic-harness"
+  do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+if ! AGENTIC_HARNESS="$(resolve_agentic_harness)"; then
+  echo "[pre-push] agentic-harness executable was not found in PATH, pip's user base, or Python's scripts directory." >&2
+  exit 1
+fi
+
+echo "[pre-push] Using $AGENTIC_HARNESS"
+"$AGENTIC_HARNESS" --version >/dev/null
+
+echo "[pre-push] Running tests/test_gui_api.py before allowing push..."
+python3 -m pytest tests/test_gui_api.py -q
