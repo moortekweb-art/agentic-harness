@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from agentic_harness.core.safety import subprocess_environment
+from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.state import Goal
 
 CriterionCheck = Callable[[Goal], tuple[bool, str]]
@@ -57,10 +58,10 @@ class DeterministicReviewer:
             passed, message = criterion.check(goal)
             results.append(
                 {
-                    "name": criterion.name,
-                    "description": criterion.description,
+                    "name": redact_secrets(criterion.name),
+                    "description": redact_secrets(criterion.description),
                     "passed": bool(passed),
-                    "message": message,
+                    "message": redact_secrets(str(message)),
                     "independent": criterion.independent,
                 }
             )
@@ -119,18 +120,17 @@ def command_passes(
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return False, f"command timed out after {timeout}s: {' '.join(command)}"
-        except OSError as exc:
-            return False, f"command could not start: {exc}"
+            return False, f"independent command timed out after {timeout}s"
+        except OSError:
+            return False, "independent command could not start"
         if proc.returncode == 0:
-            return True, f"command passed: {' '.join(command)}"
-        detail = proc.stderr.strip() or proc.stdout.strip() or "no output"
-        return False, f"command failed ({proc.returncode}): {detail}"
+            return True, "independent command passed"
+        return False, f"independent command failed with exit code {proc.returncode}"
 
     return ReviewCriterion(
         "command_passes",
         check,
-        f"Command must pass: {' '.join(command)}",
+        "Configured independent command must pass.",
     )
 
 
@@ -147,11 +147,10 @@ def file_changed(project_dir: str | Path, path: str) -> ReviewCriterion:
                 capture_output=True,
                 check=False,
             )
-        except OSError as exc:
-            return False, f"git status could not start: {exc}"
+        except OSError:
+            return False, "git status could not start"
         if proc.returncode != 0:
-            detail = proc.stderr.strip() or "git status failed"
-            return False, detail
+            return False, f"git status failed with exit code {proc.returncode}"
         changed = bool(proc.stdout.strip())
         return changed, f"file changed: {path}" if changed else f"file clean: {path}"
 
@@ -171,11 +170,10 @@ def git_clean(project_dir: str | Path = ".") -> ReviewCriterion:
                 capture_output=True,
                 check=False,
             )
-        except OSError as exc:
-            return False, f"git status could not start: {exc}"
+        except OSError:
+            return False, "git status could not start"
         if proc.returncode != 0:
-            detail = proc.stderr.strip() or "git status failed"
-            return False, detail
+            return False, f"git status failed with exit code {proc.returncode}"
         clean = not proc.stdout.strip()
         return clean, "git worktree clean" if clean else "git worktree has changes"
 

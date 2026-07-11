@@ -1,10 +1,15 @@
 # Agentic Harness Terminal Demo Script
 
-Target recording length: 90-120 seconds.
+Target recording length: 80-110 seconds.
 
-This script uses real commands and summarizes the shape of expected output
-instead of scripted fake output. Run it from a clean terminal with the
-repository available locally.
+This is a deterministic mechanics demo. It uses the packaged mock coding-agent
+worker to demonstrate the real failure, execution, evidence, and independent
+review lifecycle without requiring a model account or API key. It is not a
+model-quality benchmark or evidence that one coding agent outperforms another.
+
+The script uses real commands and summarizes the shape of expected output
+instead of scripted fake output. Run it from a clean terminal. A repository
+checkout is needed only for the development fallback.
 
 ## Setup
 
@@ -13,15 +18,16 @@ Time: 10-15 seconds
 Command:
 
 ```bash
-pipx install git+https://github.com/moortekweb-art/agentic-harness.git
+pipx install local-agentic-harness
 ```
 
 Expected output summary:
 
 - `pipx` creates an isolated environment.
-- The installed app is named `agentic-harness`.
-- If recording from this checkout before installing from GitHub, use the
-  development fallback:
+- The distribution is `local-agentic-harness` and installs both
+  `agentic-harness` and `agentic-harness-gui`.
+- If recording unpublished changes from a checkout, use the development
+  fallback:
 
 ```bash
 python -m pip install -e .
@@ -109,8 +115,10 @@ Expected output summary:
 
 ## Coding Agent Demo Variant
 
-Use this variant when recording with a real coding-agent backend instead of the
-packaged shell demo.
+Use this separate variant when recording with a real coding-agent backend
+instead of the deterministic mock mechanics demo. Its duration and result
+depend on that external agent and must not be presented as the reproducible
+80-110 second path above.
 
 Command:
 

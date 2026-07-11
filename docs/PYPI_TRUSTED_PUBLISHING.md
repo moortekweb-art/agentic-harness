@@ -6,7 +6,8 @@ publishing, which avoids storing a PyPI token in repository secrets.
 
 The publish workflow is checked in at `.github/workflows/publish.yml`.
 `docs/templates/publish.yml` is retained only as a reference copy. The trusted
-publisher described below is configured and was verified by the v0.6.26 upload.
+publisher described below is configured and was most recently verified by the
+successful v0.7.0 publication run `29159578285`.
 
 Before uploading, the workflow installs the project with test extras and runs:
 
@@ -66,12 +67,18 @@ and applies the same version, ancestry, exact-CI, build, artifact, and
 environment gates. The expected SHA must not be derived from the recovery
 checkout, and the tag must not be moved or recreated.
 
-Before publishing v0.7.0, repository owners must configure both protected
-GitHub environments:
+## Protected environments and steady state
 
-- `pypi`, restricted to release tags and protected with the desired reviewers;
-- `github-release`, with the same release-tag policy and final-publication
-  reviewers.
+Repository owners must keep both publishing environments protected:
+
+- `pypi`, with a required reviewer and a deployment policy restricted to
+  release tags;
+- `github-release`, with a required reviewer and the same release-tag policy.
+
+The steady state verified after v0.7.0 has required reviewer
+`moortekweb-art` and exactly one deployment policy on each environment: tag
+pattern `v*`. No default-branch deployment policy remains. This tag-only policy
+is intentional; a normal release must originate from a release tag.
 
 GitHub evaluates an environment deployment policy against the workflow-run
 ref, not the ref checked out by a later step. A recovery dispatch therefore
@@ -85,11 +92,26 @@ CI, prevent force updates/deletion, and make release tags immutable in normal
 operation. The workflow's per-tag concurrency and event-SHA validation are
 defense in depth; they do not replace those repository settings.
 
-## Current Publish Status
+## Historical publication receipt: v0.7.0
 
-`local-agentic-harness` v0.6.29 is public on PyPI. Workflow run `29142969360`
-completed the build, wheel/sdist smoke tests, trusted-publishing exchange,
-upload, and digital attestations successfully from release ref `v0.6.29`.
+The v0.7.0 publication is preserved as a dated receipt; use PyPI and GitHub
+readback to determine the latest version at the time of a future release.
+[`local-agentic-harness` v0.7.0](https://pypi.org/project/local-agentic-harness/0.7.0/)
+was published on PyPI with a matching
+[GitHub release](https://github.com/moortekweb-art/agentic-harness/releases/tag/v0.7.0).
+Recovery workflow run
+[`29159578285`](https://github.com/moortekweb-art/agentic-harness/actions/runs/29159578285)
+completed validation, wheel/sdist build and smoke tests, draft-release staging,
+the trusted-publishing exchange, PyPI upload, digital attestations, and final
+GitHub release publication.
+
+The recovery run used the protected `main` workflow definition after
+[PR #10](https://github.com/moortekweb-art/agentic-harness/pull/10) repaired the
+initial tag-triggered workflow defect. It checked out the audited v0.7.0 tag
+commit, proved tag/package/SHA equality and default-branch ancestry, and
+required successful default-branch CI for that exact release commit before
+building. After the run completed, both environments were restored to their
+required reviewer plus only the `v*` tag deployment policy.
 
 The first v0.6.26 release-triggered run failed before the trusted-publishing
 exchange because the upload action tried to parse `dist/SHA256SUMS` as a Python
@@ -102,8 +124,8 @@ successful recovery run verified that only the wheel and sdist are uploaded.
 python -m pip install -e ".[test]"
 python -m agentic_harness.cli release-smoke --dist-dir /tmp/agentic-harness-dist
 python -m pip index versions local-agentic-harness
-gh release view v0.6.29 --repo moortekweb-art/agentic-harness
-gh run view 29142969360 --repo moortekweb-art/agentic-harness
+gh release view v0.7.0 --repo moortekweb-art/agentic-harness
+gh run view 29159578285 --repo moortekweb-art/agentic-harness
 ```
 
 The publish workflow should not use `PYPI_TOKEN`, `username`, or `password`.

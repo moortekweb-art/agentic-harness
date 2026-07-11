@@ -1712,6 +1712,52 @@ def test_build_supervisor_wires_review_command_from_config(tmp_path) -> None:
     assert [item["name"] for item in reviewed.review["criteria"]] == ["command_passes"]
 
 
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_review_cli_never_echoes_failed_command_output(
+    tmp_path,
+    capsys,
+    stream: str,
+) -> None:
+    secret = f"opaque-{stream}-review-secret-Z7Q4M9"
+    script = tmp_path / "failing_review.py"
+    destination = "sys.stderr" if stream == "stderr" else "sys.stdout"
+    script.write_text(
+        f"import sys\nprint({secret!r}, file={destination})\nraise SystemExit(7)\n",
+        encoding="utf-8",
+    )
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: noop",
+                "allow_noop_success: true",
+                "review_command:",
+                f"  - {sys.executable}",
+                f"  - {script}",
+                f"  - {secret}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert main(["--project-dir", str(tmp_path), "start", "do not echo review output"]) == 0
+    capsys.readouterr()
+    assert main(["--project-dir", str(tmp_path), "continue"]) == 0
+    capsys.readouterr()
+
+    assert main(["--project-dir", str(tmp_path), "review"]) == 0
+    output = capsys.readouterr().out
+
+    assert secret not in output
+    payload = json.loads(output)
+    assert set(payload) == {"id", "review", "status"}
+    assert payload["review"]["criteria"][0]["message"] == (
+        "independent command failed with exit code 7"
+    )
+
+
 def test_doctor_runs_without_crashing_on_empty_config(tmp_path, capsys) -> None:
     rc = main(["--project-dir", str(tmp_path), "doctor"])
 
@@ -1952,7 +1998,7 @@ def test_goal_command_requires_structured_completion_and_accepts_it(tmp_path, ca
                 "    'requirements': [{",
                 "        'id': 'requested-outcome',",
                 "        'status': 'satisfied',",
-                "        'evidence': ['deterministic check passed'],",
+                    "        'evidence': ['review:1'],",
                 "    }],",
                 "    'blockers': [],",
                 "}",
@@ -2119,7 +2165,7 @@ def test_easy_do_uses_portable_project_engine_without_optional_sidecar(
         "\"checkpoint\": \"verified\", \"current_subgoal\": \"audit complete\", "
         "\"plan\": [{\"step\": \"work\", \"status\": \"completed\"}], "
         "\"requirements\": [{\"id\": \"R1\", \"status\": \"satisfied\", "
-        "\"evidence\": [\"check passed\"]}], \"blockers\": []}\n"
+        "\"evidence\": [\"review:1\"]}], \"blockers\": []}\n"
         "print('HARNESS_RESULT_JSON=' + json.dumps(outcome))\n",
         encoding="utf-8",
     )

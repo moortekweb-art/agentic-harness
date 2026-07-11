@@ -106,7 +106,7 @@ function storage(initial = {}) {
   };
 }
 
-function okPayloadFor(url) {
+function okPayloadFor(url, setupPayload = null) {
   if (url === "/api/health") {
     return { ok: true, local_goal_available: true, readiness: { state: "ready", can_start: true } };
   }
@@ -114,7 +114,7 @@ function okPayloadFor(url) {
     return { modes: [{ key: "cloud", label: "Cloud", best_for: "tests", caution: "" }] };
   }
   if (url === "/api/setup") {
-    return {
+    return setupPayload || {
       contract: "agentic_harness.gui_setup.v1",
       configured: true,
       workspace: "/tmp/project",
@@ -135,7 +135,7 @@ async function tick() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function runApp({ initialToken = "" } = {}) {
+async function runApp({ initialToken = "", publicAccess = false, setupPayload = null } = {}) {
   const elements = new Map();
   const document = {
     body: new Element("body"),
@@ -181,10 +181,10 @@ async function runApp({ initialToken = "" } = {}) {
     fetch: async (url, options = {}) => {
       const auth = options.headers.get("Authorization");
       fetchCalls.push({ url, auth });
-      if (auth !== "Bearer correct-token") {
+      if (!publicAccess && auth !== "Bearer correct-token") {
         return { status: 401, ok: false, json: async () => ({ ok: false }) };
       }
-      return { status: 200, ok: true, json: async () => okPayloadFor(url) };
+      return { status: 200, ok: true, json: async () => okPayloadFor(url, setupPayload) };
     },
     Headers: HeadersShim,
     history: {
@@ -278,8 +278,29 @@ async function testCancelResolvesAllWaitersWithoutSecondDialogOrLeakingToken() {
   assert.equal(app.websocketUrls.length, 0);
 }
 
+async function testLegacySetupContractCompletesBootstrapAndAttachesStatusStream() {
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: true,
+      editable: false,
+      workspace: "/tmp/legacy-workspace",
+      worker: { type: "local_goal", label: "Existing local-goal runtime" },
+    },
+  });
+
+  assert.equal(app.elements.get("workspacePath").textContent, "/tmp/legacy-workspace");
+  assert.equal(app.elements.get("executionSummary").textContent, "Existing local-goal runtime");
+  assert.equal(app.elements.get("setupButton").hidden, true);
+  assert.deepEqual(app.websocketUrls, ["ws://127.0.0.1:41111/api/tasks/stream"]);
+  assert.equal(app.fetchCalls.some((call) => call.url === "/api/setup"), true);
+  assert.deepEqual(app.consoleErrors, []);
+}
+
 (async () => {
   await testConcurrentStartup401sShareOnePromptAndAllRetry();
   await testStaleTokenIsClearedPromptedOnceAndReplaced();
   await testCancelResolvesAllWaitersWithoutSecondDialogOrLeakingToken();
+  await testLegacySetupContractCompletesBootstrapAndAttachesStatusStream();
 })();

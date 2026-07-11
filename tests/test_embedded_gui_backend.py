@@ -41,7 +41,7 @@ outcome = {
             "id": "R1",
             "text": "result.txt contains finished",
             "status": "satisfied",
-            "evidence": ["configured check passed"],
+            "evidence": ["review:1"],
         }
     ],
     "blockers": [],
@@ -566,7 +566,7 @@ def test_terminal_report_is_refreshed_after_blocked_goal_recovers(tmp_path) -> N
     blocked = _wait_for_terminal(backend)
     assert blocked["status"] == "blocked"
     assert blocked["summary"] != "Created and verified result.txt."
-    assert "AssertionError" in blocked["summary"]
+    assert blocked["summary"] == "independent command failed with exit code 1"
     report_path = next(
         row["path"] for row in blocked["artifacts"] if row["name"] == "report.md"
     )

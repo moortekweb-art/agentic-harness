@@ -115,34 +115,6 @@ def test_goal_eq_is_reflexive() -> None:
     assert goal == goal
 
 
-def test_goal_hash_consistent_with_eq() -> None:
-    goal1 = Goal("hash test")
-    goal2 = Goal("hash test")
-    goal2.id = goal1.id
-
-    assert goal1 == goal2
-    assert hash(goal1) == hash(goal2)
-
-
-def test_goal_hash_different_ids_different_hashes() -> None:
-    goal1 = Goal("hash different")
-    goal2 = Goal("hash different")
-    # ids are different by default
-    assert hash(goal1) != hash(goal2)
-
-
-def test_goal_hash_usable_in_set() -> None:
-    goal1 = Goal("set test")
-    goal2 = Goal("set test")
-    goal2.id = goal1.id
-    goal2.created_at = goal1.created_at
-    goal2.updated_at = goal1.updated_at
-
-    goals = {goal1, goal2}
-    # goal2 is equal to goal1, so set should have 1 element
-    assert len(goals) == 1
-
-
 def test_goal_duration_seconds_returns_none_for_unparseable_timestamps() -> None:
     goal = Goal("bad timestamps")
     goal.created_at = "not-a-timestamp"
@@ -250,6 +222,19 @@ def test_goal_eq_survives_from_dict_roundtrip() -> None:
     restored = Goal.from_dict(original.to_dict())
 
     assert restored == original
+
+
+def test_mutable_goal_is_explicitly_unhashable_after_review() -> None:
+    goal = Goal("mutable state")
+
+    assert Goal.__hash__ is None
+    with pytest.raises(TypeError, match="unhashable type"):
+        hash(goal)
+
+    goal.review = {"passed": True, "criteria": []}
+
+    with pytest.raises(TypeError, match="unhashable type"):
+        hash(goal)
 
 
 def test_goal_status_chain_includes_current_status() -> None:

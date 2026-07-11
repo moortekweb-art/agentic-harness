@@ -13,7 +13,7 @@ from typing import Any, Iterator, cast
 
 from agentic_harness.core.errors import StateLockError
 from agentic_harness.core.redaction import redact_secrets
-from agentic_harness.core.state import Goal
+from agentic_harness.core.state import Goal, SAFE_GOAL_ID
 
 fcntl = importlib.import_module("fcntl") if importlib.util.find_spec("fcntl") else None
 msvcrt = importlib.import_module("msvcrt") if importlib.util.find_spec("msvcrt") else None
@@ -31,6 +31,7 @@ class ArtifactStore:
         self._autonomy_lease: object | None = None
 
     def init(self) -> None:
+        self._reject_symlinked_state_directories()
         self.runs_dir.mkdir(parents=True, exist_ok=True)
 
     @contextmanager
@@ -63,6 +64,8 @@ class ArtifactStore:
 
     @contextmanager
     def _locked_path(self, path: Path, conflict_message: str) -> Iterator[None]:
+        if self.root.is_symlink() or path.is_symlink():
+            raise StateLockError(f"harness lock path must not be a symlink: {path}")
         self.root.mkdir(parents=True, exist_ok=True)
         with path.open("a+", encoding="utf-8") as handle:
             try:
@@ -76,7 +79,21 @@ class ArtifactStore:
 
     def goal_dir(self, goal: Goal | str) -> Path:
         goal_id = goal.id if isinstance(goal, Goal) else goal
-        return self.runs_dir / goal_id
+        if not isinstance(goal_id, str) or SAFE_GOAL_ID.fullmatch(goal_id) is None:
+            raise ValueError("unsafe goal id would create a path outside runs directory")
+        self._reject_symlinked_state_directories()
+        runs_root = self.runs_dir.resolve()
+        unresolved = self.runs_dir / goal_id
+        if unresolved.is_symlink():
+            raise ValueError("goal directory must not be a symlink")
+        candidate = unresolved.resolve()
+        try:
+            relative = candidate.relative_to(runs_root)
+        except ValueError as exc:
+            raise ValueError("goal path is outside runs directory") from exc
+        if not relative.parts:
+            raise ValueError("goal path is outside runs directory")
+        return candidate
 
     def write_goal(self, goal: Goal, *, make_current: bool = True) -> Path:
         run_dir = self.goal_dir(goal)
@@ -89,7 +106,10 @@ class ArtifactStore:
 
     def read_goal(self, goal_id: str) -> Goal:
         try:
-            return Goal.from_dict(self._read_json(self.goal_dir(goal_id) / "state.json"))
+            goal = Goal.from_dict(self._read_json(self.goal_dir(goal_id) / "state.json"))
+            if goal.id != goal_id:
+                raise ValueError("goal state id does not match its containing run directory")
+            return goal
         except (json.JSONDecodeError, OSError, ValueError):
             raise StateLockError(f"corrupted or missing goal state for {goal_id}")
 
@@ -113,8 +133,11 @@ class ArtifactStore:
             return goals
         for state_path in self.runs_dir.glob("*/state.json"):
             try:
-                goal = Goal.from_dict(self._read_json(state_path))
+                contained_state = self.goal_dir(state_path.parent.name) / "state.json"
+                goal = Goal.from_dict(self._read_json(contained_state))
             except (json.JSONDecodeError, OSError, ValueError):
+                continue
+            if goal.id != state_path.parent.name:
                 continue
             goals.append(goal)
         goals.sort(key=lambda goal: (goal.updated_at, goal.created_at, goal.id), reverse=True)
@@ -149,20 +172,29 @@ class ArtifactStore:
         candidates: list[tuple[str, Path]] = []
         for state_path in self.runs_dir.glob("*/state.json"):
             try:
-                payload = self._read_json(state_path)
+                contained_state = self.goal_dir(state_path.parent.name) / "state.json"
+                payload = self._read_json(contained_state)
             except (json.JSONDecodeError, OSError):
+                continue
+            except ValueError:
                 continue
             updated_at = payload.get("updated_at")
             goal_id = payload.get("id")
-            if not isinstance(updated_at, str) or not isinstance(goal_id, str):
+            if (
+                not isinstance(updated_at, str)
+                or not isinstance(goal_id, str)
+                or goal_id != state_path.parent.name
+            ):
                 continue
-            candidates.append((updated_at, state_path))
+            candidates.append((updated_at, contained_state))
         if not candidates:
             return None
         candidates.sort(key=lambda pair: pair[0], reverse=True)
         try:
             goal = Goal.from_dict(self._read_json(candidates[0][1]))
         except (json.JSONDecodeError, OSError, ValueError):
+            return None
+        if goal.id != candidates[0][1].parent.name:
             return None
         self._write_json(self.current_path, {"goal_id": goal.id})
         return goal
@@ -173,6 +205,8 @@ class ArtifactStore:
     def _read_json(self, path: Path) -> dict[str, Any]:
         for attempt in range(3):
             try:
+                if path.is_symlink():
+                    raise OSError(f"state path must not be a symlink: {path}")
                 content = path.read_text(encoding="utf-8")
                 return cast(dict[str, Any], json.loads(content))
             except (FileNotFoundError, PermissionError):
@@ -180,6 +214,12 @@ class ArtifactStore:
                     raise
                 time.sleep(0.01)
         raise AssertionError("unreachable")
+
+    def _reject_symlinked_state_directories(self) -> None:
+        if self.root.is_symlink():
+            raise ValueError("harness state root must not be a symlink")
+        if self.runs_dir.is_symlink():
+            raise ValueError("harness runs directory must not be a symlink")
 
     def _write_text(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

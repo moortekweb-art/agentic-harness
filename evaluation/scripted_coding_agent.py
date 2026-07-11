@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 from evaluation.fixture_support import fixture_target, load_fixture  # noqa: E402
 
 
-EVIDENCE_REF = "review:1:command_passes"
+EVIDENCE_REF = "review:1"
 ATTEMPT_FILE = Path(".agentic-harness/evaluation-agent-attempt.json")
 
 

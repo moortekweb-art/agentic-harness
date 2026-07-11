@@ -19,13 +19,15 @@ from agentic_harness.adapters.model_agent import (
     _atomic_write,
 )
 from agentic_harness.core.config import HarnessConfig, load_config
+from agentic_harness.core.autonomy import AutonomousRunner
 from agentic_harness.core.errors import ConfigError
 from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.factory import review_criteria_from_config
 from agentic_harness.core.providers import ProviderProfile, resolve_api_key
-from agentic_harness.core.review import command_passes
+from agentic_harness.core.review import DeterministicReviewer, ReviewCriterion, command_passes
 from agentic_harness.core.safety import git_changes
-from agentic_harness.core.state import Goal
+from agentic_harness.core.state import Goal, GoalStatus
+from agentic_harness.core.supervisor import Supervisor
 from agentic_harness.cli import build_supervisor
 
 
@@ -521,13 +523,12 @@ def test_model_agent_checks_cancellation_between_provider_and_tool_steps(tmp_pat
     assert not (tmp_path / "src" / "late.txt").exists()
 
 
-def test_model_completion_rejects_invented_requirement_evidence(tmp_path) -> None:
+def test_model_completion_uses_common_audit_for_invented_evidence(tmp_path) -> None:
     source = tmp_path / "src"
     source.mkdir()
     (source / "greeting.txt").write_text("hello", encoding="utf-8")
     provider = SequenceProvider(
         [
-            {"action": "read_file", "arguments": {"path": "src/greeting.txt"}},
             {
                 "action": "report_outcome",
                 "arguments": {
@@ -549,11 +550,59 @@ def test_model_completion_rejects_invented_requirement_evidence(tmp_path) -> Non
         ]
     )
     worker = EmbeddedModelAgent(project_dir=tmp_path, provider=provider, model="model")
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=DeterministicReviewer(
+            [ReviewCriterion("deterministic_check", lambda goal: (True, "passed"))]
+        ),
+    )
 
-    result = worker.run(_goal(tmp_path))
+    goal = AutonomousRunner(supervisor).step("reject invented embedded evidence")
 
-    assert result.success is False
-    assert "evidence" in result.summary.lower()
+    assert goal.status is not GoalStatus.DONE
+    audit = goal.metadata["autonomy"]["completion_audit"]
+    assert audit["passed"] is False
+    assert any("unverified evidence" in failure for failure in audit["failures"])
+
+
+def test_model_completion_accepts_prospective_harness_review_evidence(tmp_path) -> None:
+    provider = SequenceProvider(
+        [
+            {
+                "action": "report_outcome",
+                "arguments": {
+                    "status": "complete",
+                    "summary": "Ready for independent review.",
+                    "plan": [{"step": "Verify", "status": "completed"}],
+                    "requirements": [
+                        {
+                            "id": "R1",
+                            "status": "satisfied",
+                            "evidence": ["review:1"],
+                        }
+                    ],
+                    "current_subgoal": "independent review",
+                    "checkpoint": "ready_for_review",
+                    "blockers": [],
+                },
+            }
+        ]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=EmbeddedModelAgent(project_dir=tmp_path, provider=provider, model="model"),
+        reviewer=DeterministicReviewer(
+            [ReviewCriterion("deterministic_check", lambda goal: (True, "passed"))]
+        ),
+    )
+
+    goal = AutonomousRunner(supervisor).run("accept embedded review evidence")
+
+    assert goal.status is GoalStatus.DONE
+    system_prompt = provider.requests[0][0]["content"]
+    assert "prospective review IDs supplied" in system_prompt
+    assert "cite only evidence_id values returned by successful tools" not in system_prompt
 
 
 def test_model_agent_preserves_preexisting_changes_without_explicit_scope(tmp_path) -> None:

@@ -181,7 +181,11 @@ def test_coding_agent_worker_extracts_structured_harness_outcome(monkeypatch, tm
         "status": "complete",
         "summary": "implemented and verified",
         "requirements": [
-            {"id": "tests", "status": "satisfied", "evidence": ["3 passed"]}
+            {
+                "id": "tests",
+                "status": "satisfied",
+                "evidence": ["review:1"],
+            }
         ],
         "blockers": [],
     }
