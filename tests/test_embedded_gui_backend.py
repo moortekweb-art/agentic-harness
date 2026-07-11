@@ -129,6 +129,9 @@ def test_terminal_state_waits_for_the_driver_to_quiesce(tmp_path) -> None:
     try:
         visible = backend.status()
         readiness = backend.readiness()
+        current_history = next(
+            row for row in backend.history() if row["id"] == visible["id"]
+        )
     finally:
         release.set()
         active_driver.join(timeout=5)
@@ -138,6 +141,9 @@ def test_terminal_state_waits_for_the_driver_to_quiesce(tmp_path) -> None:
     assert visible["final_result"]["accepted"] is False
     assert readiness["state"] == "working"
     assert readiness["can_start"] is False
+    assert current_history["status"] == "checking"
+    assert current_history["allowed_actions"] == []
+    assert current_history["final_result"]["accepted"] is False
 
 
 def test_embedded_backend_history_survives_server_restart(tmp_path) -> None:

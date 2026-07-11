@@ -437,12 +437,15 @@ class EmbeddedExecutionBackend:
                 daemon=True,
             )
             self._thread.start()
-        return self._task(goal)
+        return self._current_task(goal)
 
     def status(self) -> dict[str, Any]:
         goal = self.store.read_current_goal()
         if goal is None:
             return self._ready_task()
+        return self._current_task(goal)
+
+    def _current_task(self, goal: Goal) -> dict[str, Any]:
         task = self._task(goal)
         if self._driver_active() and task["status"] in {"done", "blocked", "stopped"}:
             task["status"] = "checking"
@@ -469,7 +472,12 @@ class EmbeddedExecutionBackend:
 
     def history(self, *, query: str = "") -> list[dict[str, Any]]:
         needle = query.strip().lower()
-        tasks = [self._task(goal) for goal in self.store.list_goals()]
+        current = self.store.read_current_goal()
+        current_id = current.id if current is not None else ""
+        tasks = [
+            self._current_task(goal) if goal.id == current_id else self._task(goal)
+            for goal in self.store.list_goals()
+        ]
         if needle:
             tasks = [task for task in tasks if needle in json.dumps(task, sort_keys=True).lower()]
         return tasks
@@ -570,7 +578,7 @@ class EmbeddedExecutionBackend:
         if goal is None:
             return self._blocked_task("There is no task to continue.", action="new_task")
         if self._thread is not None and self._thread.is_alive():
-            return self._task(goal)
+            return self._current_task(goal)
         try:
             supervisor = build_supervisor(
                 self.project_dir,
@@ -600,7 +608,7 @@ class EmbeddedExecutionBackend:
                     supervisor.store.write_goal(goal)
             self._cancel.clear()
             self._start_thread(_review_commands_from_goal(goal))
-            return self._task(goal)
+            return self._current_task(goal)
         except (ConfigError, HarnessError, OSError, ValueError) as exc:
             return self._blocked_task(str(exc), action="setup")
 
@@ -609,7 +617,7 @@ class EmbeddedExecutionBackend:
         if goal is None:
             return self._blocked_task("There is no task to accept.", action="new_task")
         if goal.status is GoalStatus.DONE and goal.metadata.get("accepted") is True:
-            return self._task(goal)
+            return self._current_task(goal)
         return self._blocked_task(
             "This task cannot be accepted until independent verification passes.",
             action="view_checks",
@@ -623,7 +631,7 @@ class EmbeddedExecutionBackend:
         if self._thread is None or not self._thread.is_alive():
             self._mark_cancelled()
             return self.status()
-        task = self._task(goal)
+        task = self._current_task(goal)
         task["status"] = "stopping"
         task["status_label"] = "Stopping safely"
         task["summary"] = "The current tool step will finish, then the task will stop."
