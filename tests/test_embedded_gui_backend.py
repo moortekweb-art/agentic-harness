@@ -16,7 +16,7 @@ from agentic_harness.core.artifacts import ArtifactStore
 from agentic_harness.core.autonomy import AutonomousRunner
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.core.factory import build_supervisor
-from agentic_harness.core.state import GoalStatus
+from agentic_harness.core.state import Goal, GoalStatus
 
 
 def _configure_scripted_agent(project: Path) -> None:
@@ -451,6 +451,31 @@ def test_terminal_report_hash_uses_the_persisted_file_bytes(tmp_path, monkeypatc
     repaired = backend._ensure_terminal_report(goal)
 
     assert backend._terminal_report_ready(repaired) is True
+
+
+def test_retryable_failed_goal_is_not_exposed_as_terminal(tmp_path, monkeypatch) -> None:
+    backend = EmbeddedExecutionBackend(tmp_path)
+    goal = Goal(objective="Retry a failed independent check")
+    goal.transition(GoalStatus.PLANNING, reason="started")
+    goal.transition(GoalStatus.IN_PROGRESS, reason="planned")
+    goal.transition(GoalStatus.REVIEW, reason="worker completed")
+    goal.transition(GoalStatus.FAILED, reason="review failed")
+    goal.metadata["autonomy"] = {
+        "contract": "agentic_harness.autonomy.v1",
+        "status": "checking",
+        "operator_intervention_required": False,
+    }
+    goal.metadata["worker_outcome"] = {"summary": "untrusted worker success"}
+
+    def reject_terminal_report(_goal):
+        raise AssertionError("retryable state must not create terminal evidence")
+
+    monkeypatch.setattr(backend, "_ensure_terminal_report", reject_terminal_report)
+
+    visible = backend._task(goal)
+
+    assert visible["status"] == "checking"
+    assert visible["final_result"]["accepted"] is False
 
 
 def test_terminal_report_is_refreshed_after_blocked_goal_recovers(tmp_path) -> None:

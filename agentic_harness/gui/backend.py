@@ -14,7 +14,7 @@ import yaml
 
 from agentic_harness.adapters.model_agent import OpenAICompatibleProvider
 from agentic_harness.core.artifacts import ArtifactStore
-from agentic_harness.core.autonomy import AutonomousRunner, AutonomyPolicy
+from agentic_harness.core.autonomy import AUTONOMY_CONTRACT, AutonomousRunner, AutonomyPolicy
 from agentic_harness.core.config import (
     CONFIG_DIR,
     CONFIG_NAME,
@@ -710,12 +710,22 @@ class EmbeddedExecutionBackend:
         return config
 
     def _task(self, goal: Goal) -> dict[str, Any]:
-        terminal = goal.status.is_terminal
-        if goal.status.is_terminal:
-            goal = self._ensure_terminal_report(goal)
         autonomy = goal.metadata.get("autonomy")
         if not isinstance(autonomy, dict):
             autonomy = {}
+        status = _task_status(goal, autonomy)
+        terminal = goal.status.is_terminal and status in {"done", "blocked", "stopped"}
+        if terminal:
+            goal = self._ensure_terminal_report(goal)
+            autonomy = goal.metadata.get("autonomy")
+            if not isinstance(autonomy, dict):
+                autonomy = {}
+            status = _task_status(goal, autonomy)
+            terminal = goal.status.is_terminal and status in {
+                "done",
+                "blocked",
+                "stopped",
+            }
         outcome = goal.metadata.get("worker_outcome")
         if not isinstance(outcome, dict):
             outcome = {}
@@ -740,7 +750,6 @@ class EmbeddedExecutionBackend:
         )
         changed_files = changes.get("entries", []) if isinstance(changes, dict) else []
         verification = _verification(goal, outcome)
-        status = _task_status(goal, autonomy)
         report_ready = not terminal or self._terminal_report_ready(goal)
         if terminal and not report_ready:
             status = "checking"
@@ -1051,7 +1060,11 @@ def _task_status(goal: Goal, autonomy: dict[str, Any]) -> str:
         return "stopped"
     if goal.status is GoalStatus.DONE:
         return "done"
-    if autonomy.get("operator_intervention_required") is True or goal.status is GoalStatus.FAILED:
+    if autonomy.get("operator_intervention_required") is True:
+        return "blocked"
+    if goal.status is GoalStatus.FAILED:
+        if autonomy.get("contract") == AUTONOMY_CONTRACT:
+            return "checking"
         return "blocked"
     if goal.status is GoalStatus.REVIEW:
         return "checking"
