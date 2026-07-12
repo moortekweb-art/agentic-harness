@@ -22,7 +22,8 @@ def sha256(path: Path) -> str:
 
 def redact(text: str) -> str:
     text = SESSION_PATTERN.sub("session id: [redacted]", text)
-    return PATH_PATTERN.sub("[local-path]", text)
+    text = PATH_PATTERN.sub("[local-path]", text)
+    return "\n".join(line.rstrip() for line in text.splitlines()) + "\n"
 
 
 def package(source: Path, destination: Path) -> dict[str, Any]:

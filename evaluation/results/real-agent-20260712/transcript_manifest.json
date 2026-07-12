@@ -8,7 +8,7 @@
   {
     "arm": "harness",
     "file": "transcripts/boolean-default-harness.log",
-    "sha256": "ea3d352b526c917713e1944e5ad7349347a9b7015c50ec2507b2300cb08a7647",
+    "sha256": "647f5eb1e06cfe84e59a939156445dc324945f84a29929d0cb2e1019c218e2b9",
     "tokens": 14525
   },
   {
@@ -20,7 +20,7 @@
   {
     "arm": "harness",
     "file": "transcripts/command-flag-harness.log",
-    "sha256": "26e3056e67e62ead09cffffec4c5b1f16dc2497d00b3e8096d9f475257aa4377",
+    "sha256": "4cdf2424eb88c6e910775d7d471664f2469df0e7bc7e675a2a9eaeeb2c631a6e",
     "tokens": 14785
   },
   {
@@ -32,7 +32,7 @@
   {
     "arm": "harness",
     "file": "transcripts/csv-port-harness.log",
-    "sha256": "fb73ce04ecd50eff00a2279507fee2dc3bc814d02d6f9edd8c96fd7a2cbf2882",
+    "sha256": "a98b93630cf1f199bf07f2682a67ed0f663de6b77b933b0905a6d2e8ccfe3f0e",
     "tokens": 20373
   },
   {
@@ -44,7 +44,7 @@
   {
     "arm": "harness",
     "file": "transcripts/dedupe-route-harness.log",
-    "sha256": "9e0c87007fb4615aeb2fb0ff0e5e522b687c465b198a334deadee88e374323a3",
+    "sha256": "a526e74997b8570d5c47a7095d5f5487fe3d7ba3cf0b321cbd2b6d8cdf74c319",
     "tokens": 11974
   },
   {
@@ -56,7 +56,7 @@
   {
     "arm": "harness",
     "file": "transcripts/dependency-pin-harness.log",
-    "sha256": "7ab23d5522e9a3e564c8895e7e57d55c05e8b14b407b40364347683f75b355e7",
+    "sha256": "986485062379dba483ec24a8e9df3989c6758b767670e3b870e552ec2f52f0a3",
     "tokens": 12805
   },
   {
@@ -68,7 +68,7 @@
   {
     "arm": "harness",
     "file": "transcripts/json-timeout-harness.log",
-    "sha256": "ee1969f7a81b3caa061a00f88928b75600404902cf4417f3f441d856ef823f8a",
+    "sha256": "b9a5ddabe1d4cd3ce3ba1d9702df738cd9c910e0c5eb4665693a51f5df481bda",
     "tokens": 20520
   },
   {
@@ -80,7 +80,7 @@
   {
     "arm": "harness",
     "file": "transcripts/label-typo-harness.log",
-    "sha256": "5163e4c6afa50d3abb007b27da3af7cd36642111767959ba8870128c746aa73b",
+    "sha256": "9a6554aca1e5e36dda9b750cfa5f696b1a23d96f03244ea550824c8afece0f5d",
     "tokens": 12613
   },
   {
@@ -92,7 +92,7 @@
   {
     "arm": "harness",
     "file": "transcripts/markdown-link-harness.log",
-    "sha256": "b74eda335e55857b4591ecdf87146cee4d218fb13b25ddbbf0df834d30f5b16a",
+    "sha256": "233a6aa3c5e8db9486fd779cb4195e06ee4024ef11e654791f99d2a5b2679f10",
     "tokens": 30287
   },
   {
@@ -104,7 +104,7 @@
   {
     "arm": "harness",
     "file": "transcripts/retry-limit-harness.log",
-    "sha256": "8daa842cc78727e610096e5dbf4503904c0e3713f5628f15fcd7674d99856f9b",
+    "sha256": "19bf71274a7746161b12c5cb659737042b45cb0780042bb13719ff45c8ebd0ae",
     "tokens": 13227
   },
   {
@@ -116,7 +116,7 @@
   {
     "arm": "harness",
     "file": "transcripts/sort-flags-harness.log",
-    "sha256": "4d249b6791710c26882eb02d7d50f30574fe2a6014f639505517832082ff390d",
+    "sha256": "dcce8fe089a90e54dbdabdf96ba2dc831a77a3a56c26daf0afab16a3a307db8a",
     "tokens": 16002
   }
 ]
