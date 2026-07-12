@@ -9,6 +9,10 @@ from pathlib import Path
 
 from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.redaction import redact_secrets
+from agentic_harness.core.safety import (
+    command_uses_windows_shell,
+    resolve_command_executable,
+)
 from agentic_harness.core.secure_io import write_private_text
 from agentic_harness.core.state import Goal
 from agentic_harness.core.worker import WorkerResult
@@ -83,7 +87,7 @@ class CodingAgentWorker:
         return path
 
     def run(self, goal: Goal) -> WorkerResult:
-        command = self.command_for(goal)
+        command = resolve_command_executable(self.command_for(goal))
         self._append_event(
             goal,
             kind="tool_started",
@@ -103,6 +107,7 @@ class CodingAgentWorker:
                 timeout=self.timeout,
                 check=False,
                 env=env,
+                shell=command_uses_windows_shell(command),
             )
         except subprocess.TimeoutExpired as exc:
             self._append_event(

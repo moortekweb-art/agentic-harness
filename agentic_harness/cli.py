@@ -26,7 +26,7 @@ from agentic_harness.core.config import (
     write_tool_config,
 )
 from agentic_harness.core.demos import create_demo, demo_names
-from agentic_harness.core.errors import ConfigError, HarnessError
+from agentic_harness.core.errors import ConfigError, HarnessError, NoActiveGoalError
 from agentic_harness.core.factory import (
     autonomy_policy_from_config,
     build_supervisor,
@@ -42,9 +42,12 @@ from agentic_harness.core.local_goal_bridge import (
 )
 from agentic_harness.gui.server import run_server_from_args
 from agentic_harness.core.recipes import Recipe, explain_recipe, list_recipes, load_recipe
+from agentic_harness.core.presentation import safe_inline_text
+from agentic_harness.core.redaction import redact_secrets
+from agentic_harness.core.reporting import build_run_receipt
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.supervisor import Supervisor
-from agentic_harness.core.safety import goal_safety_metadata, split_command
+from agentic_harness.core.safety import format_command, goal_safety_metadata, split_command
 from agentic_harness.core.workspace import format_workspace_change_lines, workspace_change_summary
 
 
@@ -96,7 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start-here", help="Show the beginner command guide")
     sub.add_parser("guide", help="Show the beginner command guide")
     sub.add_parser("version", help="Print the installed agentic-harness version")
-    easy_do = sub.add_parser("do", help="Start useful background work from plain English")
+    easy_do = sub.add_parser("do", help="Run one goal and require independent verification")
     easy_do.add_argument("objective")
     easy_do.add_argument(
         "--blocker-limit",
@@ -105,7 +108,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stop for review after this many identical no-progress blockers.",
     )
     easy_do.add_argument("--safe-area", action="append", default=[])
-    easy_do.add_argument("--check", action="append", default=[])
+    easy_do.add_argument(
+        "--check",
+        "--verify",
+        dest="check",
+        action="append",
+        default=[],
+        metavar="COMMAND",
+        help="Independent command to run before accepting done; repeat for multiple checks.",
+    )
     easy_do.add_argument("--json", action="store_true", help="Print final goal JSON.")
     work = sub.add_parser("work", help="Interactive no-jargon mode picker")
     work.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
@@ -126,8 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gui.add_argument("--no-open", action="store_true", help="Do not open a browser automatically.")
     sub.add_parser("modes", help="Explain the four human work modes")
-    easy_check = sub.add_parser("check", help="Show what the background worker is doing")
-    easy_check.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    sub.add_parser("check", help="Show the current durable task result and evidence state")
     easy_watch = sub.add_parser(
         "watch",
         help="Run one diagnostic monitor pass; background supervision normally owns this",
@@ -226,6 +236,15 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("objective")
     run = sub.add_parser("run", help="Start, continue, and review a goal")
     run.add_argument("objective")
+    run.add_argument(
+        "--check",
+        "--verify",
+        dest="check",
+        action="append",
+        default=[],
+        metavar="COMMAND",
+        help="Independent command to run before accepting done; repeat for multiple checks.",
+    )
     run.add_argument("--json", action="store_true", help="Print the final goal JSON.")
     drive = sub.add_parser(
         "run-until-done",
@@ -237,6 +256,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="Consecutive identical no-progress blockers before stopping. Default: 3.",
+    )
+    drive.add_argument(
+        "--check",
+        "--verify",
+        dest="check",
+        action="append",
+        default=[],
+        metavar="COMMAND",
+        help="Independent command to run before accepting done; repeat for multiple checks.",
     )
     drive.add_argument("--json", action="store_true", help="Print the final goal JSON.")
     goal_cmd = sub.add_parser(
@@ -251,7 +279,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Consecutive identical no-progress blockers before human review. Default: 3.",
     )
     goal_cmd.add_argument("--safe-area", action="append", default=[])
-    goal_cmd.add_argument("--check", action="append", default=[])
+    goal_cmd.add_argument(
+        "--check",
+        "--verify",
+        dest="check",
+        action="append",
+        default=[],
+        metavar="COMMAND",
+        help="Independent command to run before accepting done; repeat for multiple checks.",
+    )
     goal_cmd.add_argument("--json", action="store_true", help="Print the final goal JSON.")
     status = sub.add_parser("status", help="Show current goal state")
     status.add_argument(
@@ -261,7 +297,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format. Default: text.",
     )
     sub.add_parser("continue", help="Advance the active goal")
-    sub.add_parser("review", help="Run deterministic review")
+    review = sub.add_parser("review", help="Run deterministic independent review")
+    review.add_argument(
+        "--check",
+        "--verify",
+        dest="check",
+        action="append",
+        default=[],
+        metavar="COMMAND",
+        help="Independent command to run; defaults to the saved goal or project check.",
+    )
     sub.add_parser("repair", help="Repair marker-only failures")
     sub.add_parser("restart", help="Restart a failed goal (FAILED -> PLANNING)")
     sub.add_parser("reset-loop-guard", help="Reset the auto-continue circuit breaker")
@@ -404,44 +449,73 @@ def main(argv: list[str] | None = None) -> int:
                 args.objective,
                 metadata=_cli_goal_safety_metadata(project_dir, config),
             )
-            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
             return 0
         if args.command == "run":
             config = load_config(project_dir)
+            review_commands = resolve_review_commands(args.check, config)
+            supervisor = build_supervisor(project_dir, review_commands=review_commands)
             goal = supervisor.start(
                 args.objective,
-                metadata=_cli_goal_safety_metadata(project_dir, config),
+                metadata=_cli_goal_safety_metadata(
+                    project_dir,
+                    config,
+                    review_commands=review_commands,
+                ),
             )
             goal = supervisor.continue_goal()
             if goal.status is GoalStatus.REVIEW:
                 goal = supervisor.review()
             goal, report_path = write_goal_report(supervisor, project_dir, goal)
             if args.json:
-                print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+                print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
             else:
                 if initialized_config is not None:
                     path, tool = initialized_config
                     print(format_init_text(path, tool))
-                changes = workspace_change_summary(
-                    project_dir,
-                    goal.metadata.get("workspace_snapshot"),
-                )
+                changes = goal_workspace_changes(project_dir, goal)
                 print(format_report_text(goal, report_path=report_path, workspace_changes=changes))
-            return 0 if goal.status is GoalStatus.DONE else 1
+            return verified_goal_exit_code(goal)
         if args.command == "run-until-done":
             config = load_config(project_dir)
             current = supervisor.status()
             objective = args.objective
+            if current is None and not objective:
+                raise NoActiveGoalError(
+                    "no active goal; provide an objective to start one"
+                )
+            resume_goal = (
+                current
+                if current is not None
+                and (not objective or current.status not in {GoalStatus.DONE, GoalStatus.FAILED})
+                else None
+            )
+            review_commands = resolve_review_commands(
+                args.check,
+                config,
+                goal=resume_goal,
+            )
+            supervisor = build_supervisor(project_dir, review_commands=review_commands)
+            current = supervisor.status()
             if objective and (
                 current is None or current.status in {GoalStatus.DONE, GoalStatus.FAILED}
             ):
                 supervisor.start(
                     objective,
-                    metadata=_cli_goal_safety_metadata(project_dir, config),
+                    metadata=_cli_goal_safety_metadata(
+                        project_dir,
+                        config,
+                        review_commands=review_commands,
+                    ),
                 )
                 objective = None
             else:
-                _ensure_cli_goal_safety(supervisor, project_dir, config)
+                _ensure_cli_goal_safety(
+                    supervisor,
+                    project_dir,
+                    config,
+                    review_commands=review_commands,
+                )
             goal = run_until_done(
                 supervisor,
                 objective=objective,
@@ -449,29 +523,32 @@ def main(argv: list[str] | None = None) -> int:
             )
             goal, report_path = write_goal_report(supervisor, project_dir, goal)
             if args.json:
-                print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+                print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
             else:
                 if initialized_config is not None:
                     path, tool = initialized_config
                     print(format_init_text(path, tool))
-                changes = workspace_change_summary(
-                    project_dir,
-                    goal.metadata.get("workspace_snapshot"),
-                )
+                changes = goal_workspace_changes(project_dir, goal)
                 print(format_report_text(goal, report_path=report_path, workspace_changes=changes))
-            return 0 if goal.status is GoalStatus.DONE else 1
+            return verified_goal_exit_code(goal)
         if args.command == "goal":
             try:
                 config = load_config(project_dir)
-                review_commands = [
-                    split_command(value) for value in args.check if value.strip()
-                ]
-                if not review_commands and config.review_command:
-                    review_commands = [config.review_command]
-                if not review_commands:
-                    raise ConfigError(
-                        "no independent verification command is configured; add --check or set review_command"
+                current = supervisor.status()
+                resume_goal = (
+                    current
+                    if current is not None
+                    and (
+                        not args.objective
+                        or current.status not in {GoalStatus.DONE, GoalStatus.FAILED}
                     )
+                    else None
+                )
+                review_commands = resolve_review_commands(
+                    args.check,
+                    config,
+                    goal=resume_goal,
+                )
                 supervisor = build_supervisor(
                     project_dir,
                     review_commands=review_commands,
@@ -509,17 +586,14 @@ def main(argv: list[str] | None = None) -> int:
                 goal = AutonomousRunner(supervisor, policy=policy).run(args.objective)
             goal, report_path = write_goal_report(supervisor, project_dir, goal)
             if args.json:
-                print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+                print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
             else:
                 if initialized_config is not None:
                     path, tool = initialized_config
                     print(format_init_text(path, tool))
-                changes = workspace_change_summary(
-                    project_dir,
-                    goal.metadata.get("workspace_snapshot"),
-                )
+                changes = goal_workspace_changes(project_dir, goal)
                 print(format_report_text(goal, report_path=report_path, workspace_changes=changes))
-            return 0 if goal.status is GoalStatus.DONE else 1
+            return verified_goal_exit_code(goal)
         if args.command == "status":
             active_goal = supervisor.status()
             if args.format == "text":
@@ -527,7 +601,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(
                     json.dumps(
-                        active_goal.to_dict() if active_goal else {"active": False},
+                        status_json_payload(active_goal),
                         indent=2,
                         sort_keys=True,
                     )
@@ -543,10 +617,7 @@ def main(argv: list[str] | None = None) -> int:
                 format_report_text(
                     reported_goal,
                     report_path=report_rel,
-                    workspace_changes=workspace_change_summary(
-                        project_dir,
-                        reported_goal.metadata.get("workspace_snapshot"),
-                    ),
+                    workspace_changes=goal_workspace_changes(project_dir, reported_goal),
                 )
             )
             return 0
@@ -554,17 +625,33 @@ def main(argv: list[str] | None = None) -> int:
             config = load_config(project_dir)
             _ensure_cli_goal_safety(supervisor, project_dir, config)
             goal = supervisor.continue_goal()
-            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
             return 0
         if args.command == "review":
+            config = load_config(project_dir)
+            current = supervisor.status()
+            review_commands = resolve_review_commands(
+                args.check,
+                config,
+                goal=current,
+            )
+            supervisor = build_supervisor(project_dir, review_commands=review_commands)
+            _ensure_cli_goal_safety(
+                supervisor,
+                project_dir,
+                config,
+                review_commands=review_commands,
+            )
             goal = supervisor.review()
             print(json.dumps(_review_command_payload(goal), indent=2, sort_keys=True))
-            return 0
+            return verified_goal_exit_code(goal)
         if args.command == "repair":
             repaired_goal = supervisor.repair()
             print(
                 json.dumps(
-                    repaired_goal.to_dict() if repaired_goal else {"repaired": False},
+                    public_goal_payload(repaired_goal)
+                    if repaired_goal
+                    else {"repaired": False},
                     indent=2,
                     sort_keys=True,
                 )
@@ -572,12 +659,21 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "restart":
             goal = supervisor.restart()
-            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+            print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
             return 0
         if args.command == "accept":
+            current = supervisor.status()
+            if current is None:
+                raise NoActiveGoalError("no active goal")
+            receipt = build_run_receipt(current)
+            if receipt.category != "verified_done":
+                raise HarnessError(
+                    f"cannot accept goal {current.id}; "
+                    f"{receipt.label}: {receipt.trusted_reason}"
+                )
             goal = supervisor.accept(reason=args.reason)
-            print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
-            return 0
+            print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
+            return verified_goal_exit_code(goal)
         if args.command == "reset-loop-guard":
             ok = supervisor.reset_loop_guard()
             print(json.dumps({"ok": ok, "message": "loop guard reset"}, indent=2, sort_keys=True))
@@ -601,6 +697,56 @@ def run_until_done(
         require_completion_claim=False,
     )
     return AutonomousRunner(supervisor, policy=policy).run(objective)
+
+
+def verified_goal_exit_code(goal: Goal) -> int:
+    return 0 if build_run_receipt(goal).category == "verified_done" else 1
+
+
+def resolve_review_commands(
+    explicit: list[str],
+    config: HarnessConfig,
+    *,
+    goal: Goal | None = None,
+) -> list[list[str]]:
+    commands: list[list[str]] = []
+    for value in explicit:
+        if not value.strip():
+            continue
+        try:
+            command = split_command(value)
+        except ValueError as exc:
+            raise ConfigError(f"invalid --check command: {exc}") from exc
+        if not command:
+            raise ConfigError("invalid --check command: command is empty")
+        commands.append(command)
+    if not commands and goal is not None:
+        commands = persisted_review_commands(goal)
+    if not commands and config.review_command:
+        commands = [config.review_command]
+    if not commands:
+        raise ConfigError(
+            "no independent verification command is configured; "
+            "add --check COMMAND or save a project verification command"
+        )
+    return commands
+
+
+def persisted_review_commands(goal: Goal) -> list[list[str]]:
+    safety = goal.metadata.get("safety")
+    if not isinstance(safety, dict):
+        return []
+    rows = safety.get("checks")
+    if not isinstance(rows, list):
+        return []
+    commands: list[list[str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        argv = row.get("argv")
+        if isinstance(argv, list) and argv and all(isinstance(item, str) for item in argv):
+            commands.append(list(argv))
+    return commands
 
 
 def _cli_goal_safety_metadata(
@@ -635,23 +781,42 @@ def _ensure_cli_goal_safety(
     if goal is None:
         return
     safety = goal.metadata.get("safety")
-    if (
+    complete_safety = (
         isinstance(safety, dict)
         and isinstance(safety.get("allowed_paths"), list)
         and isinstance(safety.get("preexisting_changes"), list)
-    ):
+    )
+    if complete_safety and review_commands is None:
         return
     metadata = _cli_goal_safety_metadata(
         project_dir,
         config,
         review_commands=review_commands,
     )
+    generated_safety = metadata["safety"]
     with supervisor.store.autonomy_locked():
         with supervisor.store.locked():
             current = supervisor.store.read_current_goal()
             if current is None or current.id != goal.id:
                 raise HarnessError("active goal changed while safety metadata was prepared")
-            current.metadata.update(metadata)
+            current_safety = current.metadata.get("safety")
+            if isinstance(current_safety, dict):
+                merged_safety = dict(current_safety)
+                for key, value in generated_safety.items():
+                    if key == "checks":
+                        if review_commands is not None or not isinstance(
+                            merged_safety.get(key), list
+                        ):
+                            merged_safety[key] = value
+                    elif key in {"allowed_paths", "preexisting_changes"}:
+                        if not isinstance(merged_safety.get(key), list):
+                            merged_safety[key] = value
+                    elif key not in merged_safety:
+                        merged_safety[key] = value
+                current.metadata["safety"] = merged_safety
+                current.metadata.setdefault("interface", metadata["interface"])
+            else:
+                current.metadata.update(metadata)
             supervisor.store.write_goal(current)
 
 
@@ -709,13 +874,7 @@ def run_easy_do_command(args: argparse.Namespace, project_dir: Path) -> int:
     try:
         initialized = ensure_execution_config(project_dir)
         config = load_config(project_dir)
-        review_commands = [split_command(value) for value in args.check if value.strip()]
-        if not review_commands and config.review_command:
-            review_commands = [config.review_command]
-        if not review_commands:
-            raise ConfigError(
-                "no independent verification command is configured; add --check or set review_command"
-            )
+        review_commands = resolve_review_commands(args.check, config)
         supervisor = build_supervisor(project_dir, review_commands=review_commands)
         supervisor.start(
             args.objective,
@@ -736,10 +895,18 @@ def run_easy_do_command(args: argparse.Namespace, project_dir: Path) -> int:
         goal = AutonomousRunner(supervisor, policy=policy).run()
         goal, report_path = write_goal_report(supervisor, project_dir, goal)
     except (ConfigError, HarnessError, ValueError) as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
+        elif "no independent verification command" in str(exc):
+            print("Could not start verified work.")
+            print(f"Problem: {exc}")
+            print('Next: rerun with --check "your test command".')
+            print("No goal was started.")
+        else:
+            print(f"Could not complete verified work: {exc}")
         return 2
     if args.json:
-        print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+        print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
     else:
         if initialized is not None:
             print(format_init_text(*initialized))
@@ -747,13 +914,10 @@ def run_easy_do_command(args: argparse.Namespace, project_dir: Path) -> int:
             format_report_text(
                 goal,
                 report_path=report_path,
-                workspace_changes=workspace_change_summary(
-                    project_dir,
-                    goal.metadata.get("workspace_snapshot"),
-                ),
+                workspace_changes=goal_workspace_changes(project_dir, goal),
             )
         )
-    return 0 if goal.status is GoalStatus.DONE else 1
+    return verified_goal_exit_code(goal)
 
 
 def run_interactive_work_command(args: argparse.Namespace, project_dir: Path) -> int:
@@ -859,19 +1023,50 @@ def run_recipe(
     initialized_config: tuple[Path, str] | None = None
     try:
         initialized_config = ensure_recipe_config(project_dir)
+        config = load_config(project_dir)
+        review_command = recipe_review_command(project_dir, recipe.review_command)
+        review_commands = [review_command] if review_command else []
         supervisor = build_supervisor(
             project_dir,
-            review_command=recipe_review_command(project_dir, recipe.review_command),
+            review_commands=review_commands,
             review_command_timeout=recipe.review_command_timeout,
         )
         if until_done:
+            current = supervisor.status()
+            if current is None or current.status in {GoalStatus.DONE, GoalStatus.FAILED}:
+                supervisor.start(
+                    recipe.objective,
+                    metadata=_cli_goal_safety_metadata(
+                        project_dir,
+                        config,
+                        review_commands=review_commands,
+                    ),
+                )
+                objective = None
+            elif current.objective == recipe.objective:
+                _ensure_cli_goal_safety(
+                    supervisor,
+                    project_dir,
+                    config,
+                    review_commands=review_commands,
+                )
+                objective = None
+            else:
+                objective = recipe.objective
             goal = run_until_done(
                 supervisor,
-                objective=recipe.objective,
+                objective=objective,
                 max_attempts=max_attempts,
             )
         else:
-            goal = supervisor.start(recipe.objective)
+            goal = supervisor.start(
+                recipe.objective,
+                metadata=_cli_goal_safety_metadata(
+                    project_dir,
+                    config,
+                    review_commands=review_commands,
+                ),
+            )
             goal = supervisor.continue_goal()
             if goal.status is GoalStatus.REVIEW:
                 goal = supervisor.review()
@@ -885,7 +1080,7 @@ def run_recipe(
         print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
         return 2
     if output_json:
-        print(json.dumps(goal.to_dict(), indent=2, sort_keys=True))
+        print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
     else:
         if initialized_config is not None:
             path, tool = initialized_config
@@ -895,13 +1090,10 @@ def run_recipe(
                 recipe,
                 goal,
                 report_path=report_path,
-                workspace_changes=workspace_change_summary(
-                    project_dir,
-                    goal.metadata.get("workspace_snapshot"),
-                ),
+                workspace_changes=goal_workspace_changes(project_dir, goal),
             )
         )
-    return 0 if goal.status is GoalStatus.DONE else 1
+    return verified_goal_exit_code(goal)
 
 
 def ensure_recipe_config(project_dir: Path) -> tuple[Path, str] | None:
@@ -1011,7 +1203,7 @@ def run_selftest() -> int:
         goal = supervisor.continue_goal()
         if goal.status is GoalStatus.REVIEW:
             goal = supervisor.review()
-        if goal.status is not GoalStatus.DONE:
+        if verified_goal_exit_code(goal) != 0:
             print(format_recipe_result_text(Recipe("selftest", "Self test", "selftest", []), goal))
             return 1
         print("Selftest: passed")
@@ -1176,6 +1368,9 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
             required_stdout=f"Recipe: {command}",
         ):
             return False
+    smoke_check = format_command(
+        [str(python_bin), "-c", "raise SystemExit(0)"]
+    )
     run_project = smoke_root / "run"
     run_config_dir = run_project / CONFIG_DIR
     run_config_dir.mkdir(parents=True)
@@ -1191,9 +1386,11 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
             str(run_project),
             "run",
             "release smoke goal",
+            "--check",
+            smoke_check,
         ],
         cwd=tmp_root,
-        required_stdout="Report: .agentic-harness/runs/",
+        required_stdout="Result: Verified done",
     ):
         return False
     if len(list((run_project / CONFIG_DIR / "runs").glob("*/report.md"))) != 1:
@@ -1208,7 +1405,7 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
             "status",
         ],
         cwd=tmp_root,
-        required_stdout="Status: done",
+        required_stdout="Result: Verified done",
     ):
         return False
     driver_project = smoke_root / "run-until-done"
@@ -1226,9 +1423,11 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
             str(driver_project),
             "run-until-done",
             "release smoke goal",
+            "--check",
+            smoke_check,
         ],
         cwd=tmp_root,
-        required_stdout="Report: .agentic-harness/runs/",
+        required_stdout="Result: Verified done",
     ):
         return False
     if len(list((driver_project / CONFIG_DIR / "runs").glob("*/report.md"))) != 1:
@@ -1564,25 +1763,37 @@ def write_goal_report(
     project_dir: Path,
     goal: Goal,
 ) -> tuple[Goal, str]:
-    changes = workspace_change_summary(project_dir, goal.metadata.get("workspace_snapshot"))
-    if goal.status.is_terminal and isinstance(changes, dict):
+    changes = goal_workspace_changes(project_dir, goal)
+    frozen = goal.metadata.get("terminal_workspace_changes")
+    if goal.status.is_terminal and isinstance(changes, dict) and not isinstance(frozen, dict):
         with supervisor.store.autonomy_locked():
             with supervisor.store.locked():
                 current = supervisor.store.read_current_goal()
                 if current is None or current.id != goal.id:
                     raise HarnessError("active goal changed before terminal evidence was frozen")
-                current.metadata["terminal_workspace_changes"] = changes
+                current_frozen = current.metadata.get("terminal_workspace_changes")
+                if isinstance(current_frozen, dict):
+                    changes = current_frozen
+                else:
+                    current.metadata["terminal_workspace_changes"] = changes
                 supervisor.store.write_goal(current)
                 goal = current
     reported_goal, report_path = supervisor.write_report(
         format_report_markdown(goal, workspace_changes=changes)
     )
     report_rel = project_relative_path(project_dir, report_path)
-    changes = workspace_change_summary(project_dir, reported_goal.metadata.get("workspace_snapshot"))
+    changes = goal_workspace_changes(project_dir, reported_goal)
     reported_goal, _ = supervisor.write_report(
         format_report_markdown(reported_goal, report_path=report_rel, workspace_changes=changes)
     )
     return reported_goal, report_rel
+
+
+def goal_workspace_changes(project_dir: Path, goal: Goal) -> dict[str, object] | None:
+    frozen = goal.metadata.get("terminal_workspace_changes")
+    if goal.status.is_terminal and isinstance(frozen, dict):
+        return frozen
+    return workspace_change_summary(project_dir, goal.metadata.get("workspace_snapshot"))
 
 
 def recipe_review_command(project_dir: Path, command: list[str]) -> list[str]:
@@ -1606,37 +1817,60 @@ def format_recipe_result_text(
     report_path: str | None = None,
     workspace_changes: dict[str, object] | None = None,
 ) -> str:
-    verdict = "done" if goal.status is GoalStatus.DONE else "not done"
+    receipt = build_run_receipt(goal)
     lines = [
-        f"Recipe: {recipe.name}",
-        f"Result: {verdict}",
+        f"Recipe: {safe_inline_text(recipe.name)}",
+        f"Result: {receipt.label}",
         f"Goal: {goal.id}",
-        f"Status: {goal.status.value}",
+        f"Status: {receipt.label.lower()}",
     ]
+    if receipt.worker_claim:
+        lines.append(f"{receipt.worker_claim_label}: {receipt.worker_claim}")
+    lines.extend(
+        [
+            f"Reason: {receipt.trusted_reason}",
+            f"Attempts: {receipt.attempts}",
+            f"Retries: {receipt.retries}",
+        ]
+    )
     if report_path:
-        lines.append(f"Report: {report_path}")
+        lines.append(f"Report: {safe_inline_text(report_path)}")
     lines.extend(format_workspace_change_lines(workspace_changes))
     if goal.review:
         passed = "passed" if goal.review.get("passed") is True else "failed"
         lines.append(f"Review: {passed}")
+    if receipt.verification_commands:
+        lines.append("Verification commands:")
+        lines.extend(f"- {command}" for command in receipt.verification_commands)
+    if receipt.review_attempts:
+        lines.append("Verification attempts:")
+        for attempt in receipt.review_attempts:
+            result = "passed" if attempt.passed else "failed"
+            lines.append(f"- Attempt {attempt.number}: {result} — {attempt.summary}")
+            for check in attempt.checks:
+                scope = "independent" if check.independent else "worker-reported"
+                check_result = "passed" if check.passed else "failed"
+                detail = check.message or check.name
+                lines.append(f"  - {scope}: {check_result} — {detail}")
     if goal.error:
-        lines.append(f"Error: {goal.error}")
+        lines.append(f"Error: {safe_inline_text(goal.error)}")
     if goal.status is GoalStatus.FAILED:
         lines.append("Next: check the error above, then run agentic-harness report")
         if "no worker configured" in (goal.error or ""):
             lines.append("Tip: run agentic-harness init-agent codex before using coding recipes.")
     if goal.artifacts:
         lines.append("Artifacts:")
-        lines.extend(f"- {artifact}" for artifact in goal.artifacts)
+        lines.extend(f"- {safe_inline_text(artifact)}" for artifact in goal.artifacts)
     return "\n".join(lines)
 
 
 def _review_command_payload(goal: Goal) -> dict[str, object]:
     """Return the terminal-safe result of an explicit review command."""
+    payload = public_goal_payload(goal)
     return {
-        "id": goal.id,
-        "status": goal.status.value,
-        "review": goal.review,
+        "id": payload["id"],
+        "status": payload["status"],
+        "review": payload["review"],
     }
 
 
@@ -1653,28 +1887,29 @@ def format_report_text(
                 "Next: agentic-harness quickstart",
             ]
         )
-    result = "done" if goal.status is GoalStatus.DONE else goal.status.value
+    receipt = build_run_receipt(goal)
     lines = [
-        f"Result: {result}",
+        f"Result: {receipt.label}",
         f"Goal: {goal.id}",
-        f"Objective: {goal.objective}",
-        f"Status: {goal.status.value}",
+        f"Objective: {safe_inline_text(goal.objective)}",
+        f"Status: {receipt.label.lower()}",
     ]
-    outcome = goal.metadata.get("worker_outcome")
-    summary = ""
-    if isinstance(outcome, dict):
-        summary = str(outcome.get("summary") or "").strip()
-    if not summary:
-        summary = str(goal.metadata.get("worker_summary") or "").strip()
-    if summary:
-        lines.append(f"Summary: {summary}")
+    if receipt.worker_claim:
+        lines.append(f"{receipt.worker_claim_label}: {receipt.worker_claim}")
+    lines.append(f"Reason: {receipt.trusted_reason}")
+    lines.extend(
+        [
+            f"Attempts: {receipt.attempts}",
+            f"Retries: {receipt.retries}",
+        ]
+    )
     autonomy = goal.metadata.get("autonomy")
     if isinstance(autonomy, dict):
         checkpoint = str(autonomy.get("checkpoint") or "").strip()
         if checkpoint:
-            lines.append(f"Checkpoint: {checkpoint}")
+            lines.append(f"Checkpoint: {safe_inline_text(checkpoint)}")
     if report_path:
-        lines.append(f"Report: {report_path}")
+        lines.append(f"Report: {safe_inline_text(report_path)}")
     lines.extend(format_workspace_change_lines(workspace_changes))
     duration = goal.duration_seconds
     if duration is not None:
@@ -1689,11 +1924,24 @@ def format_report_text(
         lines.append(f"Worker: {'passed' if worker_success else 'failed'}")
     if goal.review:
         lines.append(f"Review: {'passed' if goal.review.get('passed') is True else 'failed'}")
+    if receipt.verification_commands:
+        lines.append("Verification commands:")
+        lines.extend(f"- {command}" for command in receipt.verification_commands)
+    if receipt.review_attempts:
+        lines.append("Verification attempts:")
+        for attempt in receipt.review_attempts:
+            result = "passed" if attempt.passed else "failed"
+            lines.append(f"- Attempt {attempt.number}: {result} — {attempt.summary}")
+            for check in attempt.checks:
+                scope = "independent" if check.independent else "worker-reported"
+                check_result = "passed" if check.passed else "failed"
+                detail = check.message or check.name
+                lines.append(f"  - {scope}: {check_result} — {detail}")
     if goal.error:
-        lines.append(f"Error: {goal.error}")
+        lines.append(f"Error: {safe_inline_text(goal.error)}")
     if goal.artifacts:
         lines.append("Artifacts:")
-        lines.extend(f"- {artifact}" for artifact in goal.artifacts)
+        lines.extend(f"- {safe_inline_text(artifact)}" for artifact in goal.artifacts)
     return "\n".join(lines)
 
 
@@ -1777,16 +2025,25 @@ def format_next_text(project_dir: Path) -> str:
             ]
         )
     if goal.status is GoalStatus.DONE:
+        receipt = build_run_receipt(goal)
+        state = (
+            f"State: goal {goal.id} is done — {receipt.label}"
+            if receipt.category == "verified_done"
+            else f"State: goal {goal.id} — {receipt.label}"
+        )
         return "\n".join(
             [
-                f"State: goal {goal.id} is done",
+                state,
+                f"Reason: {receipt.trusted_reason}",
                 "Next: agentic-harness report",
                 "Run another: agentic-harness fix-tests",
             ]
         )
+    receipt = build_run_receipt(goal)
     return "\n".join(
         [
-            f"State: goal {goal.id} failed",
+            f"State: goal {goal.id} — {receipt.label}",
+            f"Reason: {receipt.trusted_reason}",
             "Next: agentic-harness report",
             "Retry: agentic-harness restart",
             "Or start new: agentic-harness fix-tests",
@@ -1799,32 +2056,34 @@ def format_start_here_text() -> str:
         [
             "Agentic Harness beginner guide",
             "",
-            "1. Check the install:",
+            "1. Open the local browser flow:",
+            "   agentic-harness gui",
+            "",
+            "2. Or run one terminal goal with an independent check:",
+            '   agentic-harness do "fix the failing tests" --check "python -m pytest -q"',
+            "",
+            "3. Inspect progress and the durable evidence report:",
+            "   agentic-harness check",
+            "   agentic-harness report",
+            "",
+            "4. Check the install:",
             "   agentic-harness selftest",
             "",
-            "2. Give the autonomous runner a complete plain-English objective:",
-            '   agentic-harness goal "fix the failing tests and verify the result"',
-            "   # It continues through progress and repair without routine prompts.",
-            "",
-            "3. Run the packaged demo end to end:",
+            "5. Run the packaged demo end to end:",
             "   agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force",
             "",
-            "4. See what to do in this project:",
+            "6. See detected setup and recipe shortcuts:",
             "   agentic-harness quickstart",
-            "",
-            "5. Set up a backend and run a useful recipe:",
             "   agentic-harness fix-tests",
             "   # Creates config automatically if a supported backend is available.",
             "",
-            "6. Read the result:",
+            "Advanced:",
+            '   agentic-harness goal "complete one verified outcome" --check "python -m pytest -q"',
             "   agentic-harness status",
-            "   agentic-harness report",
-            "",
-            "Useful previews:",
             "   agentic-harness run-recipe fix-tests --explain",
             "   agentic-harness recipes",
             "",
-            "No prompt design or YAML editing. Use goal for durable foreground work, or do and check for the portable project flow.",
+            "No prompt design or YAML editing is required for the first verified run.",
         ]
     )
 
@@ -2017,39 +2276,41 @@ def format_no_agent_text() -> str:
     )
 
 
+def public_goal_payload(goal: Goal) -> dict[str, Any]:
+    def redact_value(value: Any) -> Any:
+        if isinstance(value, str):
+            return redact_secrets(value)
+        if isinstance(value, list):
+            return [redact_value(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                redact_secrets(str(key)): redact_value(item)
+                for key, item in value.items()
+            }
+        return value
+
+    return {
+        key: redact_value(value)
+        for key, value in goal.to_dict().items()
+    }
+
+
+def status_json_payload(goal: Goal | None) -> dict[str, object]:
+    if goal is None:
+        return {"active": False}
+    receipt = build_run_receipt(goal)
+    payload: dict[str, object] = public_goal_payload(goal)
+    payload["result_category"] = receipt.category
+    payload["result_label"] = receipt.label
+    if goal.status is GoalStatus.DONE and receipt.category != "verified_done":
+        payload["status"] = GoalStatus.FAILED.value
+    return payload
+
+
 def format_status_text(goal: Goal | None) -> str:
     if goal is None:
         return "No active goal."
-    worker_success = goal.metadata.get("worker_success")
-    worker = "not run"
-    if worker_success is True:
-        worker = "success"
-    elif worker_success is False:
-        worker = "failed"
-    review = "not run"
-    if isinstance(goal.review, dict):
-        review = "passed" if goal.review.get("passed") is True else "failed"
-    lines = [
-        f"Goal: {goal.id}",
-        f"Objective: {goal.objective}",
-        f"Status: {goal.status.value}",
-        f"Worker: {worker}",
-        f"Review: {review}",
-    ]
-    duration = goal.duration_seconds
-    if duration is not None:
-        if duration < 60:
-            lines.append(f"Duration: {duration:.0f}s")
-        elif duration < 3600:
-            lines.append(f"Duration: {duration / 60:.1f}m")
-        else:
-            lines.append(f"Duration: {duration / 3600:.1f}h")
-    if goal.error:
-        lines.append(f"Error: {goal.error}")
-    if goal.artifacts:
-        lines.append("Artifacts:")
-        lines.extend(f"- {artifact}" for artifact in goal.artifacts)
-    return "\n".join(lines)
+    return format_report_text(goal)
 
 
 def doctor(project_dir: str | Path = ".") -> dict[str, object]:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -103,6 +104,59 @@ def test_failed_review_output_is_redacted_before_it_reaches_goal_or_cli(tmp_path
 
     assert secret not in serialized
     assert "exit code 1" in serialized
+
+
+def test_command_review_launches_the_resolved_executable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    resolved = r"C:\Tools\npm.cmd"
+    calls: list[list[str]] = []
+
+    def fake_resolve(command: list[str]) -> list[str]:
+        return [resolved, *command[1:]]
+
+    def fake_run(command: list[str], **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("agentic_harness.core.review.resolve_command_executable", fake_resolve)
+    monkeypatch.setattr("agentic_harness.core.review.subprocess.run", fake_run)
+
+    passed, _message = command_passes(["npm", "test"], cwd=tmp_path).check(
+        _make_goal()
+    )
+
+    assert passed is True
+    assert calls == [[resolved, "test"]]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires real Windows cmd.exe semantics")
+def test_command_review_windows_cmd_shim_escapes_metacharacter_arguments(
+    tmp_path: Path,
+) -> None:
+    receiver = tmp_path / "receiver.py"
+    received = tmp_path / "received.txt"
+    injected = tmp_path / "injected.txt"
+    receiver.write_text(
+        "import pathlib, sys\n"
+        f"pathlib.Path({str(received)!r}).write_text(sys.argv[1], encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    shim = tmp_path / "verification.cmd"
+    shim.write_text(
+        f'@echo off\r\n"{sys.executable}" "{receiver}" %*\r\n',
+        encoding="utf-8",
+    )
+    argument = f"check&echo injected>{injected}"
+
+    passed, _message = command_passes([str(shim), argument], cwd=tmp_path).check(
+        _make_goal()
+    )
+
+    assert passed is True
+    assert received.read_text(encoding="utf-8") == argument
+    assert not injected.exists()
 
 
 # ---------------------------------------------------------------------------

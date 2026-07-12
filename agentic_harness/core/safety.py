@@ -6,6 +6,7 @@ from collections.abc import Iterable
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 from typing import Any
 
@@ -83,6 +84,44 @@ def format_command(command: list[str], *, windows: bool | None = None) -> str:
     return subprocess.list2cmdline(command) if is_windows else shlex.join(command)
 
 
+def resolve_executable(executable: str) -> str | None:
+    """Return the exact launchable executable without invoking a shell."""
+    candidate = Path(executable)
+    if candidate.is_absolute() and candidate.is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return shutil.which(executable)
+
+
+def resolve_command_executable(
+    command: list[str],
+    *,
+    always: bool = False,
+    windows: bool | None = None,
+) -> list[str]:
+    """Replace argv[0] with the exact PATH result when one is available."""
+    if not command:
+        return []
+    is_windows = os.name == "nt" if windows is None else windows
+    if not always and not is_windows:
+        return list(command)
+    resolved = resolve_executable(command[0])
+    return [resolved or command[0], *command[1:]]
+
+
+def command_uses_windows_shell(
+    command: list[str],
+    *,
+    windows: bool | None = None,
+) -> bool:
+    """Use Python's Windows shell escaping only for batch-file launchers."""
+    is_windows = os.name == "nt" if windows is None else windows
+    return bool(
+        is_windows
+        and command
+        and Path(command[0]).suffix.lower() in {".bat", ".cmd"}
+    )
+
+
 def subprocess_environment(secret_env_names: Iterable[object] = ()) -> dict[str, str]:
     """Build the minimal environment used by workspace subprocesses."""
     env = {
@@ -120,8 +159,8 @@ def goal_safety_metadata(
     checks = [
         {
             "id": f"check-{index}",
-            "label": " ".join(command),
-            "argv": list(command),
+            "label": format_command(resolve_command_executable(command)),
+            "argv": resolve_command_executable(command),
         }
         for index, command in enumerate(review_commands, 1)
     ]

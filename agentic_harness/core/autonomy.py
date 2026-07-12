@@ -172,8 +172,9 @@ class AutonomousRunner:
         if outcome_status == "blocked":
             return self._record_blocker(goal, _outcome_blocker(outcome), lease)
 
-        goal = self.supervisor.review(finalize=False, _autonomy_lease=lease)
-        autonomy = _autonomy(goal)
+        if not self.supervisor.review_is_current(goal):
+            goal = self.supervisor.review(finalize=False, _autonomy_lease=lease)
+            autonomy = _autonomy(goal)
         if self.cancel_requested():
             return self._record_cancellation(goal, lease)
         if goal.status is GoalStatus.FAILED:

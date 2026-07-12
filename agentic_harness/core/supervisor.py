@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from copy import deepcopy
 from contextlib import contextmanager
+import hashlib
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,10 +19,14 @@ from agentic_harness.core.errors import (
     StateLockError,
 )
 from agentic_harness.core.loop_guard import LoopGuard
+from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.review import DeterministicReviewer
-from agentic_harness.core.state import Goal, GoalStatus
+from agentic_harness.core.state import Goal, GoalStatus, now_iso
 from agentic_harness.core.worker import Worker, WorkerResult
 from agentic_harness.core.workspace import capture_workspace_snapshot
+
+MAX_ATTEMPT_HISTORY = 100
+REVIEW_CONTEXT_CONTRACT = "agentic_harness.review_context.v1"
 
 
 class Supervisor:
@@ -73,6 +79,12 @@ class Supervisor:
 
     def status(self) -> Goal | None:
         return self.store.read_current_goal()
+
+    def review_is_current(self, goal: Goal) -> bool:
+        """Return whether durable review evidence matches this worker run and checks."""
+        return isinstance(goal.review, dict) and goal.review.get(
+            "context"
+        ) == _review_context(goal)
 
     def status_summary(self) -> str | None:
         """Return a one-line status summary for logging/monitoring, or None if no active goal."""
@@ -132,8 +144,10 @@ class Supervisor:
                 self.store.write_goal(goal)
                 return goal
             goal.metadata["worker_run_id"] = uuid4().hex
+            attempt_number = _start_worker_attempt(goal)
             self.store.write_goal(goal)
             result = self._run_worker(goal)
+            _finish_worker_attempt(goal, attempt_number, result)
             goal.metadata["worker_success"] = result.success
             goal.metadata["worker_summary"] = result.summary
             goal.metadata["worker_returncode"] = result.returncode
@@ -160,8 +174,16 @@ class Supervisor:
                     f"cannot review goal {goal.id} in {goal.status.value}; "
                     f"only goals in review can be reviewed"
                 )
+            previous_review = deepcopy(goal.review) if isinstance(goal.review, dict) else None
             result = self.reviewer.review(goal)
-            goal.review = result.to_dict()
+            review = result.to_dict()
+            review["context"] = _review_context(goal)
+            if previous_review is not None:
+                existing_history = goal.metadata.get("review_history")
+                history = list(existing_history) if isinstance(existing_history, list) else []
+                history.append(previous_review)
+                goal.metadata["review_history"] = history
+            goal.review = review
             if result.passed:
                 if finalize:
                     goal.transition(GoalStatus.DONE, reason="review passed")
@@ -306,6 +328,7 @@ class Supervisor:
             goal.metadata.pop("worker_returncode", None)
             goal.metadata.pop("worker_outcome", None)
             goal.metadata.pop("worker_run_id", None)
+            goal.metadata.pop("terminal_workspace_changes", None)
             if goal.review is not None:
                 review_history = goal.metadata.setdefault("review_history", [])
                 if isinstance(review_history, list):
@@ -354,3 +377,81 @@ class Supervisor:
                 stderr=str(exc),
                 returncode=1,
             )
+
+
+def _start_worker_attempt(goal: Goal) -> int:
+    existing = goal.metadata.get("attempt_history")
+    history = list(existing) if isinstance(existing, list) else []
+    numbers = [
+        value
+        for attempt in history
+        if isinstance(attempt, dict)
+        and isinstance((value := attempt.get("attempt")), int)
+        and not isinstance(value, bool)
+        and value > 0
+    ]
+    attempt_number = max(numbers, default=0) + 1
+    entry: dict[str, object] = {
+        "attempt": attempt_number,
+        "worker_run_id": str(goal.metadata.get("worker_run_id") or ""),
+        "at": now_iso(),
+        "success": None,
+        "returncode": None,
+        "summary": "Worker attempt started.",
+        "artifacts": [],
+    }
+    goal.metadata["attempt_history"] = [*history[-(MAX_ATTEMPT_HISTORY - 1) :], entry]
+    return attempt_number
+
+
+def _review_context(goal: Goal) -> dict[str, object]:
+    safety = goal.metadata.get("safety")
+    rows = safety.get("checks") if isinstance(safety, dict) else None
+    commands: list[list[str]] = []
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            argv = row.get("argv")
+            if (
+                isinstance(argv, list)
+                and argv
+                and all(isinstance(argument, str) for argument in argv)
+            ):
+                commands.append(list(argv))
+    canonical = json.dumps(commands, ensure_ascii=False, separators=(",", ":"))
+    return {
+        "contract": REVIEW_CONTEXT_CONTRACT,
+        "worker_run_id": str(goal.metadata.get("worker_run_id") or ""),
+        "verification_commands_sha256": hashlib.sha256(
+            canonical.encode("utf-8")
+        ).hexdigest(),
+        "verification_command_count": len(commands),
+    }
+
+
+def _finish_worker_attempt(
+    goal: Goal,
+    attempt_number: int,
+    result: WorkerResult,
+) -> None:
+    existing = goal.metadata.get("attempt_history")
+    history = list(existing) if isinstance(existing, list) else []
+    worker_run_id = str(goal.metadata.get("worker_run_id") or "")
+    for index in range(len(history) - 1, -1, -1):
+        attempt = history[index]
+        if (
+            isinstance(attempt, dict)
+            and attempt.get("attempt") == attempt_number
+            and attempt.get("worker_run_id") == worker_run_id
+        ):
+            history[index] = {
+                **attempt,
+                "success": bool(result.success),
+                "returncode": result.returncode,
+                "summary": redact_secrets(result.summary),
+                "artifacts": [redact_secrets(path) for path in result.artifacts],
+            }
+            goal.metadata["attempt_history"] = history
+            return
+    raise RuntimeError("active worker attempt receipt is missing")

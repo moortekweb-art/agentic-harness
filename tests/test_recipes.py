@@ -395,7 +395,17 @@ def test_run_recipe_cli_with_noop_worker_succeeds(tmp_path, capsys) -> None:
     output = capsys.readouterr().out
     assert rc == 0
     assert "Recipe: fix-tests" in output
-    assert "Result: done" in output
+    assert "Result: Verified done" in output
+    assert "Attempts: 1" in output
+    assert "Retries: 0" in output
+    assert "Verification commands:" in output
+    assert "python -m pytest tests/ -q" in output
+    assert "independent command passed" in output
+    report = next((config_dir / "runs").glob("*/report.md")).read_text(
+        encoding="utf-8"
+    )
+    assert "Verification commands:" in report
+    assert "python -m pytest tests/ -q" in report
 
 
 def test_run_recipe_cli_can_print_final_goal_json(tmp_path, capsys) -> None:
