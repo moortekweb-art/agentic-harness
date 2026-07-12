@@ -121,3 +121,22 @@ def test_real_agent_wrapper_preserves_each_attempt_transcript(
 
     assert (tmp_path / "task-harness.attempt-1.log").is_file()
     assert (tmp_path / "task-harness.attempt-2.log").is_file()
+
+
+def test_real_agent_wrapper_records_unavailable_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AGENTIC_HARNESS_INSTRUCTION", "make the change")
+    monkeypatch.setenv("REAL_AGENT_TRANSCRIPT", str(tmp_path / "task.log"))
+    monkeypatch.setenv("REAL_AGENT_MODEL", "fixed-model")
+    monkeypatch.setattr(
+        real_agent_worker.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("codex missing")),
+    )
+
+    assert real_agent_worker.main() == 127
+    payload = __import__("json").loads(capsys.readouterr().out.split("=", 1)[1])
+    assert payload["status"] == "failed"
+    assert payload["blockers"] == ["coding agent unavailable"]

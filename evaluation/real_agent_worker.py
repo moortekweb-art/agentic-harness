@@ -31,6 +31,7 @@ def main() -> int:
             "--color", "never", prompt,
         ]
     timed_out = False
+    unavailable = False
     try:
         completed = subprocess.run(
             command, text=True, capture_output=True, check=False, timeout=180,
@@ -41,6 +42,13 @@ def main() -> int:
         stdout = _timeout_text(exc.stdout)
         stderr = _timeout_text(exc.stderr)
         returncode = 124
+    except OSError as exc:
+        unavailable = True
+        stdout = ""
+        stderr = str(exc)
+        returncode = 127
+    else:
+        unavailable = False
     transcript.parent.mkdir(parents=True, exist_ok=True)
     transcript.write_text(stdout + stderr, encoding="utf-8")
     result = {
@@ -56,7 +64,11 @@ def main() -> int:
                 "evidence": ["review:1"],
             }
         ],
-        "blockers": ["coding agent timed out"] if timed_out else [],
+        "blockers": (
+            ["coding agent timed out"]
+            if timed_out
+            else ["coding agent unavailable"] if unavailable else []
+        ),
     }
     print("HARNESS_RESULT_JSON=" + json.dumps(result, sort_keys=True))
     return returncode

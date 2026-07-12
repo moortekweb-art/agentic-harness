@@ -9,6 +9,7 @@
       "mean_tokens": 14990.7,
       "runs": 10,
       "runs_with_unintended_paths": 0,
+      "token_observations": 10,
       "total_tokens": 149907,
       "verifier_passes": 10
     },
@@ -20,6 +21,7 @@
       "mean_tokens": 16711.1,
       "runs": 10,
       "runs_with_unintended_paths": 0,
+      "token_observations": 10,
       "total_tokens": 167111,
       "verifier_passes": 10
     }
@@ -27,8 +29,8 @@
   "data_quality": {
     "comparison_scope": "end_to_end_systems",
     "full_prompt_identity": false,
+    "recognized_pattern_scan_passed": true,
     "records": 20,
-    "secret_scan_passed": true,
     "transcripts": 20,
     "unique_task_arm_pairs": 20
   },

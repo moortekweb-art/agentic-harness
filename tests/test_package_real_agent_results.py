@@ -73,6 +73,19 @@ def test_package_recomputes_aggregates_from_raw_rows(tmp_path: Path) -> None:
     assert summary["arms"]["harness"]["verifier_passes"] == 10
 
 
+def test_package_derives_false_accept_instead_of_trusting_raw_flag(tmp_path: Path) -> None:
+    source, rows = _complete_source(tmp_path)
+    rows[0]["verifier_pass"] = False
+    rows[0]["false_accept"] = False
+    (source / "raw.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+
+    summary = package(source, tmp_path / "published")
+
+    assert summary["arms"]["direct"]["false_accepts"] == 1
+
+
 def test_package_accepts_missing_optional_token_footer(tmp_path: Path) -> None:
     source, rows = _complete_source(tmp_path)
     first = source / "transcripts" / f"{rows[0]['task_id']}-{rows[0]['arm']}.log"
@@ -83,6 +96,7 @@ def test_package_accepts_missing_optional_token_footer(tmp_path: Path) -> None:
     assert summary["token_metrics_available"] is True
     assert summary["token_metrics_complete"] is False
     assert summary["token_observations"] == 19
+    assert "mean_tokens" not in summary["arms"][rows[0]["arm"]]
 
 
 def test_package_rejects_missing_retry_transcript(tmp_path: Path) -> None:
@@ -126,3 +140,11 @@ def _complete_source(tmp_path: Path) -> tuple[Path, list[dict[str, object]]]:
             "tokens used\n1\n", encoding="utf-8"
         )
     return source, rows
+
+
+def test_redact_covers_common_private_paths() -> None:
+    value = " /home/alice/project /Users/bob/work C:\\Users\\carol\\repo "
+    redacted = redact(value)
+    assert "alice" not in redacted
+    assert "bob" not in redacted
+    assert "carol" not in redacted

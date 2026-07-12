@@ -172,6 +172,7 @@ def run(output: Path, task_file: Path, seed: int, model: str) -> dict[str, Any]:
                     ],
                 }
             )
+            _write_partial_rows(output, rows)
     summary: dict[str, Any] = {
         "schema": "agentic_harness.real_agent_comparison.v1",
         "disclaimer": "One-agent ten-task synthetic comparison; not broad model or adoption proof.",
@@ -201,10 +202,20 @@ def run(output: Path, task_file: Path, seed: int, model: str) -> dict[str, Any]:
     (output / "raw.jsonl").write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8"
     )
+    (output / "raw.partial.jsonl").unlink(missing_ok=True)
     (output / "summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return summary
+
+
+def _write_partial_rows(output: Path, rows: list[dict[str, Any]]) -> None:
+    temporary = output / "raw.partial.jsonl.tmp"
+    temporary.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    temporary.replace(output / "raw.partial.jsonl")
 
 
 def main() -> int:

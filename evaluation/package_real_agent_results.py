@@ -12,8 +12,13 @@ from typing import Any
 
 TOKEN_PATTERN = re.compile(r"tokens used\s*\n([0-9,]+)\s*$")
 SESSION_PATTERN = re.compile(r"(?m)^session id: .+$")
-PATH_PATTERN = re.compile(r"/(?:tmp|mnt/raid0)/[^\s'\"]+")
-SECRET_PATTERN = re.compile(r"(?i)(?:ghp_[A-Za-z0-9]+|sk-[A-Za-z0-9]+|authorization:\s*bearer)")
+PATH_PATTERN = re.compile(
+    r"(?:/(?:tmp|mnt/raid0|home|Users)/[^\s'\"]+|[A-Za-z]:\\Users\\[^\s'\"]+)"
+)
+SECRET_PATTERN = re.compile(
+    r"(?i)(?:ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]+|"
+    r"authorization:\s*bearer|(?:api[_-]?key|password|secret)\s*[:=]\s*\S+)"
+)
 
 
 def sha256(path: Path) -> str:
@@ -53,6 +58,7 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
     if actual_attempts != expected_attempts:
         raise ValueError("attempt transcripts do not match raw attempt counts")
     tokens_by_run: dict[tuple[str, str], int] = {key: 0 for key in keys}
+    token_observed_runs: set[tuple[str, str]] = set()
     manifest: list[dict[str, Any]] = []
     for transcript in sorted(transcript_files):
         text = transcript.read_text(encoding="utf-8")
@@ -67,6 +73,7 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
         tokens = int(match.group(1).replace(",", "")) if match is not None else None
         if tokens is not None:
             tokens_by_run[key] += tokens
+            token_observed_runs.add(key)
         target = redacted_dir / transcript.name
         target.write_text(redact(text), encoding="utf-8")
         manifest.append(
@@ -87,14 +94,22 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
     summary["token_observations"] = token_observations
     summary["data_quality"] = {
         "records": len(rows), "unique_task_arm_pairs": len(keys),
-        "transcripts": len(manifest), "secret_scan_passed": True,
+        "transcripts": len(manifest), "recognized_pattern_scan_passed": True,
         "full_prompt_identity": False,
         "comparison_scope": "end_to_end_systems",
     }
     for arm in ("direct", "harness"):
         values = [value for (task_id, key_arm), value in tokens_by_run.items() if key_arm == arm]
-        summary["arms"][arm]["total_tokens"] = sum(values)
-        summary["arms"][arm]["mean_tokens"] = round(sum(values) / len(values), 1)
+        arm_keys = {key for key in keys if key[1] == arm}
+        observed = arm_keys & token_observed_runs
+        summary["arms"][arm]["token_observations"] = len(observed)
+        if observed == arm_keys:
+            summary["arms"][arm]["total_tokens"] = sum(values)
+            summary["arms"][arm]["mean_tokens"] = round(sum(values) / len(values), 1)
+        elif observed:
+            summary["arms"][arm]["observed_total_tokens"] = sum(
+                tokens_by_run[key] for key in observed
+            )
     (destination / "raw.jsonl").write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8"
     )
@@ -125,7 +140,10 @@ def _summarize_rows(rows: list[dict[str, Any]], arm: str) -> dict[str, Any]:
         "runs": len(selected),
         "accepted": sum(bool(row["accepted"]) for row in selected),
         "verifier_passes": sum(bool(row["verifier_pass"]) for row in selected),
-        "false_accepts": sum(bool(row["false_accept"]) for row in selected),
+        "false_accepts": sum(
+            bool(row["accepted"]) and not bool(row["verifier_pass"])
+            for row in selected
+        ),
         "mean_attempts": round(
             sum(int(row["attempts"]) for row in selected) / len(selected), 3
         ),

@@ -46,6 +46,13 @@ is not an adoption study or a general coding benchmark.
   failures and timeouts. The historical invalid pilot predates that fix and
   retains every task-arm row and final-attempt transcript, but not the first
   two Harness attempt transcripts.
+- Completed rows are written incrementally to `raw.partial.jsonl`; handled
+  timeouts and unavailable executables become explicit failed attempts. A hard
+  host/process termination can still interrupt the active attempt, so this is
+  crash-reduction rather than transactional durability.
+- Transcript artifacts are redacted, normalized captures with stdout followed
+  by stderr. They do not preserve exact cross-stream interleaving or original
+  whitespace bytes; manifest hashes bind the published normalized bytes.
 
 ## Metrics
 

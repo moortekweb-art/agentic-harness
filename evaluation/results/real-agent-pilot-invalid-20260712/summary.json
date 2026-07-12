@@ -28,7 +28,7 @@
     "comparison_scope": "end_to_end_systems",
     "full_prompt_identity": false,
     "records": 20,
-    "secret_scan_passed": true,
+    "recognized_pattern_scan_passed": true,
     "transcripts": 20,
     "unique_task_arm_pairs": 20
   },

@@ -22,9 +22,11 @@ toggled.
 
 `raw.jsonl` contains all 20 task-arm records. `transcripts/` contains all 20
 redacted terminal transcripts, and `transcript_manifest.json` binds each to a
-SHA-256 digest and exact transcript-reported token count. The packaging check
-found 20 unique task-arm pairs, no missing transcript, and no recognized secret
-pattern.
+SHA-256 digest and transcript-reported token count. These are redacted,
+normalized stdout-then-stderr captures, not exact interleaved process streams.
+The packaging check found 20 unique task-arm pairs, no missing transcript, and
+no recognized sensitive pattern. That narrow automated scan is not a general
+privacy certification.
 
 An earlier local pilot is excluded because its evaluation wrapper omitted mandatory
 fields from the existing external-worker completion contract. All ten pilot
