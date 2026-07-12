@@ -41,13 +41,13 @@ python evaluation/run_real_agent_comparison.py \
 
 ## Harder Real-Agent Follow-up
 
-The separately preregistered [harder comparison](results/hard-real-agent-20260712/README.md)
-used ten multi-file and edge-preservation tasks. Both arms passed 9/10 hidden
-verifiers. Direct execution accepted the failed result; Harness refused it
-after three unsuccessful repair attempts. The result demonstrates one
-fail-closed acceptance decision, not a higher final task-success rate. Raw
-records, all 22 attempt transcripts, hashes, token observations, and limitations
-are published with the result.
+The first [harder pilot](results/hard-real-agent-20260712/README.md) was
+invalidated after adversarial review showed that three verifiers missed stated
+invariants. It is retained but must not be used for primary claims. A separately
+frozen [revision-2 comparison](results/hard-real-agent-v2-20260712/README.md)
+strengthened those checks. Direct passed 10/10; Harness passed 9/10 and added
+latency and token use. Raw records, all attempt transcripts, hashes, token
+observations, and limitations are published for both runs.
 
 ## Checked-in Release Snapshot
 
