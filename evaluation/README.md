@@ -57,6 +57,12 @@ the task or improve final success and used more time and tokens. This supports
 only a narrow fail-closed policy-integrity claim. All 20 rows, 23 attempts,
 hashes, tokens, and limitations are published.
 
+Revision 3 was subsequently invalidated because five fixed behavioral probes
+could be passed by input-ignoring implementations. Revision 4 replaces fixed
+vectors with runtime-generated property cases and applies symlink-aware
+workspace containment to expected paths. Revision 3 remains available only as
+an invalid audit artifact.
+
 ## Checked-in Release Snapshot
 
 [`results/representative/`](results/representative/README.md) is an immutable

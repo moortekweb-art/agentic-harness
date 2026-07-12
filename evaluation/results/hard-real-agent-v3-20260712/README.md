@@ -1,4 +1,9 @@
-# Hardened Codex comparison revision 3 — 2026-07-12
+# Invalid revision-3 harder Codex pilot — 2026-07-12
+
+**Invalid for primary outcome claims.** Post-run adversarial review showed that
+five fixed behavioral probes could be satisfied by input-ignoring or literal
+lookup implementations. The artifacts remain available for audit, but the 9/10
+figures below must not be used as outcome evidence. Revision 4 replaces it.
 
 Revision 3 was frozen after two earlier pilots failed adversarial verifier review
 and before any revision-3 result was observed. It compares Codex CLI 0.144.1

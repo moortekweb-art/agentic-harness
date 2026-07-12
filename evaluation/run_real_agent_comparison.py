@@ -44,6 +44,7 @@ def load_tasks(path: Path) -> list[dict[str, Any]]:
         "agentic_harness.hard_real_agent_tasks.v1",
         "agentic_harness.hard_real_agent_tasks.v2",
         "agentic_harness.hard_real_agent_tasks.v3",
+        "agentic_harness.hard_real_agent_tasks.v4",
     }:
         raise ValueError("unsupported real-agent task schema")
     tasks = payload.get("tasks")

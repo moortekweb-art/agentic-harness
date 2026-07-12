@@ -49,8 +49,11 @@ def test_harder_verifier_accepts_behaviorally_equivalent_implementation(tmp_path
 @pytest.mark.parametrize(
     ("task_id", "filename", "source"),
     [
+        ("compat-alias", "config.py", "def request_timeout(): return 10\ndef timeout(): return 10\nREQUEST_TIMEOUT=10\n"),
+        ("malformed-lines", "parser.py", "def parse_pairs(text): return {'a':'1','b':'x=y'}\n"),
         ("none-and-zero", "limits.py", "def effective_limit(value, default):\n    return default if value is None or value < 0 else value\n"),
         ("ordered-dedupe", "routes.py", "def unique_routes(routes):\n    return list(dict.fromkeys(x.lower() for x in routes))\n"),
+        ("safe-relative-path", "paths.py", "def is_safe_relative(value): return value in {'.env.example', 'a/b'}\n"),
         ("preserve-unknown-json", "settings.py", "import json\ndef set_enabled(text, enabled):\n    data=json.loads(text); data['enabled']=enabled; return json.dumps(data)\n"),
     ],
 )
@@ -120,6 +123,35 @@ def test_boundary_verifier_rejects_literal_special_case(tmp_path: Path) -> None:
             Path("evaluation/hard_real_agent_tasks.json").resolve(), "boundary-window"
         ),
     )
+
+
+@pytest.mark.parametrize("expected_path", ["../outside.txt", "/tmp/outside.txt"])
+def test_exact_verifier_rejects_escaping_expected_paths(
+    tmp_path: Path, expected_path: str
+) -> None:
+    payload = json.loads(Path("evaluation/hard_real_agent_tasks.json").read_text())
+    task = payload["tasks"][0]
+    task["expected_files"] = {expected_path: "content"}
+    manifest = tmp_path / "tasks.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    assert not verify(workspace, verifier_command(manifest, task["id"]))
+
+
+def test_exact_verifier_rejects_symlinked_expected_path(tmp_path: Path) -> None:
+    payload = json.loads(Path("evaluation/hard_real_agent_tasks.json").read_text())
+    task = payload["tasks"][0]
+    task["expected_files"] = {"linked/result.txt": "content"}
+    manifest = tmp_path / "tasks.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "result.txt").write_text("content", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "linked").symlink_to(outside, target_is_directory=True)
+    assert not verify(workspace, verifier_command(manifest, task["id"]))
 
 
 def test_materialize_exposes_initial_but_not_expected_answer(tmp_path: Path) -> None:
