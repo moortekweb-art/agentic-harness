@@ -63,6 +63,12 @@ vectors with runtime-generated property cases and applies symlink-aware
 workspace containment to expected paths. Revision 3 remains available only as
 an invalid audit artifact.
 
+The [revision-4 result](results/hard-real-agent-v4-20260712/README.md) is the
+current harder study. Direct passed 10/10; Harness passed 9/10, rejected its
+failed candidate, and used more time and tokens. This is not a product win; it
+is an auditable negative result from the strengthened protocol. All rows,
+attempts, hashes, token observations, and limitations are published.
+
 ## Checked-in Release Snapshot
 
 [`results/representative/`](results/representative/README.md) is an immutable

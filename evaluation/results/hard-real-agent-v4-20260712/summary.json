@@ -1,0 +1,46 @@
+{
+  "agent": "codex-cli 0.144.1",
+  "arms": {
+    "direct": {
+      "accepted": 10,
+      "false_accepts": 0,
+      "mean_attempts": 1.0,
+      "mean_elapsed_seconds": 33.678,
+      "mean_tokens": 23452.3,
+      "runs": 10,
+      "runs_with_unintended_paths": 7,
+      "token_observations": 10,
+      "total_tokens": 234523,
+      "verifier_passes": 10
+    },
+    "harness": {
+      "accepted": 9,
+      "false_accepts": 0,
+      "mean_attempts": 1.3,
+      "mean_elapsed_seconds": 44.561,
+      "mean_tokens": 24674.1,
+      "runs": 10,
+      "runs_with_unintended_paths": 8,
+      "token_observations": 10,
+      "total_tokens": 246741,
+      "verifier_passes": 9
+    }
+  },
+  "data_quality": {
+    "comparison_scope": "end_to_end_systems",
+    "full_prompt_identity": false,
+    "recognized_pattern_scan_passed": true,
+    "records": 20,
+    "transcripts": 23,
+    "unique_task_arm_pairs": 20
+  },
+  "disclaimer": "One-agent ten-task synthetic comparison; not broad model or adoption proof.",
+  "finished_at": "2026-07-12T08:59:12.462740Z",
+  "model": "gpt-5.6-sol",
+  "schema": "agentic_harness.real_agent_comparison.v1",
+  "seed": 2026071204,
+  "started_from_commit": "58c80848f5f3c448fe6b47baf0deda773a6947e9",
+  "token_metrics_available": true,
+  "token_metrics_complete": true,
+  "token_observations": 23
+}
