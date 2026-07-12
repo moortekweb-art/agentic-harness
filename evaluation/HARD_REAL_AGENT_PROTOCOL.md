@@ -1,6 +1,8 @@
-# Harder real-agent comparison protocol
+# Harder real-agent comparison protocol — revision 2
 
-Status: preregistered before any harder-task result was observed.
+Status: revision 2 preregistered after revision 1 was invalidated and before
+any revision-2 task result was observed. Revision 1 remains published as an
+invalid pilot; none of its primary outcome claims are reused.
 
 This follow-up uses Codex CLI 0.144.1 with explicit model `gpt-5.6-sol` on ten
 synthetic multi-file or edge-preservation maintenance tasks. Code tasks use
@@ -18,6 +20,12 @@ starting workspace; Harness necessarily adds lifecycle/evidence instructions,
 so this is an end-to-end system comparison rather than equal full prompts or
 equal budgets.
 
-Task manifest: `hard_real_agent_tasks.json`. Seed: `20260712`. No task, prompt,
+Task manifest: `hard_real_agent_tasks.json` schema v2. Seed: `2026071202`. No task, prompt,
 model, timeout, verifier, or metric may change after the first result is read.
 A tie, failed run, timeout, or infrastructure failure must be published.
+
+False-accept counts are a treatment-integrity sanity check: the Harness arm is
+defined to require the outcome verifier, while the direct arm trusts exit-zero.
+They test whether that policy boundary was enforced, not whether Harness makes
+the underlying model more capable. This remote-model artifact is auditable but
+not exactly reproducible because provider and model internals are not immutable.

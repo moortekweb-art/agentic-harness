@@ -1,5 +1,5 @@
 {
-  "schema": "agentic_harness.hard_real_agent_tasks.v1",
+  "schema": "agentic_harness.hard_real_agent_tasks.v2",
   "tasks": [
     {
       "id": "coupled-port-docs",

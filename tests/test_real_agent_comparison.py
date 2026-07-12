@@ -45,6 +45,32 @@ def test_harder_verifier_accepts_behaviorally_equivalent_implementation(tmp_path
     assert verify(workspace, verifier_command(task_file, "ordered-dedupe"))
 
 
+@pytest.mark.parametrize(
+    ("task_id", "filename", "source"),
+    [
+        ("none-and-zero", "limits.py", "def effective_limit(value, default):\n    return default if value is None or value < 0 else value\n"),
+        ("ordered-dedupe", "routes.py", "def unique_routes(routes):\n    return list(dict.fromkeys(x.lower() for x in routes))\n"),
+        ("preserve-unknown-json", "settings.py", "import json\ndef set_enabled(text, enabled):\n    data=json.loads(text); data['enabled']=enabled; return json.dumps(data)\n"),
+    ],
+)
+def test_harder_verifier_rejects_invariant_violations(
+    tmp_path: Path, task_id: str, filename: str, source: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / filename).write_text(source, encoding="utf-8")
+    assert not verify(
+        workspace,
+        verifier_command(Path("evaluation/hard_real_agent_tasks.json").resolve(), task_id),
+    )
+
+
+@pytest.mark.parametrize("raw_path", ["../escape", "/tmp/escape"])
+def test_materialize_rejects_paths_outside_workspace(tmp_path: Path, raw_path: str) -> None:
+    with pytest.raises(ValueError, match="escapes workspace"):
+        materialize(tmp_path / "workspace", {"files": {raw_path: "bad"}})
+
+
 def test_materialize_exposes_initial_but_not_expected_answer(tmp_path: Path) -> None:
     task = load_tasks(Path("evaluation/real_agent_tasks.json"))[0]
     materialize(tmp_path / "workspace", task)

@@ -40,6 +40,7 @@ def load_tasks(path: Path) -> list[dict[str, Any]]:
     if payload.get("schema") not in {
         "agentic_harness.real_agent_tasks.v1",
         "agentic_harness.hard_real_agent_tasks.v1",
+        "agentic_harness.hard_real_agent_tasks.v2",
     }:
         raise ValueError("unsupported real-agent task schema")
     tasks = payload.get("tasks")
@@ -53,13 +54,21 @@ def materialize(workspace: Path, task: dict[str, Any]) -> None:
     files = task.get("files")
     if isinstance(files, dict):
         for raw_path, content in files.items():
-            target = workspace / str(raw_path)
+            target = _workspace_target(workspace, str(raw_path))
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(str(content), encoding="utf-8")
         return
-    target = workspace / task["path"]
+    target = _workspace_target(workspace, task["path"])
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(task["initial"], encoding="utf-8")
+
+
+def _workspace_target(workspace: Path, raw_path: str) -> Path:
+    root = workspace.resolve()
+    target = (root / raw_path).resolve()
+    if target == root or root not in target.parents:
+        raise ValueError(f"task path escapes workspace: {raw_path}")
+    return target
 
 
 def verifier_command(task_file: Path, task_id: str) -> list[str]:

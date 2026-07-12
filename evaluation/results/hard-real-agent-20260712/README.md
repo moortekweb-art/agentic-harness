@@ -1,4 +1,9 @@
-# Harder Codex real-agent comparison — 2026-07-12
+# Invalid harder Codex pilot — 2026-07-12
+
+**Invalid for primary outcome claims.** Post-run adversarial review found that
+three behavioral verifiers did not enforce every stated task invariant. These
+artifacts are retained for auditability, but the 9/10 figures below must not be
+used as evidence. A separately frozen revision-2 protocol replaces this pilot.
 
 This separately preregistered follow-up compared Codex CLI 0.144.1 with
 `gpt-5.6-sol` on ten synthetic multi-file and edge-preservation tasks. It is a
@@ -10,13 +15,11 @@ evaluation, or an adoption claim.
 | Direct | 9/10 | 10/10 | 1 | 28.54s | 17,411.7 |
 | Harness | 9/10 | 9/10 | 0 | 48.62s | 20,726.5 |
 
-Both arms made the same incorrect compatibility-API change. Direct execution
-returned success and therefore falsely accepted it. Harness ran three attempts,
-never obtained a passing independent check, and refused acceptance. Harness did
-not repair the defect within its attempt budget. The other nine tasks passed in
-both arms. The narrow supported conclusion is that Harness prevented one false
-accept in this task set; it did not improve final verifier-pass rate and added
-latency and token use.
+Both arms made the same compatibility-API change, but the under-specified
+verifiers mean this run supports no comparative correctness conclusion. The
+acceptance difference is also mechanically induced by the treatment: Harness
+requires this verifier, while direct execution trusts exit-zero. It is a
+policy-integrity check, not evidence of better agent judgment.
 
 The user objective and starting workspace were identical across arms. Harness
 necessarily added lifecycle and structured-evidence instructions, so this tests
