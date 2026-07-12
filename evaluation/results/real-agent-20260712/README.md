@@ -29,6 +29,5 @@ pattern.
 An earlier local pilot is excluded because its evaluation wrapper omitted mandatory
 fields from the existing external-worker completion contract. All ten pilot
 Harness workspaces passed their verifier but were correctly rejected as
-unproven. No pilot result was reused. Detailed pilot artifacts are not included
-in this public package, so that pilot disposition is not independently auditable
-from the repository.
+unproven. No pilot result was reused. The complete excluded pilot is published
+separately at `../real-agent-pilot-invalid-20260712/`.

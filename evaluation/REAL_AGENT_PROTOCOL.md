@@ -10,8 +10,8 @@ unaccepted. The pilot is retained as integration evidence and none of its arm
 results are reused below. Protocol revision 2 changes only the wrapper envelope
 to the already-documented contract; tasks, prompts, agent, seed, limits,
 metrics, and arm order remain fixed. Both arms must be rerun in full.
-The pilot remains local and is not part of the public evidence package, so its
-detailed outcome is not independently auditable from this repository.
+Its excluded raw rows and redacted final-attempt transcripts are published at
+`results/real-agent-pilot-invalid-20260712/` for auditability.
 
 ## Decision
 

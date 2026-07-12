@@ -25,8 +25,9 @@ The [2026-07-12 Codex comparison](results/real-agent-20260712/README.md)
 preregistered ten small tasks and reran both direct and Harness arms in full.
 Both passed 10/10 hidden verifiers with zero false accepts. Harness added
 latency and token use, so this easy task set did not demonstrate a correctness
-benefit. Raw records, redacted transcripts, hashes, and the invalid-pilot
-disposition are published with the result.
+benefit. Raw records, redacted transcripts, hashes, and the complete excluded
+[invalid pilot](results/real-agent-pilot-invalid-20260712/README.md) are
+published with the result.
 
 Future reruns must pin the evaluated model explicitly:
 
