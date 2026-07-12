@@ -64,10 +64,10 @@ workspace containment to expected paths. Revision 3 remains available only as
 an invalid audit artifact.
 
 The [revision-4 result](results/hard-real-agent-v4-20260712/README.md) is the
-current harder study. Direct passed 10/10; Harness passed 9/10, rejected its
-failed candidate, and used more time and tokens. This is not a product win; it
-is an auditable negative result from the strengthened protocol. All rows,
-attempts, hashes, token observations, and limitations are published.
+fourth invalid pilot. Import-time candidate code could replace its random
+generator before challenges were drawn, and behavioral module paths did not use
+the symlink guard. Revision 5 draws challenges before candidate import and
+validates every manifest and behavioral path through one containment helper.
 
 ## Checked-in Release Snapshot
 

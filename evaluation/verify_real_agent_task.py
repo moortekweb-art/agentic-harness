@@ -15,7 +15,8 @@ from types import ModuleType
 
 
 def _load_module(path: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location("candidate", path)
+    validated = _expected_path(path)
+    spec = importlib.util.spec_from_file_location("candidate", validated)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
@@ -49,21 +50,21 @@ def _exact(expected: dict[str, str]) -> bool:
 
 def _verify_behavior(task_id: str) -> bool:
     if task_id == "compat-alias":
-        module = _load_module("config.py")
         dynamic = secrets.randbelow(1_000_000) + 100
+        module = _load_module("config.py")
         setattr(module, "REQUEST_TIMEOUT", dynamic)
         return (
             callable(module.request_timeout)
             and callable(module.timeout)
             and module.request_timeout() == dynamic
             and module.timeout() == dynamic
-            and Path("example.env").read_text(encoding="utf-8")
+            and _expected_path("example.env").read_text(encoding="utf-8")
             == "REQUEST_TIMEOUT=10\nTIMEOUT=10\nMODE=safe\n"
         )
     if task_id == "malformed-lines":
-        function = _load_module("parser.py").parse_pairs
         key = secrets.token_hex(8)
         value = secrets.token_hex(8)
+        function = _load_module("parser.py").parse_pairs
         return bool(function(f" {key} = {value} \n\nbad\nnext=x=y ") == {
             key: value,
             "next": "x=y",
@@ -76,8 +77,8 @@ def _verify_behavior(task_id: str) -> bool:
             (function(-8, -7, 11), function(12, -7, 11))
         )
     if task_id == "preserve-unknown-json":
-        function = _load_module("settings.py").set_enabled
         marker = secrets.token_hex(8)
+        function = _load_module("settings.py").set_enabled
         original = json.dumps({"name": marker, "nested": {"keep": [marker]}, "enabled": True})
         disabled_text = function(original, False)
         disabled = json.loads(disabled_text)
@@ -94,23 +95,23 @@ def _verify_behavior(task_id: str) -> bool:
             "enabled": True,
         })
     if task_id == "ordered-dedupe":
-        function = _load_module("routes.py").unique_routes
         marker = secrets.token_hex(8)
+        function = _load_module("routes.py").unique_routes
         upper = f"/{marker.upper()}"
         lower = f"/{marker.lower()}"
         return bool(function([upper, lower, upper, "/fixed", lower]) ==
                     [upper, lower, "/fixed"])
     if task_id == "safe-relative-path":
-        function = _load_module("paths.py").is_safe_relative
         marker = secrets.token_hex(8)
+        function = _load_module("paths.py").is_safe_relative
         return all((function(".env.example"), function(f"{marker}/child"))) and not any(
             (function(f"../{marker}"), function(f"{marker}/../child"), function(f"/{marker}"))
         )
     if task_id == "none-and-zero":
-        function = _load_module("limits.py").effective_limit
         default = secrets.randbelow(1_000_000) + 10
         negative = -(secrets.randbelow(1_000_000) + 1)
         explicit = secrets.randbelow(1_000_000) + 1
+        function = _load_module("limits.py").effective_limit
         return bool(function(None, default) == default and function(0, default) == 0 and
                     function(explicit, default) == explicit and
                     function(negative, default) == negative)
@@ -122,6 +123,11 @@ def _verify_hard(task: dict[str, object]) -> bool:
     expected = task["expected_files"]
     if not isinstance(expected, dict):
         return False
+    files = task.get("files")
+    if not isinstance(files, dict):
+        return False
+    for raw_path in files:
+        _expected_path(str(raw_path))
     if task_id in {
         "coupled-port-docs",
         "boundary-window",
@@ -167,6 +173,7 @@ def main() -> int:
         "agentic_harness.hard_real_agent_tasks.v2",
         "agentic_harness.hard_real_agent_tasks.v3",
         "agentic_harness.hard_real_agent_tasks.v4",
+        "agentic_harness.hard_real_agent_tasks.v5",
     }:
         try:
             return 0 if _verify_hard(task) else 1

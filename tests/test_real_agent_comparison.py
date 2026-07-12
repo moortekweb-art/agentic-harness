@@ -154,6 +154,49 @@ def test_exact_verifier_rejects_symlinked_expected_path(tmp_path: Path) -> None:
     assert not verify(workspace, verifier_command(manifest, task["id"]))
 
 
+@pytest.mark.parametrize(
+    ("task_id", "filename", "source"),
+    [
+        (
+            "malformed-lines",
+            "parser.py",
+            "import secrets\nsecrets.token_hex=lambda n:'fixed'\n"
+            "def parse_pairs(text): return {'fixed':'fixed','next':'x=y'}\n",
+        ),
+        (
+            "none-and-zero",
+            "limits.py",
+            "import secrets\nsecrets.randbelow=lambda n:7\n"
+            "def effective_limit(value, default): return {None:17,0:0,8:8,-8:-8}[value]\n",
+        ),
+    ],
+)
+def test_property_verifier_draws_challenge_before_candidate_import(
+    tmp_path: Path, task_id: str, filename: str, source: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / filename).write_text(source, encoding="utf-8")
+    assert not verify(
+        workspace,
+        verifier_command(Path("evaluation/hard_real_agent_tasks.json").resolve(), task_id),
+    )
+
+
+def test_behavioral_verifier_rejects_symlinked_candidate_module(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("def parse_pairs(text): return {}\n", encoding="utf-8")
+    (workspace / "parser.py").symlink_to(outside)
+    assert not verify(
+        workspace,
+        verifier_command(
+            Path("evaluation/hard_real_agent_tasks.json").resolve(), "malformed-lines"
+        ),
+    )
+
+
 def test_materialize_exposes_initial_but_not_expected_answer(tmp_path: Path) -> None:
     task = load_tasks(Path("evaluation/real_agent_tasks.json"))[0]
     materialize(tmp_path / "workspace", task)

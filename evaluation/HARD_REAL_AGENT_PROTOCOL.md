@@ -1,7 +1,7 @@
-# Harder real-agent comparison protocol — revision 4
+# Harder real-agent comparison protocol — revision 5
 
-Status: revision 4 preregistered after adversarial review invalidated revisions
-1 through 3 and before any revision-4 result was observed. All earlier runs
+Status: revision 5 preregistered after adversarial review invalidated revisions
+1 through 4 and before any revision-5 result was observed. All earlier runs
 remain published as invalid pilots; none of their primary claims are reused.
 
 This follow-up uses Codex CLI 0.144.1 with explicit model `gpt-5.6-sol` on ten
@@ -20,7 +20,7 @@ starting workspace; Harness necessarily adds lifecycle/evidence instructions,
 so this is an end-to-end system comparison rather than equal full prompts or
 equal budgets.
 
-Task manifest: `hard_real_agent_tasks.json` schema v4. Seed: `2026071204`. No task, prompt,
+Task manifest: `hard_real_agent_tasks.json` schema v5. Seed: `2026071205`. No task, prompt,
 model, timeout, verifier, or metric may change after the first result is read.
 A tie, failed run, timeout, or infrastructure failure must be published.
 

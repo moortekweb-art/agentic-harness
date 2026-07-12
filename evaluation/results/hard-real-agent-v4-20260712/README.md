@@ -1,4 +1,9 @@
-# Randomized-property Codex comparison revision 4 — 2026-07-12
+# Invalid revision-4 harder Codex pilot — 2026-07-12
+
+**Invalid for primary outcome claims.** Candidate import-time code could replace
+the process-global random functions before challenges were drawn, and behavioral
+module paths bypassed the symlink guard. These artifacts remain for audit only;
+the 10/10 and 9/10 figures below must not be used as outcome evidence.
 
 Revision 4 was frozen after adversarial review invalidated three earlier pilots
 and before any revision-4 result was observed. General behavioral checks use
