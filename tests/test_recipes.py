@@ -13,6 +13,7 @@ from agentic_harness.core.recipes import (
     load_recipe,
     recipe_names,
 )
+from agentic_harness.core.safety import format_command, resolve_command_executable
 
 
 def test_list_recipes_returns_five_recipes() -> None:
@@ -399,13 +400,16 @@ def test_run_recipe_cli_with_noop_worker_succeeds(tmp_path, capsys) -> None:
     assert "Attempts: 1" in output
     assert "Retries: 0" in output
     assert "Verification commands:" in output
-    assert "python -m pytest tests/ -q" in output
+    expected_command = format_command(
+        resolve_command_executable(["python", "-m", "pytest", "tests/", "-q"])
+    )
+    assert expected_command in output
     assert "independent command passed" in output
     report = next((config_dir / "runs").glob("*/report.md")).read_text(
         encoding="utf-8"
     )
     assert "Verification commands:" in report
-    assert "python -m pytest tests/ -q" in report
+    assert expected_command in report
 
 
 def test_run_recipe_cli_can_print_final_goal_json(tmp_path, capsys) -> None:
