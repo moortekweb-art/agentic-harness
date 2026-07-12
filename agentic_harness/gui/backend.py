@@ -27,13 +27,34 @@ from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.factory import autonomy_policy_from_config, build_supervisor
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.providers import ProviderProfile, resolve_api_key
+from agentic_harness.core.presentation import safe_inline_text
 from agentic_harness.core.redaction import redact_secrets
-from agentic_harness.core.safety import format_command, goal_safety_metadata, split_command
+from agentic_harness.core.reporting import RunReceipt, build_run_receipt
+from agentic_harness.core.safety import (
+    format_command,
+    goal_safety_metadata,
+    resolve_executable,
+    split_command,
+)
 from agentic_harness.core.secure_io import write_private_text
 from agentic_harness.core.workspace import workspace_change_summary
 
 
 GUI_TASK_CONTRACT = "agentic_harness.gui_task.v2"
+TERMINAL_REPORT_CONTRACT = "agentic_harness.terminal_report.v2"
+
+_CODING_AGENT_COMMANDS = {
+    "codex": ["codex", "exec", "--skip-git-repo-check", "{objective}"],
+    "codewhale": ["codewhale", "exec", "{objective}"],
+    "opencode": ["opencode", "run", "{objective}"],
+    "aider": ["aider", "--yes-always", "--message", "{objective}"],
+}
+_CODING_AGENT_LABELS = {
+    "codex": "Codex",
+    "codewhale": "CodeWhale",
+    "opencode": "OpenCode",
+    "aider": "Aider",
+}
 
 
 class EmbeddedExecutionBackend:
@@ -116,6 +137,16 @@ class EmbeddedExecutionBackend:
                 "summary": str(exc),
                 "next_action": "Choose how this workspace should run tasks.",
             }
+        if not config.review_command:
+            return {
+                "state": "verification_required",
+                "label": "Verification needed",
+                "can_start": False,
+                "can_queue": False,
+                "requires_review": False,
+                "summary": "Add an independent verification command before starting work.",
+                "next_action": "Open Setup and choose the command that proves the result.",
+            }
         credential = self._credential_status(config)
         if credential["configured"] is not True:
             return {
@@ -172,10 +203,12 @@ class EmbeddedExecutionBackend:
             config = self._config()
         except ConfigError:
             config = None
+        agents, recommended_agent = _coding_agent_options(config)
         result: dict[str, Any] = {
             "contract": "agentic_harness.gui_setup.v1",
             "workspace": str(self.project_dir),
             "configured": config is not None,
+            "editable": config is None or _gui_setup_editable(config),
             "suggested_check": suggested,
             "execution_options": [
                 {
@@ -183,18 +216,26 @@ class EmbeddedExecutionBackend:
                     "label": "Installed coding agent",
                     "description": "Use Codex, OpenCode, Aider, or another configured CLI.",
                     "data_location": "depends_on_agent",
+                    "available": bool(recommended_agent),
+                    "recommended": bool(recommended_agent),
+                    "recommended_agent": recommended_agent,
+                    "agents": agents,
                 },
                 {
                     "key": "local_model",
                     "label": "Local model",
                     "description": "Use a tool-capable OpenAI-compatible model on this machine or LAN.",
                     "data_location": "local",
+                    "available": True,
+                    "recommended": False,
                 },
                 {
                     "key": "cloud_model",
                     "label": "Cloud model",
                     "description": "Use your chosen OpenAI-compatible cloud endpoint and model ID.",
                     "data_location": "remote",
+                    "available": True,
+                    "recommended": False,
                 },
             ],
         }
@@ -222,6 +263,14 @@ class EmbeddedExecutionBackend:
             return self._configure_locked(body)
 
     def _configure_locked(self, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            existing = self._config()
+        except ConfigError:
+            existing = None
+        if existing is not None and not _gui_setup_editable(existing):
+            raise ValueError(
+                f"The existing {existing.worker} setup is read-only in the GUI."
+            )
         execution = str(body.get("execution") or "").strip()
         verification_text = str(
             body.get("verification_command") or _detect_check(self.project_dir)
@@ -242,7 +291,24 @@ class EmbeddedExecutionBackend:
             entered_key = str(body.get("api_key") or "").strip()
             if entered_key and profile.api_key_env:
                 raise ValueError("Choose either a session API key or an environment variable, not both.")
-            source = "session" if entered_key else ("env" if profile.api_key_env else "none")
+            existing_model = (
+                existing
+                if existing is not None and existing.worker == "model_agent"
+                else None
+            )
+            preserve_session = (
+                not entered_key
+                and not profile.api_key_env
+                and existing_model is not None
+                and existing_model.llm_credential_source == "session"
+                and existing_model.llm_endpoint == profile.endpoint
+                and existing_model.llm_model == profile.model
+            )
+            source = (
+                "session"
+                if entered_key or preserve_session
+                else ("env" if profile.api_key_env else "none")
+            )
             payload = {
                 "version": 1,
                 "worker": "model_agent",
@@ -251,17 +317,43 @@ class EmbeddedExecutionBackend:
                     "model": profile.model,
                     "api_key_env": profile.api_key_env,
                     "remote_data_confirmed": profile.data_location == "cloud",
-                    "max_steps": _int_setting(body.get("max_steps"), 8, 1, 50),
-                    "timeout": _int_setting(body.get("timeout"), 120, 1, 3_600),
+                    "max_steps": _int_setting(
+                        body.get("max_steps"),
+                        existing_model.llm_max_steps if existing_model else 8,
+                        1,
+                        50,
+                    ),
+                    "timeout": _int_setting(
+                        body.get("timeout"),
+                        existing_model.llm_timeout if existing_model else 120,
+                        1,
+                        3_600,
+                    ),
                 },
+                "llm_retries": _int_setting(
+                    body.get("retries"),
+                    existing_model.llm_retries if existing_model else 2,
+                    0,
+                    100,
+                ),
+                "llm_retry_delay": _float_setting(
+                    body.get("retry_delay"),
+                    existing_model.llm_retry_delay if existing_model else 1.0,
+                    0.0,
+                    3_600.0,
+                ),
                 "llm_credential_source": source,
                 "review_command": verification,
                 "review_command_timeout": _int_setting(
-                    body.get("verification_timeout"), 300, 1, 3_600
+                    body.get("verification_timeout"),
+                    existing.review_command_timeout if existing else 300,
+                    1,
+                    3_600,
                 ),
                 "autonomy": _autonomy_settings(body),
             }
-            self._commit_configuration(payload, entered_key or None)
+            session_key = entered_key or (self.api_key if preserve_session else None)
+            self._commit_configuration(payload, session_key)
             return {
                 "configured": True,
                 "provider": profile.to_public_dict(),
@@ -270,19 +362,43 @@ class EmbeddedExecutionBackend:
             }
         if execution == "coding_agent":
             agent = str(body.get("agent") or "").strip().lower()
-            command = _coding_agent_command(agent)
+            command = _existing_coding_agent_command(self.project_dir, agent)
+            resolved = resolve_executable(agent) if agent != "current" else None
+            if command is None and resolved is None:
+                raise ValueError(f"{agent} is not available on PATH.")
+            if command is None:
+                command = _coding_agent_command(agent, executable=resolved)
+            existing_coding_agent = (
+                existing
+                if existing is not None and existing.worker == "coding_agent"
+                else None
+            )
             payload = {
                 "version": 1,
                 "worker": {
                     "type": "coding_agent",
                     "coding_agent_command": command,
                     "coding_agent_timeout": _int_setting(
-                        body.get("agent_timeout"), 1_800, 1, 86_400
+                        body.get("agent_timeout"),
+                        existing_coding_agent.coding_agent_timeout
+                        if existing_coding_agent
+                        else 1_800,
+                        1,
+                        86_400,
+                    ),
+                    "coding_agent_transcript": _text_setting(
+                        body.get("agent_transcript"),
+                        existing_coding_agent.coding_agent_transcript
+                        if existing_coding_agent
+                        else ".agentic-harness/runs/{goal_id}/coding-agent.log",
                     ),
                 },
                 "review_command": verification,
                 "review_command_timeout": _int_setting(
-                    body.get("verification_timeout"), 300, 1, 3_600
+                    body.get("verification_timeout"),
+                    existing.review_command_timeout if existing else 300,
+                    1,
+                    3_600,
                 ),
                 "autonomy": _autonomy_settings(body),
             }
@@ -447,7 +563,12 @@ class EmbeddedExecutionBackend:
 
     def _current_task(self, goal: Goal) -> dict[str, Any]:
         task = self._task(goal)
-        if self._driver_active() and task["status"] in {"done", "blocked", "stopped"}:
+        if self._driver_active() and task["status"] in {
+            "done",
+            "blocked",
+            "failed",
+            "stopped",
+        }:
             task["status"] = "checking"
             task["status_label"] = _status_label("checking")
             task["summary"] = "Finalizing the task driver and durable evidence."
@@ -463,7 +584,10 @@ class EmbeddedExecutionBackend:
             final_result = task.get("final_result")
             if isinstance(final_result, dict):
                 final_result["accepted"] = False
+                final_result["label"] = "In progress"
                 final_result["summary"] = ""
+                final_result["reason"] = ""
+            task["result_category"] = "in_progress"
         return task
 
     def _driver_active(self) -> bool:
@@ -616,7 +740,7 @@ class EmbeddedExecutionBackend:
         goal = self.store.read_current_goal()
         if goal is None:
             return self._blocked_task("There is no task to accept.", action="new_task")
-        if goal.status is GoalStatus.DONE and goal.metadata.get("accepted") is True:
+        if build_run_receipt(goal).category == "verified_done":
             return self._current_task(goal)
         return self._blocked_task(
             "This task cannot be accepted until independent verification passes.",
@@ -778,11 +902,24 @@ class EmbeddedExecutionBackend:
             )
         )
         changed_files = changes.get("entries", []) if isinstance(changes, dict) else []
+        changed_files_evidence = _changed_files_evidence(changes)
         verification = _verification(goal, outcome)
         report_ready = not terminal or self._terminal_report_ready(goal)
         if terminal and not report_ready:
             status = "checking"
-        progress = _progress(status, plan, requirements)
+        receipt = build_run_receipt(goal)
+        terminal_receipt_ready = terminal and report_ready
+        result_category = receipt.category if terminal_receipt_ready else "in_progress"
+        public_status = status
+        status_label = _status_label(status)
+        if terminal_receipt_ready:
+            public_status = {
+                "verified_done": "done",
+                "blocked": "blocked",
+                "failed": "failed",
+            }.get(receipt.category, status)
+            status_label = receipt.label
+        progress = _progress(public_status, plan, requirements)
         blocker = autonomy.get("blocker")
         blocker_reason = (
             str(blocker.get("reason") or "") if isinstance(blocker, dict) else ""
@@ -790,24 +927,29 @@ class EmbeddedExecutionBackend:
         trusted_error = (
             str(goal.error or blocker_reason) if status in {"blocked", "stopped"} else ""
         )
-        summary = str(
-            trusted_error
-            or outcome.get("summary")
-            or goal.metadata.get("worker_summary")
-            or goal.error
-            or goal.objective
+        summary = redact_secrets(
+            str(
+                trusted_error
+                or outcome.get("summary")
+                or goal.metadata.get("worker_summary")
+                or goal.error
+                or goal.objective
+            )
         )
-        if terminal and not report_ready:
+        if terminal_receipt_ready:
+            summary = receipt.trusted_reason
+        elif terminal and not report_ready:
             summary = "Finalizing the durable terminal report."
         return {
             "contract": GUI_TASK_CONTRACT,
             "id": goal.id,
             "human_title": goal.objective[:100],
             "objective": goal.objective,
-            "status": status,
-            "status_label": _status_label(status),
+            "status": public_status,
+            "status_label": status_label,
+            "result_category": result_category,
             "summary": summary,
-            "needs_human": status in {"blocked", "needs_review"},
+            "needs_human": public_status in {"blocked", "needs_review"},
             "progress": progress,
             "current": {
                 "cycle": int(autonomy.get("cycle") or 0),
@@ -819,17 +961,21 @@ class EmbeddedExecutionBackend:
             "requirements": requirements,
             "events": events[-100:],
             "changed_files": changed_files,
+            "changed_files_evidence": changed_files_evidence,
             "verification": verification,
             "artifacts": [{"name": Path(path).name, "path": path} for path in goal.artifacts],
-            "allowed_actions": _allowed_actions(status),
+            "allowed_actions": _allowed_actions(public_status),
             "safety": _public_safety(goal),
-            "final_result": {
-                "accepted": goal.metadata.get("accepted") is True and status == "done",
-                "summary": summary if status == "done" else "",
-                "what_changed": changed_files,
-                "checks": verification,
-                "remaining": _remaining(requirements),
-            },
+            "final_result": _final_result_payload(
+                goal,
+                receipt,
+                terminal_ready=terminal_receipt_ready,
+                status=public_status,
+                changed_files=changed_files,
+                changed_files_evidence=changed_files_evidence,
+                verification=verification,
+                requirements=requirements,
+            ),
             "metadata": {
                 "created_at": goal.created_at,
                 "updated_at": goal.updated_at,
@@ -853,19 +999,13 @@ class EmbeddedExecutionBackend:
                     is_current = False
                 if not _durably_terminal(current):
                     return current
-                desired_state = _terminal_report_state_sha256(
-                    self.project_dir,
-                    current,
-                )
                 existing_report = _terminal_report_path(self.project_dir, current)
                 existing_content = _read_report(existing_report)
                 workspace_state = str(
                     current.metadata.get("terminal_workspace_state_sha256") or ""
                 )
                 frozen_changes = current.metadata.get("terminal_workspace_changes")
-                if not isinstance(frozen_changes, dict) or (
-                    workspace_state and workspace_state != desired_state
-                ):
+                if not isinstance(frozen_changes, dict):
                     parsed = _workspace_changes_from_report(existing_content)
                     if parsed is not None and not workspace_state:
                         frozen_changes = parsed
@@ -883,10 +1023,17 @@ class EmbeddedExecutionBackend:
                             "entries": [],
                             "omitted": 0,
                             "truncated": True,
-                            "historical_evidence_unavailable": True,
+                            "evidence_unavailable": True,
                         }
                     current.metadata["terminal_workspace_changes"] = frozen_changes
-                current.metadata["terminal_workspace_state_sha256"] = desired_state
+                if not workspace_state:
+                    current.metadata["terminal_workspace_state_sha256"] = (
+                        _terminal_workspace_boundary_sha256(self.project_dir, current)
+                    )
+                desired_state = _terminal_report_state_sha256(
+                    self.project_dir,
+                    current,
+                )
                 if self._terminal_report_ready(current):
                     self.store.write_goal(current, make_current=is_current)
                     return current
@@ -895,6 +1042,9 @@ class EmbeddedExecutionBackend:
                     and not current.metadata.get("terminal_report_state_sha256")
                     and _legacy_report_matches(current, existing_content)
                 ):
+                    current.metadata["terminal_report_contract"] = (
+                        TERMINAL_REPORT_CONTRACT
+                    )
                     current.metadata["terminal_report_state_sha256"] = desired_state
                     if existing_report is None:
                         return current
@@ -905,6 +1055,7 @@ class EmbeddedExecutionBackend:
                     return current
                 content = _terminal_report_content(self.project_dir, current)
                 report_path = self.store.write_report(current, content)
+                current.metadata["terminal_report_contract"] = TERMINAL_REPORT_CONTRACT
                 current.metadata["terminal_report_state_sha256"] = desired_state
                 current.metadata["terminal_report_content_sha256"] = hashlib.sha256(
                     report_path.read_bytes()
@@ -920,7 +1071,9 @@ class EmbeddedExecutionBackend:
         state_digest = str(goal.metadata.get("terminal_report_state_sha256") or "")
         content_digest = str(goal.metadata.get("terminal_report_content_sha256") or "")
         if (
-            not state_digest
+            goal.metadata.get("terminal_report_contract")
+            != TERMINAL_REPORT_CONTRACT
+            or not state_digest
             or state_digest != _terminal_report_state_sha256(self.project_dir, goal)
             or not content_digest
         ):
@@ -985,7 +1138,18 @@ class EmbeddedExecutionBackend:
         except ConfigError:
             return {"type": "unconfigured"}
         worker: dict[str, Any] = {"type": config.worker}
-        if config.worker == "model_agent":
+        if config.worker == "coding_agent":
+            agent = _coding_agent_selection(config.coding_agent_command)
+            if agent != "current":
+                worker.update({"agent": agent, "label": _CODING_AGENT_LABELS[agent]})
+            else:
+                worker.update(
+                    {
+                        "agent": "current",
+                        "label": "Current configured agent",
+                    }
+                )
+        elif config.worker == "model_agent":
             if config.llm_credential_source == "session":
                 credential_source = "session"
             elif config.llm_credential_source == "env":
@@ -1005,7 +1169,8 @@ class EmbeddedExecutionBackend:
         if config.worker == "model_agent":
             return f"model {config.llm_model}"
         if config.worker == "coding_agent":
-            return "the installed coding agent"
+            agent = _coding_agent_selection(config.coding_agent_command)
+            return _CODING_AGENT_LABELS.get(agent, "the installed coding agent")
         return config.worker.replace("_", " ")
 
 
@@ -1162,10 +1327,15 @@ def _verification(goal: Goal, outcome: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             results.append(
                 {
-                    "name": str(row.get("name") or "Verification"),
+                    "name": redact_secrets(str(row.get("name") or "Verification")),
                     "passed": row.get("passed") is True,
-                    "message": str(row.get("message") or ""),
+                    "message": redact_secrets(str(row.get("message") or "")),
                     "independent": row.get("independent") is True,
+                    "source": (
+                        "independent"
+                        if row.get("independent") is True
+                        else "worker-reported"
+                    ),
                 }
             )
     worker_checks = outcome.get("verification")
@@ -1174,13 +1344,84 @@ def _verification(goal: Goal, outcome: dict[str, Any]) -> list[dict[str, Any]]:
             if isinstance(row, dict):
                 results.append(
                     {
-                        "name": str(row.get("label") or row.get("id") or "Worker check"),
+                        "name": redact_secrets(
+                            str(row.get("label") or row.get("id") or "Worker check")
+                        ),
                         "passed": row.get("passed") is True,
-                        "message": str(row.get("message") or ""),
+                        "message": redact_secrets(str(row.get("message") or "")),
                         "independent": False,
+                        "source": "worker-reported",
                     }
                 )
     return results
+
+
+def _final_result_payload(
+    goal: Goal,
+    receipt: RunReceipt,
+    *,
+    terminal_ready: bool,
+    status: str,
+    changed_files: list[Any],
+    changed_files_evidence: dict[str, Any],
+    verification: list[dict[str, Any]],
+    requirements: list[Any],
+) -> dict[str, Any]:
+    reason = receipt.trusted_reason if terminal_ready else ""
+    return {
+        "label": receipt.label if terminal_ready else "In progress",
+        "accepted": (
+            terminal_ready
+            and receipt.category == "verified_done"
+            and status == "done"
+        ),
+        "summary": reason,
+        "reason": reason,
+        "worker_claim": {
+            "label": receipt.worker_claim_label,
+            "trusted": receipt.worker_claim_trusted,
+            "summary": receipt.worker_claim,
+        },
+        "attempts": receipt.attempts,
+        "retries": receipt.retries,
+        "verification_commands": list(receipt.verification_commands),
+        "review_attempts": _review_attempt_payloads(receipt),
+        "what_changed": changed_files,
+        "what_changed_evidence": changed_files_evidence,
+        "checks": verification,
+        "remaining": _remaining(requirements),
+    }
+
+
+def _changed_files_evidence(changes: dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(changes, dict) and changes.get("evidence_unavailable") is True:
+        return {
+            "available": False,
+            "reason": "Changed-file evidence was unavailable at the terminal boundary.",
+        }
+    return {"available": isinstance(changes, dict), "reason": ""}
+
+
+def _review_attempt_payloads(receipt: RunReceipt) -> list[dict[str, Any]]:
+    return [
+        {
+            "number": attempt.number,
+            "source": attempt.source,
+            "passed": attempt.passed,
+            "summary": attempt.summary,
+            "checks": [
+                {
+                    "name": check.name,
+                    "passed": check.passed,
+                    "message": check.message,
+                    "independent": check.independent,
+                    "source": "independent" if check.independent else "worker-reported",
+                }
+                for check in attempt.checks
+            ],
+        }
+        for attempt in receipt.review_attempts
+    ]
 
 
 def _allowed_actions(status: str) -> list[dict[str, Any]]:
@@ -1221,6 +1462,19 @@ def _remaining(requirements: list[Any]) -> list[str]:
 
 
 def _terminal_report_state_sha256(project_dir: Path, goal: Goal) -> str:
+    return _terminal_state_sha256(project_dir, goal, include_workspace_changes=True)
+
+
+def _terminal_workspace_boundary_sha256(project_dir: Path, goal: Goal) -> str:
+    return _terminal_state_sha256(project_dir, goal, include_workspace_changes=False)
+
+
+def _terminal_state_sha256(
+    project_dir: Path,
+    goal: Goal,
+    *,
+    include_workspace_changes: bool,
+) -> str:
     payload = goal.to_dict()
     payload.pop("updated_at", None)
     payload["artifacts"] = [
@@ -1231,10 +1485,13 @@ def _terminal_report_state_sha256(project_dir: Path, goal: Goal) -> str:
         for key in (
             "terminal_report_state_sha256",
             "terminal_report_content_sha256",
+            "terminal_report_contract",
             "terminal_workspace_state_sha256",
-            "terminal_workspace_changes",
         ):
             metadata.pop(key, None)
+        if not include_workspace_changes:
+            metadata.pop("terminal_workspace_changes", None)
+    payload["terminal_report_contract"] = TERMINAL_REPORT_CONTRACT
     payload["events"] = TaskEventStore(project_dir, goal.id).read()
     encoded = json.dumps(
         payload,
@@ -1269,14 +1526,95 @@ def _read_report(path: Path | None) -> str:
 
 
 def _legacy_report_matches(goal: Goal, content: str) -> bool:
-    if f"Status: {goal.status.value}" not in content:
+    receipt = build_run_receipt(goal)
+    accepted = _receipt_accepted(receipt)
+    required_fields = (
+        f"- Contract: {TERMINAL_REPORT_CONTRACT}",
+        f"- Result: {receipt.label}",
+        f"- Trusted reason: {receipt.trusted_reason}",
+        f"- Accepted: {'yes' if accepted else 'no'}",
+        f"- Attempts: {receipt.attempts}",
+        f"- Retries: {receipt.retries}",
+    )
+    lines = content.splitlines()
+    if not all(_report_field_is_exact(lines, field) for field in required_fields):
         return False
-    accepted = goal.metadata.get("accepted") is True
-    if "Accepted: yes" in content and not accepted:
+    if lines.count("## Worker claim (untrusted)") != 1:
         return False
-    if "Accepted: no" in content and accepted:
+    if receipt.worker_claim and f"- {receipt.worker_claim}" not in content:
+        return False
+    if any(line not in content for line in _report_review_attempt_lines(receipt)):
+        return False
+    if any(
+        line not in content for line in _report_verification_command_lines(receipt)
+    ):
+        return False
+    if lines.count("## Artifacts") != 1:
+        return False
+    if any(line not in content for line in _report_artifact_lines(goal)):
+        return False
+    raw_fields = [line.lstrip("- ") for line in lines]
+    if any(line.startswith("Summary:") for line in raw_fields):
+        return False
+    if receipt.category != "verified_done" and any(
+        "Status: done" in line for line in lines
+    ):
         return False
     return True
+
+
+def _report_field_is_exact(lines: list[str], expected: str) -> bool:
+    prefix = expected.partition(":")[0] + ":"
+    return [line for line in lines if line.startswith(prefix)] == [expected]
+
+
+def _receipt_accepted(receipt: RunReceipt) -> bool:
+    return receipt.category == "verified_done"
+
+
+def _report_review_attempt_lines(receipt: RunReceipt) -> list[str]:
+    if not receipt.review_attempts:
+        return ["- No review attempts were recorded."]
+    lines: list[str] = []
+    for attempt in receipt.review_attempts:
+        lines.extend(
+            [
+                f"### Attempt {attempt.number} ({attempt.source})",
+                "",
+                f"- Outcome: {'passed' if attempt.passed else 'failed'}",
+            ]
+        )
+        if not attempt.checks:
+            lines.append("- No review checks were recorded.")
+            continue
+        for check in attempt.checks:
+            result = "passed" if check.passed else "failed"
+            source = "independent" if check.independent else "worker-reported"
+            detail = check.message or check.name
+            lines.append(f"- {result} ({source}): {detail}")
+    return lines
+
+
+def _report_verification_command_lines(receipt: RunReceipt) -> list[str]:
+    if not receipt.verification_commands:
+        return ["- No verification commands were recorded."]
+    return [
+        f"- {number}. {command}"
+        for number, command in enumerate(receipt.verification_commands, 1)
+    ]
+
+
+def _report_artifact_lines(goal: Goal) -> list[str]:
+    report_path = (Path(CONFIG_DIR) / "runs" / goal.id / "report.md").as_posix()
+    paths: list[str] = []
+    seen: set[str] = set()
+    for path in [*goal.artifacts, report_path]:
+        rendered = safe_inline_text(path)
+        if rendered in seen:
+            continue
+        seen.add(rendered)
+        paths.append(rendered)
+    return [f"- {number}. {path}" for number, path in enumerate(paths, 1)]
 
 
 def _workspace_changes_from_report(content: str) -> dict[str, Any] | None:
@@ -1319,36 +1657,43 @@ def _terminal_report_content(project_dir: Path, goal: Goal) -> str:
     autonomy = goal.metadata.get("autonomy")
     if not isinstance(autonomy, dict):
         autonomy = {}
-    outcome = goal.metadata.get("worker_outcome")
-    if not isinstance(outcome, dict):
-        outcome = {}
-    summary = str(
-        outcome.get("summary")
-        or goal.metadata.get("worker_summary")
-        or goal.error
-        or "No summary was reported."
-    )
+    receipt = build_run_receipt(goal)
+    accepted = _receipt_accepted(receipt)
     lines = [
         "# Agentic Harness Report",
         "",
-        f"- Goal: {goal.id}",
-        f"- Objective: {goal.objective}",
-        f"- Status: {goal.status.value}",
-        f"- Accepted: {'yes' if goal.metadata.get('accepted') is True else 'no'}",
-        f"- Summary: {summary}",
-        f"- Current subgoal: {autonomy.get('current_subgoal') or 'not reported'}",
-        f"- Checkpoint: {autonomy.get('checkpoint') or 'not reported'}",
+        f"- Contract: {TERMINAL_REPORT_CONTRACT}",
+        f"- Goal: {safe_inline_text(goal.id)}",
+        f"- Objective: {safe_inline_text(goal.objective)}",
+        f"- Result: {receipt.label}",
+        f"- Trusted reason: {receipt.trusted_reason}",
+        f"- Accepted: {'yes' if accepted else 'no'}",
+        f"- Attempts: {receipt.attempts}",
+        f"- Retries: {receipt.retries}",
+        f"- Current subgoal: {safe_inline_text(autonomy.get('current_subgoal') or 'not reported')}",
+        f"- Checkpoint: {safe_inline_text(autonomy.get('checkpoint') or 'not reported')}",
         f"- Cycles: {int(autonomy.get('cycle') or 0)}",
         "",
-        "## Plan",
+        "## Worker claim (untrusted)",
+        "",
+        f"- {receipt.worker_claim or 'No worker completion claim was recorded.'}",
+        "",
+        "## Review attempts (ordered)",
         "",
     ]
+    lines.extend(_report_review_attempt_lines(receipt))
+    lines.extend(["", "## Verification commands", ""])
+    lines.extend(_report_verification_command_lines(receipt))
+    lines.extend(["", "## Artifacts", ""])
+    lines.extend(_report_artifact_lines(goal))
+    lines.extend(["", "## Plan", ""])
     plan = autonomy.get("plan")
     if isinstance(plan, list) and plan:
         for row in plan:
             if isinstance(row, dict):
                 lines.append(
-                    f"- [{row.get('status') or 'pending'}] {row.get('step') or row.get('text') or 'Plan item'}"
+                    f"- [{safe_inline_text(row.get('status') or 'pending')}] "
+                    f"{safe_inline_text(row.get('step') or row.get('text') or 'Plan item')}"
                 )
     else:
         lines.append("- No structured plan was reported.")
@@ -1359,24 +1704,18 @@ def _terminal_report_content(project_dir: Path, goal: Goal) -> str:
             if not isinstance(row, dict):
                 continue
             evidence = row.get("evidence")
-            evidence_text = ", ".join(str(item) for item in evidence) if isinstance(evidence, list) else ""
+            evidence_text = (
+                ", ".join(safe_inline_text(item) for item in evidence)
+                if isinstance(evidence, list)
+                else ""
+            )
             lines.append(
-                f"- [{row.get('status') or 'pending'}] {row.get('text') or row.get('id') or 'Requirement'}"
+                f"- [{safe_inline_text(row.get('status') or 'pending')}] "
+                f"{safe_inline_text(row.get('text') or row.get('id') or 'Requirement')}"
                 + (f" — evidence: {evidence_text}" if evidence_text else "")
             )
     else:
         lines.append("- No structured requirements were reported.")
-    lines.extend(["", "## Verification", ""])
-    verification = _verification(goal, outcome)
-    if verification:
-        for row in verification:
-            scope = "independent" if row.get("independent") else "worker"
-            result = "passed" if row.get("passed") else "failed"
-            lines.append(
-                f"- {result} ({scope}): {row.get('message') or row.get('name') or 'Verification'}"
-            )
-    else:
-        lines.append("- No verification evidence was recorded.")
     frozen_changes = goal.metadata.get("terminal_workspace_changes")
     changes = (
         frozen_changes
@@ -1391,10 +1730,15 @@ def _terminal_report_content(project_dir: Path, goal: Goal) -> str:
     )
     lines.extend(["", "## Changed files", ""])
     entries = changes.get("entries") if isinstance(changes, dict) else None
-    if isinstance(entries, list) and entries:
+    if isinstance(changes, dict) and changes.get("evidence_unavailable") is True:
+        lines.append("- Changed-file evidence was unavailable at the terminal boundary.")
+    elif isinstance(entries, list) and entries:
         for row in entries:
             if isinstance(row, dict):
-                lines.append(f"- {row.get('status') or 'changed'}: {row.get('path') or 'unknown'}")
+                lines.append(
+                    f"- {safe_inline_text(row.get('status') or 'changed')}: "
+                    f"{safe_inline_text(row.get('path') or 'unknown')}"
+                )
     else:
         lines.append("- No workspace file changes were recorded.")
     events = TaskEventStore(project_dir, goal.id).read()
@@ -1402,7 +1746,8 @@ def _terminal_report_content(project_dir: Path, goal: Goal) -> str:
     if events:
         for event in events:
             lines.append(
-                f"- {event.get('evidence_id') or 'event'}: {event.get('summary') or 'Progress recorded'}"
+                f"- {safe_inline_text(event.get('evidence_id') or 'event')}: "
+                f"{safe_inline_text(event.get('summary') or 'Progress recorded')}"
             )
     else:
         lines.append("- No task events were recorded.")
@@ -1427,23 +1772,130 @@ def _detect_check(project_dir: Path) -> str:
     return format_command(detect_review_command(project_dir))
 
 
-def _coding_agent_command(agent: str) -> list[str]:
-    commands = {
-        "codex": ["codex", "exec", "--skip-git-repo-check", "{objective}"],
-        "opencode": ["opencode", "run", "{objective}"],
-        "aider": ["aider", "--yes-always", "--message", "{objective}"],
-        "codewhale": ["codewhale", "exec", "{objective}"],
-    }
-    if agent not in commands:
+def _coding_agent_command(agent: str, *, executable: str | None = None) -> list[str]:
+    if agent not in _CODING_AGENT_COMMANDS:
         raise ValueError("Choose codex, opencode, aider, or codewhale.")
-    return commands[agent]
+    command = list(_CODING_AGENT_COMMANDS[agent])
+    if executable:
+        command[0] = executable
+    return command
+
+
+def _existing_coding_agent_command(
+    project_dir: Path,
+    agent: str,
+) -> list[str] | None:
+    try:
+        config = load_config(project_dir)
+    except ConfigError:
+        return None
+    command = config.coding_agent_command
+    matches = _coding_agent_selection(command) == agent
+    if config.worker != "coding_agent" or not matches:
+        return None
+    if resolve_executable(command[0]) is None:
+        return None
+    return list(command)
+
+
+def _coding_agent_options(
+    config: HarnessConfig | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    available = {
+        agent: resolve_executable(agent) is not None for agent in _CODING_AGENT_COMMANDS
+    }
+    configured = ""
+    current_available = False
+    if config is not None and config.worker == "coding_agent":
+        configured = _coding_agent_selection(config.coding_agent_command)
+        if configured != "current" and resolve_executable(config.coding_agent_command[0]) is not None:
+            available[configured] = True
+        elif configured == "current":
+            current_available = (
+                bool(config.coding_agent_command)
+                and resolve_executable(config.coding_agent_command[0]) is not None
+            )
+    recommended = configured if available.get(configured) else next(
+        (agent for agent, found in available.items() if found),
+        "",
+    )
+    if configured == "current" and current_available:
+        recommended = "current"
+    options = [
+        {
+            "key": agent,
+            "label": _CODING_AGENT_LABELS[agent],
+            "available": available[agent],
+            "recommended": agent == recommended,
+        }
+        for agent in _CODING_AGENT_COMMANDS
+    ]
+    if configured == "current":
+        options.insert(
+            0,
+            {
+                "key": "current",
+                "label": "Current configured agent",
+                "available": current_available,
+                "recommended": current_available,
+            },
+        )
+    return (
+        options,
+        recommended,
+    )
+
+
+def _coding_agent_identity(command: list[str]) -> str:
+    if not command:
+        return ""
+    executable = command[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for suffix in (".exe", ".cmd", ".bat"):
+        if executable.endswith(suffix):
+            executable = executable[: -len(suffix)]
+            break
+    return executable if executable in _CODING_AGENT_LABELS else ""
+
+
+def _coding_agent_selection(command: list[str]) -> str:
+    identity = _coding_agent_identity(command)
+    if not identity or command[1:] != _CODING_AGENT_COMMANDS[identity][1:]:
+        return "current"
+    return identity
 
 
 def _int_setting(value: Any, default: int, minimum: int, maximum: int) -> int:
-    parsed = default if value in (None, "") else int(value)
+    if value in (None, ""):
+        return default
+    parsed = int(value)
     if parsed < minimum or parsed > maximum:
         raise ValueError(f"setting must be between {minimum} and {maximum}")
     return parsed
+
+
+def _float_setting(
+    value: Any,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    if value in (None, ""):
+        return default
+    parsed = float(value)
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"setting must be between {minimum:g} and {maximum:g}")
+    return parsed
+
+
+def _text_setting(value: Any, default: str) -> str:
+    parsed = default if value in (None, "") else str(value).strip()
+    if not parsed:
+        raise ValueError("setting must not be empty")
+    return parsed
+
+
+def _gui_setup_editable(config: HarnessConfig) -> bool:
+    return config.worker in {"coding_agent", "model_agent"}
 
 
 def _autonomy_settings(body: dict[str, Any]) -> dict[str, int]:

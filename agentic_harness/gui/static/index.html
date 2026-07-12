@@ -278,20 +278,22 @@
             <p class="help-text">Describe one result. The assistant will keep the goal, show each checkpoint, run your check, and only mark it done when the evidence passes.</p>
           </div>
 
-          <label class="field-label" for="objective">Goal</label>
+          <label class="field-label" for="objective">Objective</label>
           <textarea
             id="objective"
             rows="7"
             placeholder="Example: add a CSV export, update its tests, and explain the changed files"
           ></textarea>
 
+          <label class="field-label" for="checks">Independent verification command</label>
+          <textarea id="checks" rows="2" required placeholder="Example: python -m pytest -q"></textarea>
+          <p class="help-text">This check runs independently. The task is never verified done unless it passes.</p>
+
           <details class="boundaries">
-            <summary>Add scope and checks</summary>
+            <summary>Optional scope</summary>
             <p class="help-text" id="scopeHelp">Paths are enforced by the built-in model agent. Installed coding-agent CLIs receive them as guidance.</p>
             <label class="field-label" for="safeAreas">Allowed files or folders</label>
             <textarea id="safeAreas" rows="3" placeholder="One workspace-relative path per line; blank means the whole workspace"></textarea>
-            <label class="field-label" for="checks">Independent verification commands</label>
-            <textarea id="checks" rows="3" placeholder="One command per line; setup provides the default"></textarea>
           </details>
 
           <div class="actions">
@@ -339,7 +341,7 @@
           <section class="current-card" id="currentCard">
             <div><span>Working on now</span><strong id="currentSubgoal">Waiting for a goal</strong></div>
             <div><span>Checkpoint</span><strong id="checkpoint">Not started</strong></div>
-            <div><span>Cycle</span><strong id="cycleValue">0</strong></div>
+            <div><span>Attempts</span><strong id="attemptsValue">0</strong></div>
           </section>
 
           <div class="quick-actions">
@@ -357,7 +359,7 @@
             </button>
           </div>
 
-          <section class="work-detail-grid">
+          <section class="work-detail-grid" id="workDetailGrid">
             <div>
               <h3>Plan</h3>
               <ol id="planList" class="plain-list"></ol>
@@ -368,24 +370,43 @@
             </div>
           </section>
 
-          <section>
+          <section id="activitySection">
             <h3>Activity</h3>
             <ol id="eventTimeline" class="timeline"></ol>
           </section>
 
           <section id="finalResult" class="final-result" hidden>
-            <h3>Result</h3>
-            <p id="finalSummary"></p>
+            <p class="eyebrow">Evidence-backed result</p>
+            <h3 id="finalLabel">Result</h3>
+            <p id="finalReason"></p>
+            <div class="receipt-metrics">
+              <div><span>Attempts</span><strong id="finalAttempts">0</strong></div>
+              <div><span>Retries</span><strong id="finalRetries">0</strong></div>
+            </div>
+            <div class="worker-claim">
+              <strong id="finalWorkerClaimLabel">Worker claim (untrusted)</strong>
+              <p id="finalWorkerClaim"></p>
+            </div>
+            <h4>Changed files</h4>
+            <ul id="finalChangedFiles"></ul>
+            <h4>Independent verification</h4>
+            <ul id="finalVerification"></ul>
             <p id="finalRemaining"></p>
           </section>
 
           <div class="evidence">
-            <h3 class="icon-heading"><svg class="icon" aria-hidden="true"><use href="#icon-file-text"></use></svg><span>Changed files</span></h3>
-            <ul id="changedFiles"></ul>
-            <h3 class="icon-heading"><svg class="icon" aria-hidden="true"><use href="#icon-list-checks"></use></svg><span>Verification</span></h3>
-            <ul id="verification"></ul>
-            <h3 class="icon-heading"><svg class="icon" aria-hidden="true"><use href="#icon-package"></use></svg><span>Artifacts</span></h3>
-            <ul id="artifacts"></ul>
+            <section id="changedFilesEvidence">
+              <h3 class="icon-heading"><svg class="icon" aria-hidden="true"><use href="#icon-file-text"></use></svg><span>Changed files</span></h3>
+              <ul id="changedFiles"></ul>
+            </section>
+            <section id="verificationEvidence">
+              <h3 class="icon-heading"><svg class="icon" aria-hidden="true"><use href="#icon-list-checks"></use></svg><span>Verification</span></h3>
+              <ul id="verification"></ul>
+            </section>
+            <section id="artifactsEvidence">
+              <h3 class="icon-heading"><svg class="icon" aria-hidden="true"><use href="#icon-package"></use></svg><span>Artifacts</span></h3>
+              <ul id="artifacts"></ul>
+            </section>
           </div>
 
           <details class="history-tools">

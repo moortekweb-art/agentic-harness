@@ -93,14 +93,15 @@ def test_gui_uses_local_custom_icons_across_primary_controls() -> None:
     assert ".mode-card .mode-card-note" in css
 
 
-def test_gui_desktop_task_area_absorbs_column_height_difference() -> None:
+def test_gui_keeps_the_desktop_form_compact_and_mobile_form_full_width() -> None:
     static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
     html = (static_root / "index.html").read_text(encoding="utf-8")
     css = (static_root / "styles.css").read_text(encoding="utf-8")
 
     assert 'id="objective"' in html
     assert ".workbench {" in css
-    assert "align-items: stretch" in css
+    assert "align-self: start" in css
+    assert "align-self: stretch" in css
     assert "#objective" in css
     assert "flex: 1 1 220px" in css
     assert "min-height: 220px" in css
@@ -122,6 +123,10 @@ def test_gui_status_encodings_are_labeled_and_idle_progress_is_hidden() -> None:
     assert 'id="checkpoint"' in html
     assert "progress.determinate" in javascript
     assert "Number.isFinite(percent)" in javascript
+    assert "what_changed_evidence" in javascript
+    assert "changedEvidence.reason" in javascript
+    assert "verification_commands" in javascript
+    assert "Command ${row.index + 1}" in javascript
     assert "[hidden] {" in css
     assert "display: none !important" in css
 
@@ -1085,6 +1090,46 @@ def test_gui_server_websocket_status_upgrade_sends_json_frame() -> None:
 
     assert b"101 Switching Protocols" in response
     assert b'"status": "working"' in response
+
+
+def test_gui_server_websocket_status_redacts_secret_shaped_task_fields() -> None:
+    secret = "opaque-websocket-secret-Z7Q4M9"
+
+    class SecretStatusBridge(FakeBridge):
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(
+                ("local-goal", "status"),
+                0,
+                json.dumps(
+                    {
+                        "status": "working",
+                        "summary": f"processing api_key={secret}",
+                        "changed_files": [f"api_key={secret}.txt"],
+                    }
+                ),
+                "",
+            )
+
+    with gui_server(SecretStatusBridge()) as base_url:
+        host, port = base_url.removeprefix("http://").split(":")
+        with socket.create_connection((host, int(port)), timeout=3) as client:
+            client.sendall(
+                (
+                    "GET /api/tasks/stream HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            response = client.recv(4096)
+            response += client.recv(4096)
+
+    assert b"101 Switching Protocols" in response
+    assert secret.encode() not in response
+    assert b"<redacted>" in response
 
 
 def test_gui_server_rejects_cross_origin_websocket() -> None:

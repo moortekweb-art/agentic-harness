@@ -20,6 +20,7 @@ const state = {
   busy: false,
   authToken: "",
   authPromptPromise: null,
+  setupPrompted: false,
   readiness: {},
   setup: null,
   currentTask: null,
@@ -60,7 +61,8 @@ const els = {
   progressBar: byId("progressBar"),
   currentSubgoal: byId("currentSubgoal"),
   checkpoint: byId("checkpoint"),
-  cycleValue: byId("cycleValue"),
+  attemptsValue: byId("attemptsValue"),
+  currentCard: byId("currentCard"),
   continueButton: byId("continueButton"),
   acceptButton: byId("acceptButton"),
   stopButton: byId("stopButton"),
@@ -68,8 +70,20 @@ const els = {
   requirementsList: byId("requirementsList"),
   eventTimeline: byId("eventTimeline"),
   finalResult: byId("finalResult"),
-  finalSummary: byId("finalSummary"),
+  finalLabel: byId("finalLabel"),
+  finalReason: byId("finalReason"),
+  finalWorkerClaimLabel: byId("finalWorkerClaimLabel"),
+  finalWorkerClaim: byId("finalWorkerClaim"),
+  finalAttempts: byId("finalAttempts"),
+  finalRetries: byId("finalRetries"),
+  finalChangedFiles: byId("finalChangedFiles"),
+  finalVerification: byId("finalVerification"),
   finalRemaining: byId("finalRemaining"),
+  workDetailGrid: byId("workDetailGrid"),
+  activitySection: byId("activitySection"),
+  changedFilesEvidence: byId("changedFilesEvidence"),
+  verificationEvidence: byId("verificationEvidence"),
+  artifactsEvidence: byId("artifactsEvidence"),
   changedFiles: byId("changedFiles"),
   verification: byId("verification"),
   artifacts: byId("artifacts"),
@@ -233,13 +247,13 @@ function redoForm() {
 }
 
 function persistForm() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(formSnapshot()));
+  sessionStorage.setItem(STORAGE_KEY, JSON.stringify(formSnapshot()));
 }
 
 function restoreForm() {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = sessionStorage.getItem(STORAGE_KEY);
   if (raw) {
-    try { applyFormSnapshot(JSON.parse(raw)); } catch { localStorage.removeItem(STORAGE_KEY); }
+    try { applyFormSnapshot(JSON.parse(raw)); } catch { sessionStorage.removeItem(STORAGE_KEY); }
   }
   pushUndo();
 }
@@ -254,13 +268,16 @@ function setBusy(busy) {
 
 function updateStartButton() {
   const canStart = state.readiness.can_start === true;
-  els.startButton.disabled = state.busy || !canStart || !els.objective.value.trim();
+  const hasObjective = Boolean(els.objective.value.trim());
+  const hasVerification = Boolean(els.checks.value.trim());
+  els.startButton.disabled = state.busy || !canStart || !hasObjective || !hasVerification;
 }
 
 function renderHealth(health) {
   state.readiness = health.readiness || {};
   const ready = state.readiness.can_start === true;
-  const needsSetup = ["setup_required", "credential_required"].includes(state.readiness.state);
+  const needsSetup = ["setup_required", "credential_required", "verification_required"]
+    .includes(state.readiness.state);
   const label = ready ? "Ready" : needsSetup ? "Setup needed" : "Task active";
   els.healthText.textContent = label;
   els.health.className = ready ? "health ok" : needsSetup ? "health blocked" : "health";
@@ -344,16 +361,130 @@ function hasAction(task, name) {
     && task.allowed_actions.some((row) => row && row.action === name && row.enabled !== false);
 }
 
+function receiptContext(task) {
+  const final = task.final_result && typeof task.final_result === "object"
+    ? task.final_result
+    : {};
+  const category = task.result_category || "in_progress";
+  return {
+    category,
+    final,
+    terminal: ["verified_done", "blocked", "failed"].includes(category),
+  };
+}
+
+function verificationSource(row) {
+  return row.source || (row.independent ? "independent" : "worker-reported");
+}
+
+function independentReviewRows(final) {
+  const rows = [];
+  (Array.isArray(final.review_attempts) ? final.review_attempts : []).forEach((attempt) => {
+    (Array.isArray(attempt.checks) ? attempt.checks : []).forEach((check) => {
+      const source = verificationSource(check);
+      if (source !== "independent") return;
+      rows.push({
+        attempt: attempt.number || 1,
+        source,
+        passed: check.passed === true,
+        message: check.message || check.name || attempt.summary || "Verification recorded",
+      });
+    });
+  });
+  if (rows.length) return rows;
+  (Array.isArray(final.checks) ? final.checks : []).forEach((check) => {
+    if (!check || typeof check !== "object") return;
+    const source = verificationSource(check);
+    if (source !== "independent") return;
+    rows.push({
+      attempt: 1,
+      source,
+      passed: check.passed === true,
+      message: check.message || check.name || "Verification recorded",
+    });
+  });
+  return rows;
+}
+
+function renderFinalReceipt(task, receipt) {
+  const { final, terminal, category } = receipt;
+  els.finalResult.hidden = !terminal;
+  els.finalResult.className = `final-result ${category}`;
+  els.finalLabel.textContent = terminal ? final.label || "Result" : "Result";
+  els.finalReason.textContent = terminal ? final.reason || final.summary || "" : "";
+  const workerClaim = final.worker_claim && typeof final.worker_claim === "object"
+    ? final.worker_claim
+    : {};
+  els.finalWorkerClaimLabel.textContent = workerClaim.label || "Worker claim (untrusted)";
+  els.finalWorkerClaim.textContent = workerClaim.summary || "No worker completion claim recorded.";
+  els.finalAttempts.textContent = String(Number.isFinite(final.attempts) ? final.attempts : 0);
+  els.finalRetries.textContent = String(Number.isFinite(final.retries) ? final.retries : 0);
+  const changedEvidence = final.what_changed_evidence && typeof final.what_changed_evidence === "object"
+    ? final.what_changed_evidence
+    : task.changed_files_evidence || {};
+  const noChangedFiles = changedEvidence.available === false && changedEvidence.reason
+    ? changedEvidence.reason
+    : "No workspace changes recorded.";
+  previewList(
+    els.finalChangedFiles,
+    Array.isArray(final.what_changed) ? final.what_changed : task.changed_files,
+    "file",
+    noChangedFiles,
+    task.id || "",
+  );
+  const verificationCommands = Array.isArray(final.verification_commands)
+    ? final.verification_commands
+    : [];
+  const verificationRows = [
+    ...verificationCommands.map((command, index) => ({ command, index })),
+    ...independentReviewRows(final),
+  ];
+  textList(els.finalVerification, verificationRows, (row) => (
+    row.command
+      ? {
+        text: `Command ${row.index + 1}: ${row.command}`,
+        className: "command",
+      }
+      : {
+        text: `Attempt ${row.attempt} · ${row.source} · ${row.passed ? "Passed" : "Failed"}: ${row.message}`,
+        className: row.passed ? "passed" : "failed",
+      }
+  ), "No independent verification evidence recorded.");
+  const remaining = Array.isArray(final.remaining) ? final.remaining : [];
+  els.finalRemaining.textContent = remaining.length
+    ? `Still open: ${remaining.join("; ")}`
+    : "Nothing remains open.";
+}
+
 function renderTask(task) {
   state.currentTask = task;
   const status = task.status || "ready";
+  const receipt = receiptContext(task);
+  const rawDoneUnverified = status === "done" && !receipt.terminal;
+  const visualStatus = rawDoneUnverified
+    ? "checking"
+    : receipt.category === "verified_done"
+    ? "done"
+    : receipt.category === "failed"
+      ? "stopped"
+      : receipt.category === "blocked"
+        ? "blocked"
+        : status;
   document.body.dataset.taskActive = String(
     ["starting", "working", "checking", "stopping", "needs_review", "blocked"].includes(status),
   );
-  els.statusLabel.textContent = task.status_label || status.replaceAll("_", " ");
-  els.summary.textContent = task.summary || "No task is running.";
-  els.statusIndicator.className = `status-indicator ${status}`;
-  els.statusIcon.setAttribute("href", iconHref(STATUS_ICONS[status] || "loader-circle"));
+  els.statusLabel.textContent = receipt.terminal && receipt.final.label
+    ? receipt.final.label
+    : rawDoneUnverified
+      ? "Checking evidence"
+      : task.status_label || status.replaceAll("_", " ");
+  els.summary.textContent = receipt.terminal
+    ? receipt.final.reason || receipt.final.summary || "No trusted result reason was recorded."
+    : rawDoneUnverified
+      ? "Completion is not verified yet."
+      : task.summary || "No task is running.";
+  els.statusIndicator.className = `status-indicator ${visualStatus}`;
+  els.statusIcon.setAttribute("href", iconHref(STATUS_ICONS[visualStatus] || "loader-circle"));
   els.statusIndicator.setAttribute("aria-label", els.statusLabel.textContent);
   els.statusIndicator.title = els.statusLabel.textContent;
 
@@ -372,9 +503,11 @@ function renderTask(task) {
     ? task.current.current_subgoal
     : "Waiting for the next step";
   els.checkpoint.textContent = task.current && task.current.checkpoint
-    ? task.current.checkpoint
+    ? task.current.checkpoint.replaceAll("_", " ")
     : "Not started";
-  els.cycleValue.textContent = String(current.cycle || 0);
+  els.attemptsValue.textContent = String(
+    Number.isFinite(receipt.final.attempts) ? receipt.final.attempts : current.cycle || 0,
+  );
 
   textList(els.planList, task.plan, (row) => ({
     text: `${row.status || "pending"}: ${row.step || row.text || "Plan item"}`,
@@ -396,7 +529,9 @@ function renderTask(task) {
     task.id || "",
   );
   textList(els.verification, task.verification, (row) => ({
-    text: typeof row === "string" ? row : `${row.passed ? "Passed" : "Failed"}: ${row.message || row.name || "Check"}`,
+    text: typeof row === "string"
+      ? row
+      : `${verificationSource(row) === "independent" ? "Independent" : "Worker-reported"} · ${row.passed ? "Passed" : "Failed"}: ${row.message || row.name || "Check"}`,
     className: typeof row === "object" && row.passed ? "passed" : "failed",
   }), "No verification evidence reported yet.");
   previewList(
@@ -407,11 +542,13 @@ function renderTask(task) {
     task.id || "",
   );
 
-  const finalResult = task.final_result && typeof task.final_result === "object" ? task.final_result : {};
-  els.finalResult.hidden = status !== "done" && !finalResult.summary;
-  els.finalSummary.textContent = finalResult.summary || "";
-  const remaining = Array.isArray(finalResult.remaining) ? finalResult.remaining : [];
-  els.finalRemaining.textContent = remaining.length ? `Still open: ${remaining.join("; ")}` : "Nothing remains open.";
+  renderFinalReceipt(task, receipt);
+  els.currentCard.hidden = receipt.terminal;
+  els.workDetailGrid.hidden = receipt.terminal;
+  els.activitySection.hidden = receipt.terminal;
+  els.changedFilesEvidence.hidden = receipt.terminal;
+  els.verificationEvidence.hidden = receipt.terminal;
+  els.artifactsEvidence.hidden = false;
 
   const viewingHistory = Boolean(state.viewingHistoryId);
   els.continueButton.hidden = viewingHistory || !hasAction(task, "continue");
@@ -443,11 +580,18 @@ function renderStatusFooter(task) {
 function renderHistory(tasks) {
   els.historyList.replaceChildren();
   (tasks || []).forEach((task) => {
+    const receipt = receiptContext(task);
+    const rawDoneUnverified = task.status === "done" && !receipt.terminal;
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
     button.className = "history-entry";
-    button.textContent = `${task.status_label || task.status}: ${task.objective || task.summary || task.id}`;
+    const label = receipt.terminal && receipt.final.label
+      ? receipt.final.label
+      : rawDoneUnverified
+        ? "Checking evidence"
+        : task.status_label || task.status;
+    button.textContent = `${label}: ${task.objective || task.summary || task.id}`;
     button.addEventListener("click", () => {
       if (state.liveTask && state.liveTask.id === task.id) {
         state.viewingHistoryId = "";
@@ -462,18 +606,51 @@ function renderHistory(tasks) {
   });
 }
 
+function renderDetectedAgents(setup, worker) {
+  const options = Array.isArray(setup.execution_options) ? setup.execution_options : [];
+  const codingAgent = options.find((option) => option && option.key === "coding_agent");
+  const agents = codingAgent && Array.isArray(codingAgent.agents) ? codingAgent.agents : [];
+  if (!agents.length) return;
+
+  const selected = setup.configured && worker.agent
+    ? worker.agent
+    : codingAgent.recommended_agent || agents.find((agent) => agent.available)?.key || "";
+  els.codingAgentChoice.replaceChildren();
+  agents.forEach((agent) => {
+    const option = document.createElement("option");
+    option.value = agent.key;
+    option.disabled = agent.available !== true;
+    option.selected = agent.key === selected;
+    option.textContent = agent.available
+      ? `${agent.label}${agent.recommended ? " (recommended)" : ""}`
+      : `${agent.label} (not found)`;
+    els.codingAgentChoice.append(option);
+  });
+  if (selected) els.codingAgentChoice.value = selected;
+  if (!setup.configured && codingAgent.recommended) els.executionChoice.value = "coding_agent";
+}
+
 function renderSetup(setup) {
+  const previousSetup = state.setup;
   state.setup = setup;
   els.setupButton.hidden = setup.editable === false;
   els.workspacePath.textContent = setup.workspace || "Unknown workspace";
   const worker = setup.worker || {};
+  renderDetectedAgents(setup, worker);
   els.executionSummary.textContent = setup.configured
     ? worker.type === "model_agent"
       ? `${worker.model || "Model"} · ${worker.credential_source || "no key"}`
       : worker.label || worker.type || "Configured"
     : "Setup required";
-  if (!els.verificationCommand.value) {
-    els.verificationCommand.value = setup.verification_command || setup.suggested_check || "";
+  const previousCheck = previousSetup
+    ? previousSetup.verification_command || previousSetup.suggested_check || ""
+    : "";
+  const effectiveCheck = setup.verification_command || setup.suggested_check || "";
+  if (!els.verificationCommand.value.trim() || els.verificationCommand.value === previousCheck) {
+    els.verificationCommand.value = effectiveCheck;
+  }
+  if (!els.checks.value.trim() || els.checks.value === previousCheck) {
+    els.checks.value = effectiveCheck;
   }
   if (setup.provider) {
     els.providerEndpoint.value = setup.provider.endpoint || "";
@@ -493,6 +670,16 @@ function renderSetup(setup) {
     els.maxToolCalls.value = String(setup.limits.max_tool_calls || 1000);
   }
   updateSetupFields();
+  updateStartButton();
+  if (
+    setup.configured === false
+    && setup.editable !== false
+    && !state.setupPrompted
+    && !els.setupDialog.open
+  ) {
+    state.setupPrompted = true;
+    els.setupDialog.showModal();
+  }
 }
 
 function updateSetupFields() {
