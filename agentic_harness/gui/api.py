@@ -435,6 +435,12 @@ def _status_from_payload(payload: dict[str, Any] | None, *, fallback_status: str
 def _recovery_status(payload: dict[str, Any]) -> str:
     recovery = payload.get("recovery_block")
     recovery = recovery if isinstance(recovery, dict) else {}
+    if _local_goal_lane_is_ready(payload):
+        # The controller retains recovery details for auditability after an
+        # operator acknowledges a stopped run.  Those stale details must not
+        # override the current, authoritative lane-ready state or a new user
+        # will see an unrelated historical run as a blocking active task.
+        return ""
     if payload.get("hard_blocked") is True or recovery.get("operator_intervention_required") is True:
         return "blocked"
     runtime = payload.get("runtime")
@@ -446,6 +452,16 @@ def _recovery_status(payload: dict[str, Any]) -> str:
     if loop_status in {"stopped_incomplete", "needs_attention"} and accepted is not True:
         return "checking"
     return ""
+
+
+def _local_goal_lane_is_ready(payload: dict[str, Any]) -> bool:
+    current_state = payload.get("capabilities")
+    current_state = current_state.get("current_state") if isinstance(current_state, dict) else {}
+    current_state = current_state if isinstance(current_state, dict) else {}
+    return (
+        _normalize_status(current_state.get("classification")) == "ready"
+        and current_state.get("local_goal_lane_free") is True
+    )
 
 
 def _payload_classification(payload: dict[str, Any]) -> str:
@@ -496,6 +512,8 @@ def _summary_from_payload(
                 "The external runtime reported completion without a valid harness-issued "
                 "acceptance receipt. Review and verify the candidate before accepting it."
             )
+        if _local_goal_lane_is_ready(payload):
+            return "No local goal is running. Ready for a new task."
         recovery_status = _recovery_status(payload)
         if recovery_status == "checking":
             return (

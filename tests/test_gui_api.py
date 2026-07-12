@@ -504,6 +504,39 @@ def test_repeated_hard_block_requires_human_after_recovery_threshold() -> None:
     assert task["needs_human"] is True
 
 
+def test_acknowledged_stopped_run_does_not_block_a_free_lane() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "idle",
+                "hard_blocked": True,
+                "active_goal": {"accepted": False, "objective": "old soak task"},
+                "runtime": {"loop_state": {"status": "stopped_incomplete"}},
+                "recovery_block": {
+                    "operator_intervention_required": True,
+                    "recovery_block_reason": "stopped_incomplete",
+                },
+                "capabilities": {
+                    "current_state": {
+                        "classification": "idle",
+                        "local_goal_lane_free": True,
+                    }
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="ready")
+
+    assert task["status"] == "ready"
+    assert task["needs_human"] is False
+    assert task["readiness_gate"]["can_start"] is True
+    assert task["summary"] == "No local goal is running. Ready for a new task."
+
+
 def test_working_task_is_owned_by_background_supervisor_not_startable() -> None:
     result = CommandResult(
         args=("local-goal", "status", "--json"),
