@@ -3,6 +3,7 @@ const THEME_KEY = "agentic-harness-theme";
 const TOKEN_KEY = "agentic-harness-gui-session-token";
 const TOKEN_PARAM = "token";
 const ICON_PREFIX = "#icon-";
+const API_TIMEOUT_MS = 20000;
 
 const STATUS_ICONS = Object.freeze({
   ready: "circle-check",
@@ -31,6 +32,7 @@ const state = {
   socket: null,
   pollTimer: null,
   reconnectDelay: 1000,
+  refreshes: {},
 };
 
 const byId = (id) => document.getElementById(id);
@@ -48,6 +50,7 @@ const els = {
   safeAreas: byId("safeAreas"),
   checks: byId("checks"),
   startButton: byId("startButton"),
+  startHelp: byId("startHelp"),
   checkButton: byId("checkButton"),
   statusLabel: byId("statusLabel"),
   statusIndicator: byId("statusIndicator"),
@@ -184,7 +187,21 @@ async function api(path, options = {}, retry = true) {
   const headers = new Headers(options.headers || {});
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (state.authToken) headers.set("Authorization", `Bearer ${state.authToken}`);
-  const response = await fetch(path, { ...options, headers });
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeout = controller
+    ? window.setTimeout(() => controller.abort(), API_TIMEOUT_MS)
+    : null;
+  let response;
+  try {
+    response = await fetch(path, { ...options, headers, signal: controller?.signal });
+  } catch (error) {
+    if (controller?.signal.aborted) {
+      throw new Error("The server took too long to respond. Try Refresh; your task state is preserved.");
+    }
+    throw error;
+  } finally {
+    if (timeout !== null) window.clearTimeout(timeout);
+  }
   if (response.status === 401 && retry) {
     clearAuthToken();
     const entered = await showTokenDialog();
@@ -272,6 +289,19 @@ function updateStartButton() {
   const hasObjective = Boolean(els.objective.value.trim());
   const hasVerification = Boolean(els.checks.value.trim());
   els.startButton.disabled = state.busy || !canStart || !hasObjective || !hasVerification;
+  if (state.busy) {
+    els.startHelp.textContent = "Starting the goal. This can take a few seconds.";
+  } else if (!canStart) {
+    els.startHelp.textContent = state.readiness.next_action
+      || state.readiness.summary
+      || "Waiting for the current task state to become ready.";
+  } else if (!hasObjective) {
+    els.startHelp.textContent = "Describe the outcome you want before starting.";
+  } else if (!hasVerification) {
+    els.startHelp.textContent = "Add the verification command that will prove this goal is complete to enable Start.";
+  } else {
+    els.startHelp.textContent = "Ready to start this verified goal.";
+  }
 }
 
 function renderHealth(health) {
@@ -692,7 +722,9 @@ function updateSetupFields() {
 }
 
 async function refreshHealth() {
-  renderHealth(await api("/api/health"));
+  return singleFlight("health", async () => {
+    renderHealth(await api("/api/health"));
+  });
 }
 
 async function refreshSetup() {
@@ -700,18 +732,32 @@ async function refreshSetup() {
 }
 
 async function refreshTask(force = false) {
-  const task = await api("/api/tasks/current");
-  state.liveTask = task;
-  if (force || !state.viewingHistoryId) {
-    state.viewingHistoryId = "";
-    renderTask(task);
-  }
+  return singleFlight("task", async () => {
+    const task = await api("/api/tasks/current");
+    state.liveTask = task;
+    if (force || !state.viewingHistoryId) {
+      state.viewingHistoryId = "";
+      renderTask(task);
+    }
+  });
 }
 
 async function refreshHistory() {
-  const query = encodeURIComponent(els.historySearch.value.trim());
-  const payload = await api(`/api/tasks/history${query ? `?q=${query}` : ""}`);
-  renderHistory(payload.tasks || []);
+  return singleFlight("history", async () => {
+    const query = encodeURIComponent(els.historySearch.value.trim());
+    const payload = await api(`/api/tasks/history${query ? `?q=${query}` : ""}`);
+    renderHistory(payload.tasks || []);
+  });
+}
+
+function singleFlight(key, operation) {
+  if (state.refreshes[key]) return state.refreshes[key];
+  const pending = Promise.resolve().then(operation);
+  const tracked = pending.finally(() => {
+    if (state.refreshes[key] === tracked) delete state.refreshes[key];
+  });
+  state.refreshes[key] = tracked;
+  return tracked;
 }
 
 async function startWork() {
@@ -822,6 +868,12 @@ function schedulePolling() {
   }, 2000);
 }
 
+function stopPolling() {
+  if (!state.pollTimer) return;
+  window.clearInterval(state.pollTimer);
+  state.pollTimer = null;
+}
+
 function connectStatusStream() {
   if (state.authToken || !("WebSocket" in window)) {
     schedulePolling();
@@ -830,7 +882,10 @@ function connectStatusStream() {
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${scheme}://${window.location.host}/api/tasks/stream`);
   state.socket = socket;
-  socket.addEventListener("open", () => { state.reconnectDelay = 1000; });
+  socket.addEventListener("open", () => {
+    state.reconnectDelay = 1000;
+    stopPolling();
+  });
   socket.addEventListener("message", (event) => {
     try {
       const task = JSON.parse(event.data);
@@ -843,6 +898,7 @@ function connectStatusStream() {
     }
   });
   socket.addEventListener("close", () => {
+    schedulePolling();
     const delay = state.reconnectDelay;
     state.reconnectDelay = Math.min(30000, state.reconnectDelay * 2);
     window.setTimeout(connectStatusStream, delay);

@@ -86,6 +86,20 @@ def test_gui_keeps_durable_history_in_sync_with_live_status() -> None:
     assert "refreshHistory().catch(() => {});\n      refreshHealth().catch" in javascript
 
 
+def test_gui_recovers_from_slow_requests_and_failed_status_streams() -> None:
+    javascript = (STATIC / "app.js").read_text(encoding="utf-8")
+
+    assert "const API_TIMEOUT_MS = 20000" in javascript
+    assert "new AbortController()" in javascript
+    assert "controller.abort()" in javascript
+    assert "The server took too long to respond" in javascript
+    assert 'singleFlight("task"' in javascript
+    assert 'singleFlight("health"' in javascript
+    assert 'singleFlight("history"' in javascript
+    assert "function stopPolling()" in javascript
+    assert 'socket.addEventListener("close", () => {\n    schedulePolling();' in javascript
+
+
 def test_gui_primary_form_puts_required_verification_before_optional_scope() -> None:
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
@@ -100,6 +114,16 @@ def test_gui_primary_form_puts_required_verification_before_optional_scope() -> 
     assert "Default verification command for this workspace" in html
     assert objective < verification < optional_scope < safe_areas
     assert "Add scope and checks" not in html
+    assert 'id="startHelp" role="status"' in html
+
+
+def test_gui_explains_why_start_is_disabled() -> None:
+    javascript = (STATIC / "app.js").read_text(encoding="utf-8")
+
+    assert 'startHelp: byId("startHelp")' in javascript
+    assert "Add the verification command that will prove this goal is complete" in javascript
+    assert "Describe the outcome you want before starting." in javascript
+    assert "Ready to start this verified goal." in javascript
 
 
 def test_gui_primary_actions_and_disabled_cursor_match_interaction_state() -> None:

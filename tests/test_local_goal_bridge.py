@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+import threading
+import time
 
 import pytest
 
@@ -265,3 +267,38 @@ def test_bridge_timeout_is_a_recoverable_command_result(tmp_path) -> None:
 
     assert result.returncode == 124
     assert "timed out after 7s" in result.stderr
+
+
+def test_json_status_requests_share_one_short_lived_controller_read(tmp_path) -> None:
+    calls = 0
+    calls_lock = threading.Lock()
+    start = threading.Barrier(6)
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        time.sleep(0.05)
+        return subprocess.CompletedProcess(args[0], 0, '{"classification":"idle"}', "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+        status_cache_seconds=10,
+    )
+    results = []
+
+    def read_status() -> None:
+        start.wait()
+        results.append(bridge.status(json_output=True))
+
+    threads = [threading.Thread(target=read_status) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert calls == 1
+    assert len(results) == 6
+    assert all(result.stdout == '{"classification":"idle"}' for result in results)
