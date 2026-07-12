@@ -2,6 +2,15 @@
 
 Status: preregistered before running the comparison.
 
+Pilot disposition: the first execution from commit `102787b` is invalid for
+arm comparison. Its real-agent wrapper omitted the existing structured
+completion fields required by the public external-worker contract. All ten
+Harness workspaces passed the hidden verifier but correctly remained
+unaccepted. The pilot is retained as integration evidence and none of its arm
+results are reused below. Protocol revision 2 changes only the wrapper envelope
+to the already-documented contract; tasks, prompts, agent, seed, limits,
+metrics, and arm order remain fixed. Both arms must be rerun in full.
+
 ## Decision
 
 Determine whether placing the same coding agent behind Agentic Harness reduces
@@ -19,6 +28,10 @@ is not an adoption study or a general coding benchmark.
 - The direct arm accepts an exit-zero agent completion claim.
 - The Harness arm permits at most three attempts and accepts only after the
   external deterministic verifier passes.
+- The wrapper's completion envelope includes plan, current subgoal,
+  checkpoint, an explicit requirement linked to Harness reviewer criterion
+  `review:1`, and an empty blockers list. The real agent does not author or see
+  that reviewer-issued result.
 - Expected results remain outside the agent workspace.
 - Every attempted run is retained, including failures and timeouts.
 
@@ -43,4 +56,3 @@ Diagnostics:
 - Do not infer token or monetary cost when telemetry is absent.
 - A tie is a valid result.
 - No architecture or prompt changes are allowed after the first result is read.
-

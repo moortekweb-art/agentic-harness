@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from evaluation.run_real_agent_comparison import load_tasks, materialize
+from evaluation import real_agent_worker
 
 
 def test_preregistered_real_agent_manifest_has_ten_tasks() -> None:
@@ -31,3 +32,26 @@ def test_load_tasks_rejects_non_preregistered_task_count(tmp_path: Path) -> None
     )
     with pytest.raises(ValueError, match="exactly ten"):
         load_tasks(manifest)
+
+
+def test_real_agent_wrapper_emits_complete_external_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AGENTIC_HARNESS_INSTRUCTION", "make the change")
+    monkeypatch.setenv("REAL_AGENT_TRANSCRIPT", str(tmp_path / "transcript.log"))
+    monkeypatch.setattr(
+        real_agent_worker.subprocess,
+        "run",
+        lambda *args, **kwargs: real_agent_worker.subprocess.CompletedProcess(
+            args[0], 0, "done", ""
+        ),
+    )
+
+    assert real_agent_worker.main() == 0
+    payload = __import__("json").loads(capsys.readouterr().out.split("=", 1)[1])
+    assert payload["current_subgoal"]
+    assert payload["checkpoint"]
+    assert payload["plan"]
+    assert payload["requirements"][0]["evidence"] == ["review:1"]
+    assert payload["blockers"] == []
