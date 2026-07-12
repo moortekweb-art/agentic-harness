@@ -1,0 +1,716 @@
+Updated:
+
+- `request_timeout()` is now the primary setting accessor.
+- `timeout` remains a backward-compatible alias to the same function.
+- `example.env` includes both `REQUEST_TIMEOUT=10` and `TIMEOUT=10`.
+- Syntax and compatibility checks passed.
+OpenAI Codex v0.144.1
+--------
+workdir: [local-path]
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: low
+reasoning summaries: none
+session id: [redacted]
+--------
+user
+Rename the primary setting to request_timeout while preserving timeout as a backward-compatible alias with the same value. Update config.py and its example.env consistently.
+Work only inside the current directory. Inspect the relevant file, make the smallest correct edit, and verify it if practical. Do not create reports or notes.
+warning: Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.
+codex
+I’ll inspect the configuration and example environment, then make the smallest compatibility-preserving change and run the most focused available check. I’m using the test-driven-development guidance because this is a behavior-preserving code change.
+exec
+/bin/bash -lc "sed -n '1,240p' [local-path] && rg -n \"timeout|request_timeout\" config.py example.env . 2>/dev/null" in [local-path]
+ succeeded in 0ms:
+---
+name: test-driven-development
+description: Use when implementing any feature or bugfix, before writing implementation code
+---
+
+# Test-Driven Development (TDD)
+
+## Overview
+
+Write the test first. Watch it fail. Write minimal code to pass.
+
+**Core principle:** If you didn't watch the test fail, you don't know if it tests the right thing.
+
+**Violating the letter of the rules is violating the spirit of the rules.**
+
+## When to Use
+
+**Always:**
+- New features
+- Bug fixes
+- Refactoring
+- Behavior changes
+
+**Exceptions (ask your human partner):**
+- Throwaway prototypes
+- Generated code
+- Configuration files
+
+Thinking "skip TDD just this once"? Stop. That's rationalization.
+
+## The Iron Law
+
+```
+NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
+```
+
+Write code before the test? Delete it. Start over.
+
+**No exceptions:**
+- Don't keep it as "reference"
+- Don't "adapt" it while writing tests
+- Don't look at it
+- Delete means delete
+
+Implement fresh from tests. Period.
+
+## Red-Green-Refactor
+
+```dot
+digraph tdd_cycle {
+    rankdir=LR;
+    red [label="RED\nWrite failing test", shape=box, style=filled, fillcolor="#ffcccc"];
+    verify_red [label="Verify fails\ncorrectly", shape=diamond];
+    green [label="GREEN\nMinimal code", shape=box, style=filled, fillcolor="#ccffcc"];
+    verify_green [label="Verify passes\nAll green", shape=diamond];
+    refactor [label="REFACTOR\nClean up", shape=box, style=filled, fillcolor="#ccccff"];
+    next [label="Next", shape=ellipse];
+
+    red -> verify_red;
+    verify_red -> green [label="yes"];
+    verify_red -> red [label="wrong\nfailure"];
+    green -> verify_green;
+    verify_green -> refactor [label="yes"];
+    verify_green -> green [label="no"];
+    refactor -> verify_green [label="stay\ngreen"];
+    verify_green -> next;
+    next -> red;
+}
+```
+
+### RED - Write Failing Test
+
+Write one minimal test showing what should happen.
+
+<Good>
+```typescript
+test('retries failed operations 3 times', async () => {
+  let attempts = 0;
+  const operation = () => {
+    attempts++;
+    if (attempts < 3) throw new Error('fail');
+    return 'success';
+  };
+
+  const result = await retryOperation(operation);
+
+  expect(result).toBe('success');
+  expect(attempts).toBe(3);
+});
+```
+Clear name, tests real behavior, one thing
+</Good>
+
+<Bad>
+```typescript
+test('retry works', async () => {
+  const mock = jest.fn()
+    .mockRejectedValueOnce(new Error())
+    .mockRejectedValueOnce(new Error())
+    .mockResolvedValueOnce('success');
+  await retryOperation(mock);
+  expect(mock).toHaveBeenCalledTimes(3);
+});
+```
+Vague name, tests mock not code
+</Bad>
+
+**Requirements:**
+- One behavior
+- Clear name
+- Real code (no mocks unless unavoidable)
+
+### Verify RED - Watch It Fail
+
+**MANDATORY. Never skip.**
+
+```bash
+npm test path/to/test.test.ts
+```
+
+Confirm:
+- Test fails (not errors)
+- Failure message is expected
+- Fails because feature missing (not typos)
+
+**Test passes?** You're testing existing behavior. Fix test.
+
+**Test errors?** Fix error, re-run until it fails correctly.
+
+### GREEN - Minimal Code
+
+Write simplest code to pass the test.
+
+<Good>
+```typescript
+async function retryOperation<T>(fn: () => Promise<T>): Promise<T> {
+  for (let i = 0; i < 3; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i === 2) throw e;
+    }
+  }
+  throw new Error('unreachable');
+}
+```
+Just enough to pass
+</Good>
+
+<Bad>
+```typescript
+async function retryOperation<T>(
+  fn: () => Promise<T>,
+  options?: {
+    maxRetries?: number;
+    backoff?: 'linear' | 'exponential';
+    onRetry?: (attempt: number) => void;
+  }
+): Promise<T> {
+  // YAGNI
+}
+```
+Over-engineered
+</Bad>
+
+Don't add features, refactor other code, or "improve" beyond the test.
+
+### Verify GREEN - Watch It Pass
+
+**MANDATORY.**
+
+```bash
+npm test path/to/test.test.ts
+```
+
+Confirm:
+- Test passes
+- Other tests still pass
+- Output pristine (no errors, warnings)
+
+**Test fails?** Fix code, not test.
+
+**Other tests fail?** Fix now.
+
+### REFACTOR - Clean Up
+
+After green only:
+- Remove duplication
+- Improve names
+- Extract helpers
+
+Keep tests green. Don't add behavior.
+
+### Repeat
+
+Next failing test for next feature.
+
+## Good Tests
+
+| Quality | Good | Bad |
+|---------|------|-----|
+| **Minimal** | One thing. "and" in name? Split it. | `test('validates email and domain and whitespace')` |
+| **Clear** | Name describes behavior | `test('test1')` |
+| **Shows intent** | Demonstrates desired API | Obscures what code should do |
+
+## Why Order Matters
+
+**"I'll write tests after to verify it works"**
+
+Tests written after code pass immediately. Passing immediately proves nothing:
+- Might test wrong thing
+- Might test implementation, not behavior
+- Might miss edge cases you forgot
+- You never saw it catch the bug
+
+Test-first forces you to see the test fail, proving it actually tests something.
+
+**"I already manually tested all the edge cases"**
+
+Manual testing is ad-hoc. You think you tested everything but:
+- No record of what you tested
+- Can't re-run when code changes
+- Easy to forget cases under pressure
+- "It worked when I tried it" ≠ comprehensive
+
+Automated tests are systematic. They run the same way every time.
+
+**"Deleting X hours of work is wasteful"**
+
+Sunk cost fallacy. The time is already gone. Your choice now:
+- Delete and rewrite with TDD (X more hours, high confidence)
+- Keep it and add tests after (30 min, low confidence, likely bugs)
+
+The "waste" is keeping code you can't trust. Working code without real tests is technical debt.
+
+**"TDD is dogmatic, being pragmatic means adapting"**
+
+TDD IS pragmatic:
+- Finds bugs before commit (faster than debugging after)
+- Prevents regressions (tests catch breaks immediately)
+config.py:3:def timeout():
+./config.py:3:def timeout():
+
+exec
+/bin/bash -lc "sed -n '1,160p' config.py; sed -n '1,160p' example.env; printf '\\nFiles:\\n'; rg --files -g '"'!*.pyc'"'" in [local-path]
+ succeeded in 0ms:
+REQUEST_TIMEOUT = 10
+
+def timeout():
+    return REQUEST_TIMEOUT
+TIMEOUT=10
+MODE=safe
+
+Files:
+config.py
+example.env
+
+codex
+The current module already stores `REQUEST_TIMEOUT`, but only exposes the legacy `timeout()` accessor; `example.env` still advertises only `TIMEOUT`. I’ll add `request_timeout` as the primary accessor, bind `timeout` directly to it as the compatibility alias, and list both environment names with identical values.
+apply patch
+patch: completed
+[local-path]
+[local-path]
+diff --git a/config.py b/config.py
+index fb2d77df91abf5452a05d996e10d5b80db495850..e320c1270a3274d68f8b70649aec2fdf3f867b3d
+--- a/config.py
++++ b/config.py
+@@ -1,4 +1,6 @@
+ REQUEST_TIMEOUT = 10
+
+-def timeout():
++def request_timeout():
+     return REQUEST_TIMEOUT
++
++timeout = request_timeout
+diff --git a/example.env b/example.env
+index b52d2d52b31f21f75d76188a61f04814ed25db33..1940a3f2368e441df111e1a866f812912871d72f
+--- a/example.env
++++ b/example.env
+@@ -1,2 +1,3 @@
++REQUEST_TIMEOUT=10
+ TIMEOUT=10
+ MODE=safe
+
+diff --git a/config.py b/config.py
+index fb2d77df91abf5452a05d996e10d5b80db495850..e320c1270a3274d68f8b70649aec2fdf3f867b3d
+--- a/config.py
++++ b/config.py
+@@ -1,4 +1,6 @@
+ REQUEST_TIMEOUT = 10
+
+-def timeout():
++def request_timeout():
+     return REQUEST_TIMEOUT
++
++timeout = request_timeout
+diff --git a/example.env b/example.env
+index b52d2d52b31f21f75d76188a61f04814ed25db33..1940a3f2368e441df111e1a866f812912871d72f
+--- a/example.env
++++ b/example.env
+@@ -1,2 +1,3 @@
++REQUEST_TIMEOUT=10
+ TIMEOUT=10
+ MODE=safe
+
+codex
+The compatibility edit is in place. I’m now applying the verification-before-completion guidance to check syntax, returned values, alias identity, and the example values before calling it done.
+exec
+/bin/bash -lc "sed -n '1,220p' [local-path] python -m py_compile config.py && python - <<'PY'
+import config
+assert config.request_timeout() == 10
+assert config.timeout() == config.request_timeout()
+assert config.timeout is config.request_timeout
+values = dict(line.split('=', 1) for line in open('example.env') if line.strip())
+assert values['REQUEST_TIMEOUT'] == values['TIMEOUT'] == '10'
+PY
+git diff --check && git diff -- config.py example.env" in [local-path]
+ exited 129 in 0ms:
+---
+name: verification-before-completion
+description: Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always
+trigger: when about to mark work complete, claim a task is done, or say something is working
+---
+
+# Verification Before Completion
+
+## Overview
+
+Claiming work is complete without verification is dishonesty, not efficiency.
+
+**Core principle:** Evidence before claims, always.
+
+**Violating the letter of this rule is violating the spirit of this rule.**
+
+## The Iron Law
+
+```
+NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
+```
+
+If you haven't run the verification command in this message, you cannot claim it passes.
+
+## The Gate Function
+
+```
+BEFORE claiming any status or expressing satisfaction:
+
+1. IDENTIFY: What command proves this claim?
+2. RUN: Execute the FULL command (fresh, complete)
+3. READ: Full output, check exit code, count failures
+4. VERIFY: Does output confirm the claim?
+   - If NO: State actual status with evidence
+   - If YES: State claim WITH evidence
+5. ONLY THEN: Make the claim
+
+Skip any step = lying, not verifying
+```
+
+## Common Failures
+
+| Claim | Requires | Not Sufficient |
+|-------|----------|----------------|
+| Tests pass | Test command output: 0 failures | Previous run, "should pass" |
+| Linter clean | Linter output: 0 errors | Partial check, extrapolation |
+| Build succeeds | Build command: exit 0 | Linter passing, logs look good |
+| Bug fixed | Test original symptom: passes | Code changed, assumed fixed |
+| Regression test works | Red-green cycle verified | Test passes once |
+| Agent completed | VCS diff shows changes | Agent reports "success" |
+| Requirements met | Line-by-line checklist | Tests passing |
+
+## Red Flags - STOP
+
+- Using "should", "probably", "seems to"
+- Expressing satisfaction before verification ("Great!", "Perfect!", "Done!", etc.)
+- About to commit/push/PR without verification
+- Trusting agent success reports
+- Relying on partial verification
+- Thinking "just this once"
+- Tired and wanting work over
+- **ANY wording implying success without having run verification**
+
+## Rationalization Prevention
+
+| Excuse | Reality |
+|--------|---------|
+| "Should work now" | RUN the verification |
+| "I'm confident" | Confidence ≠ evidence |
+| "Just this once" | No exceptions |
+| "Linter passed" | Linter ≠ compiler |
+| "Agent said success" | Verify independently |
+| "I'm tired" | Exhaustion ≠ excuse |
+| "Partial check is enough" | Partial proves nothing |
+| "Different words so rule doesn't apply" | Spirit over letter |
+
+## Key Patterns
+
+**Tests:**
+```
+✅ [Run test command] [See: 34/34 pass] "All tests pass"
+❌ "Should pass now" / "Looks correct"
+```
+
+**Regression tests (TDD Red-Green):**
+```
+✅ Write → Run (pass) → Revert fix → Run (MUST FAIL) → Restore → Run (pass)
+❌ "I've written a regression test" (without red-green verification)
+```
+
+**Build:**
+```
+✅ [Run build] [See: exit 0] "Build passes"
+❌ "Linter passed" (linter doesn't check compilation)
+```
+
+**Requirements:**
+```
+✅ Re-read plan → Create checklist → Verify each → Report gaps or completion
+❌ "Tests pass, phase complete"
+```
+
+**Agent delegation:**
+```
+✅ Agent reports success → Check VCS diff → Verify changes → Report actual state
+❌ Trust agent report
+```
+
+## Why This Matters
+
+From 24 failure memories:
+- your human partner said "I don't believe you" - trust broken
+- Undefined functions shipped - would crash
+- Missing requirements shipped - incomplete features
+- Time wasted on false completion → redirect → rework
+- Violates: "Honesty is a core value. If you lie, you'll be replaced."
+
+## When To Apply
+
+**ALWAYS before:**
+- ANY variation of success/completion claims
+- ANY expression of satisfaction
+- ANY positive statement about work state
+- Committing, PR creation, task completion
+- Moving to next task
+- Delegating to agents
+
+**Rule applies to:**
+- Exact phrases
+- Paraphrases and synonyms
+- Implications of success
+- ANY communication suggesting completion/correctness
+
+## The Bottom Line
+
+**No shortcuts for verification.**
+
+Run the command. Read the output. THEN claim the result.
+
+This is non-negotiable.
+Traceback (most recent call last):
+  File "<stdin>", line 6, in <module>
+AssertionError
+warning: Not a git repository. Use --no-index to compare two paths outside a working tree
+usage: git diff --no-index [<options>] <path> <path>
+
+Diff output format options
+    -p, --patch           generate patch
+    -s, --no-patch        suppress diff output
+    -u                    generate patch
+    -U, --unified[=<n>]   generate diffs with <n> lines context
+    -W, --[no-]function-context
+                          generate diffs with <n> lines context
+    --raw                 generate the diff in raw format
+    --patch-with-raw      synonym for '-p --raw'
+    --patch-with-stat     synonym for '-p --stat'
+    --numstat             machine friendly --stat
+    --shortstat           output only the last line of --stat
+    -X, --dirstat[=<param1,param2>...]
+                          output the distribution of relative amount of changes for each sub-directory
+    --cumulative          synonym for --dirstat=cumulative
+    --dirstat-by-file[=<param1,param2>...]
+                          synonym for --dirstat=files,param1,param2...
+    --check               warn if changes introduce conflict markers or whitespace errors
+    --summary             condensed summary such as creations, renames and mode changes
+    --name-only           show only names of changed files
+    --name-status         show only names and status of changed files
+    --stat[=<width>[,<name-width>[,<count>]]]
+                          generate diffstat
+    --stat-width <width>  generate diffstat with a given width
+    --stat-name-width <width>
+                          generate diffstat with a given name width
+    --stat-graph-width <width>
+                          generate diffstat with a given graph width
+    --stat-count <count>  generate diffstat with limited lines
+    --[no-]compact-summary
+                          generate compact summary in diffstat
+    --binary              output a binary diff that can be applied
+    --[no-]full-index     show full pre- and post-image object names on the "index" lines
+    --[no-]color[=<when>] show colored diff
+    --ws-error-highlight <kind>
+                          highlight whitespace errors in the 'context', 'old' or 'new' lines in the diff
+    -z                    do not munge pathnames and use NULs as output field terminators in --raw or --numstat
+    --[no-]abbrev[=<n>]   use <n> digits to display object names
+    --src-prefix <prefix> show the given source prefix instead of "a/"
+    --dst-prefix <prefix> show the given destination prefix instead of "b/"
+    --line-prefix <prefix>
+                          prepend an additional prefix to every line of output
+    --no-prefix           do not show any source or destination prefix
+    --default-prefix      use default prefixes a/ and b/
+    --inter-hunk-context <n>
+                          show context between diff hunks up to the specified number of lines
+    --output-indicator-new <char>
+                          specify the character to indicate a new line instead of '+'
+    --output-indicator-old <char>
+                          specify the character to indicate an old line instead of '-'
+    --output-indicator-context <char>
+                          specify the character to indicate a context instead of ' '
+
+Diff rename options
+    -B, --break-rewrites[=<n>[/<m>]]
+                          break complete rewrite changes into pairs of delete and create
+    -M, --find-renames[=<n>]
+                          detect renames
+    -D, --irreversible-delete
+                          omit the preimage for deletes
+    -C, --find-copies[=<n>]
+                          detect copies
+    --[no-]find-copies-harder
+                          use unmodified files as source to find copies
+    --no-renames          disable rename detection
+    --[no-]rename-empty   use empty blobs as rename source
+    --[no-]follow         continue listing the history of a file beyond renames
+    -l <n>                prevent rename/copy detection if the number of rename/copy targets exceeds given limit
+
+Diff algorithm options
+    --minimal             produce the smallest possible diff
+    -w, --ignore-all-space
+                          ignore whitespace when comparing lines
+    -b, --ignore-space-change
+                          ignore changes in amount of whitespace
+    --ignore-space-at-eol ignore changes in whitespace at EOL
+    --ignore-cr-at-eol    ignore carrier-return at the end of line
+    --ignore-blank-lines  ignore changes whose lines are all blank
+    -I, --[no-]ignore-matching-lines <regex>
+                          ignore changes whose all lines match <regex>
+    --[no-]indent-heuristic
+                          heuristic to shift diff hunk boundaries for easy reading
+    --patience            generate diff using the "patience diff" algorithm
+    --histogram           generate diff using the "histogram diff" algorithm
+    --diff-algorithm <algorithm>
+                          choose a diff algorithm
+    --anchored <text>     generate diff using the "anchored diff" algorithm
+    --word-diff[=<mode>]  show word diff, using <mode> to delimit changed words
+    --word-diff-regex <regex>
+                          use <regex> to decide what a word is
+    --color-words[=<regex>]
+                          equivalent to --word-diff=color --word-diff-regex=<regex>
+    --[no-]color-moved[=<mode>]
+                          moved lines of code are colored differently
+    --[no-]color-moved-ws <mode>
+                          how white spaces are ignored in --color-moved
+
+Other diff options
+    --[no-]relative[=<prefix>]
+                          when run from subdir, exclude changes outside and show relative paths
+    -a, --[no-]text       treat all files as text
+    -R                    swap two inputs, reverse the diff
+    --[no-]exit-code      exit with 1 if there were differences, 0 otherwise
+    --[no-]quiet          disable all output of the program
+    --[no-]ext-diff       allow an external diff helper to be executed
+    --[no-]textconv       run external text conversion filters when comparing binary files
+    --ignore-submodules[=<when>]
+                          ignore changes to submodules in the diff generation
+    --submodule[=<format>]
+                          specify how differences in submodules are shown
+    --ita-invisible-in-index
+                          hide 'git add -N' entries from the index
+    --ita-visible-in-index
+                          treat 'git add -N' entries as real in the index
+    -S <string>           look for differences that change the number of occurrences of the specified string
+    -G <regex>            look for differences that change the number of occurrences of the specified regex
+    --pickaxe-all         show all changes in the changeset with -S or -G
+    --pickaxe-regex       treat <string> in -S as extended POSIX regular expression
+    -O <file>             control the order in which files appear in the output
+    --rotate-to <path>    show the change in the specified path first
+    --skip-to <path>      skip the output to the specified path
+    --find-object <object-id>
+                          look for differences that change the number of occurrences of the specified object
+    --diff-filter [(A|C|D|M|R|T|U|X|B)...[*]]
+                          select files by diff type
+    --output <file>       output to a specific file
+
+
+diff --git a/config.py b/config.py
+index fb2d77df91abf5452a05d996e10d5b80db495850..e320c1270a3274d68f8b70649aec2fdf3f867b3d
+--- a/config.py
++++ b/config.py
+@@ -1,4 +1,6 @@
+ REQUEST_TIMEOUT = 10
+
+-def timeout():
++def request_timeout():
+     return REQUEST_TIMEOUT
++
++timeout = request_timeout
+diff --git a/example.env b/example.env
+index b52d2d52b31f21f75d76188a61f04814ed25db33..1940a3f2368e441df111e1a866f812912871d72f
+--- a/example.env
++++ b/example.env
+@@ -1,2 +1,3 @@
++REQUEST_TIMEOUT=10
+ TIMEOUT=10
+ MODE=safe
+
+codex
+The first verification exposed a flaw in my ad hoc environment parser—it retained the newline on `TIMEOUT`; the configuration assertions themselves passed. This directory is also not a Git worktree, so I’m rerunning with a corrected parser and direct file inspection instead of Git-based checks.
+exec
+/bin/bash -lc "python -m py_compile config.py && python - <<'PY'
+import config
+assert config.request_timeout() == 10
+assert config.timeout() == config.request_timeout()
+assert config.timeout is config.request_timeout
+values = dict(line.strip().split('=', 1) for line in open('example.env') if line.strip())
+assert values['REQUEST_TIMEOUT'] == values['TIMEOUT'] == '10'
+print('configuration compatibility checks passed')
+PY
+sed -n '1,80p' config.py
+sed -n '1,80p' example.env" in [local-path]
+ succeeded in 0ms:
+configuration compatibility checks passed
+REQUEST_TIMEOUT = 10
+
+def request_timeout():
+    return REQUEST_TIMEOUT
+
+timeout = request_timeout
+REQUEST_TIMEOUT=10
+TIMEOUT=10
+MODE=safe
+
+diff --git a/config.py b/config.py
+index fb2d77df91abf5452a05d996e10d5b80db495850..e320c1270a3274d68f8b70649aec2fdf3f867b3d
+--- a/config.py
++++ b/config.py
+@@ -1,4 +1,6 @@
+ REQUEST_TIMEOUT = 10
+
+-def timeout():
++def request_timeout():
+     return REQUEST_TIMEOUT
++
++timeout = request_timeout
+diff --git a/example.env b/example.env
+index b52d2d52b31f21f75d76188a61f04814ed25db33..1940a3f2368e441df111e1a866f812912871d72f
+--- a/example.env
++++ b/example.env
+@@ -1,2 +1,3 @@
++REQUEST_TIMEOUT=10
+ TIMEOUT=10
+ MODE=safe
+
+codex
+Updated:
+
+- `request_timeout()` is now the primary setting accessor.
+- `timeout` remains a backward-compatible alias to the same function.
+- `example.env` includes both `REQUEST_TIMEOUT=10` and `TIMEOUT=10`.
+- Syntax and compatibility checks passed.
+diff --git a/config.py b/config.py
+index fb2d77df91abf5452a05d996e10d5b80db495850..e320c1270a3274d68f8b70649aec2fdf3f867b3d
+--- a/config.py
++++ b/config.py
+@@ -1,4 +1,6 @@
+ REQUEST_TIMEOUT = 10
+
+-def timeout():
++def request_timeout():
+     return REQUEST_TIMEOUT
++
++timeout = request_timeout
+diff --git a/example.env b/example.env
+index b52d2d52b31f21f75d76188a61f04814ed25db33..1940a3f2368e441df111e1a866f812912871d72f
+--- a/example.env
++++ b/example.env
+@@ -1,2 +1,3 @@
++REQUEST_TIMEOUT=10
+ TIMEOUT=10
+ MODE=safe
+
+tokens used
+30,377

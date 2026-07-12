@@ -86,6 +86,37 @@ def test_package_derives_false_accept_instead_of_trusting_raw_flag(tmp_path: Pat
     assert summary["arms"]["direct"]["false_accepts"] == 1
 
 
+def test_package_rejects_unknown_arm(tmp_path: Path) -> None:
+    source, rows = _complete_source(tmp_path)
+    rows[0]["arm"] = "evil"
+    (source / "raw.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="exactly ten direct and ten harness"):
+        package(source, tmp_path / "published")
+
+
+def test_package_rejects_imbalanced_arms(tmp_path: Path) -> None:
+    source, rows = _complete_source(tmp_path)
+    direct = next(row for row in rows if row["arm"] == "direct")
+    direct["task_id"] = "extra-task"
+    direct["arm"] = "harness"
+    (source / "raw.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="exactly ten direct and ten harness"):
+        package(source, tmp_path / "published")
+
+
+def test_package_rejects_missing_raw_row(tmp_path: Path) -> None:
+    source, rows = _complete_source(tmp_path)
+    (source / "raw.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows[:-1]), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="20 unique task-arm"):
+        package(source, tmp_path / "published")
+
+
 def test_package_accepts_missing_optional_token_footer(tmp_path: Path) -> None:
     source, rows = _complete_source(tmp_path)
     first = source / "transcripts" / f"{rows[0]['task_id']}-{rows[0]['arm']}.log"

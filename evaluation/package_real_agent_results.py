@@ -36,6 +36,15 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
     keys = {(row["task_id"], row["arm"]) for row in rows}
     if len(rows) != 20 or len(keys) != 20:
         raise ValueError("expected 20 unique task-arm records")
+    arm_counts = {
+        arm: sum(row.get("arm") == arm for row in rows)
+        for arm in ("direct", "harness")
+    }
+    if any(row.get("arm") not in arm_counts for row in rows) or arm_counts != {
+        "direct": 10,
+        "harness": 10,
+    }:
+        raise ValueError("expected exactly ten direct and ten harness records")
     destination.mkdir(parents=True, exist_ok=False)
     redacted_dir = destination / "transcripts"
     redacted_dir.mkdir()

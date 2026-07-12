@@ -1,0 +1,163 @@
+[
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/boundary-window-direct.attempt-1.log",
+    "sha256": "da06c54f2de4c48fa2284c4d3dc1034af93cf577f1607b70f345b685aa728e50",
+    "tokens": 23438
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/boundary-window-harness.attempt-1.log",
+    "sha256": "40103bbf95287a2c5230204c80a3b09bb854a21f4f241430194bad4e67fb0ef2",
+    "tokens": 19352
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/compat-alias-direct.attempt-1.log",
+    "sha256": "371e9247773322035b47d790fe326772121cdea1da6f5fb751d0e2c8c570f5d7",
+    "tokens": 30377
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/compat-alias-harness.attempt-1.log",
+    "sha256": "cb55d56abdeeb4a4c5e3cd3f4081b1a4a24c25873b66d418fa573421854c85b9",
+    "tokens": 25406
+  },
+  {
+    "arm": "harness",
+    "attempt": 2,
+    "file": "transcripts/compat-alias-harness.attempt-2.log",
+    "sha256": "d5327e158223626d76a2c5dd3f511780f2c02984093591f9a1d84bc01736d962",
+    "tokens": 24695
+  },
+  {
+    "arm": "harness",
+    "attempt": 3,
+    "file": "transcripts/compat-alias-harness.attempt-3.log",
+    "sha256": "345be3259fc2cdd0dd4ff62a19306e9a295c8d92d4720d847dfa71e6aceca17c",
+    "tokens": 14049
+  },
+  {
+    "arm": "harness",
+    "attempt": 4,
+    "file": "transcripts/compat-alias-harness.attempt-4.log",
+    "sha256": "4797382afc3ff7da48b00988beb716e0230c1f6e34baffe62eda6610553ea620",
+    "tokens": 17141
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/coupled-port-docs-direct.attempt-1.log",
+    "sha256": "927ed9de08dbe9dc5738db26b2245831cede06d26c87ec7f331242613d8ddaa8",
+    "tokens": 24869
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/coupled-port-docs-harness.attempt-1.log",
+    "sha256": "a28fee1b672030ef285e55b4bfc243cf73e0f1e7d1266cebc592ca7391cb9c05",
+    "tokens": 13974
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/malformed-lines-direct.attempt-1.log",
+    "sha256": "4d55de0bd1787fa80c48fb2c1f8d0d8d1ea9596b2ec21266669ce46b98f2efb0",
+    "tokens": 26248
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/malformed-lines-harness.attempt-1.log",
+    "sha256": "c101e3e05b50401238d21ae28d44a1ef14d0714da51fd8461c0707c52895e0c4",
+    "tokens": 15581
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/none-and-zero-direct.attempt-1.log",
+    "sha256": "9c325e4cb69536c487afbe69226b8234c06205a5fb9d5b86683ec1d76c034be0",
+    "tokens": 23589
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/none-and-zero-harness.attempt-1.log",
+    "sha256": "b538ef95a4c16e5341cc0d227ed8b9005beec84f93ab3ee8ecb1f5665e707c1e",
+    "tokens": 13734
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/ordered-dedupe-direct.attempt-1.log",
+    "sha256": "c29fca228608db44b4d096545850250518d79f3db7741a4d34c2ed0ac1da8c02",
+    "tokens": 21332
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/ordered-dedupe-harness.attempt-1.log",
+    "sha256": "27a4380699b145be460018b414f19a351c858a1b115fb28179373efad10857aa",
+    "tokens": 16051
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/preserve-unknown-json-direct.attempt-1.log",
+    "sha256": "c48c83c911563b123951a1c5d535108c3b70b5ae2f931aa9389468674f492baf",
+    "tokens": 24079
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/preserve-unknown-json-harness.attempt-1.log",
+    "sha256": "5659679e88f375d3c5afa03a14ae496fa88acc64d4b9cb9f4f3d6bcc74f25bba",
+    "tokens": 32366
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/safe-relative-path-direct.attempt-1.log",
+    "sha256": "1df485b5255c871a32689dde5d5b39440f6a43e7e7b980cf6700477afb758e31",
+    "tokens": 22864
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/safe-relative-path-harness.attempt-1.log",
+    "sha256": "b7d4377b85ea24e882183693be021788e7bfe8d3787650b39f5eb8a1b0ae5445",
+    "tokens": 15341
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/status-and-doc-direct.attempt-1.log",
+    "sha256": "4c4158bba0f4680be09502d0d2c32d0200de488d5129cdf162a6ecf6949935f1",
+    "tokens": 25975
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/status-and-doc-harness.attempt-1.log",
+    "sha256": "93fc56a4880045fdcd8b9ed0d2ccd0878573970d45e264a64662d4fd94ca8a68",
+    "tokens": 22972
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/two-file-version-direct.attempt-1.log",
+    "sha256": "cf4946c07b29f7058398a9d43319cca3efdaf19423f00d091cebea8b2ea50c74",
+    "tokens": 11752
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/two-file-version-harness.attempt-1.log",
+    "sha256": "b6d6375e63c5ce1ce42583a069ae70b615cb6b282e8e158db1892ff541bd1f2d",
+    "tokens": 16079
+  }
+]

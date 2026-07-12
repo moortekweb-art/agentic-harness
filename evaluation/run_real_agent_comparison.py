@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import random
+import re
 import subprocess
 import sys
 import time
@@ -27,6 +28,7 @@ from agentic_harness.core.supervisor import Supervisor  # noqa: E402
 TASKS = ROOT / "evaluation" / "real_agent_tasks.json"
 WORKER = ROOT / "evaluation" / "real_agent_worker.py"
 VERIFIER = ROOT / "evaluation" / "verify_real_agent_task.py"
+TASK_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 
 def _timeout_text(value: str | bytes | None) -> str:
@@ -35,44 +37,95 @@ def _timeout_text(value: str | bytes | None) -> str:
     return value or ""
 
 
-def load_tasks(path: Path) -> list[dict[str, str]]:
+def load_tasks(path: Path) -> list[dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("schema") != "agentic_harness.real_agent_tasks.v1":
+    if payload.get("schema") not in {
+        "agentic_harness.real_agent_tasks.v1",
+        "agentic_harness.hard_real_agent_tasks.v1",
+        "agentic_harness.hard_real_agent_tasks.v2",
+        "agentic_harness.hard_real_agent_tasks.v3",
+        "agentic_harness.hard_real_agent_tasks.v4",
+        "agentic_harness.hard_real_agent_tasks.v5",
+    }:
         raise ValueError("unsupported real-agent task schema")
     tasks = payload.get("tasks")
     if not isinstance(tasks, list) or len(tasks) != 10:
         raise ValueError("the preregistered comparison requires exactly ten tasks")
+    identifiers = [task.get("id") for task in tasks if isinstance(task, dict)]
+    if len(identifiers) != 10 or any(
+        not isinstance(value, str)
+        or TASK_ID_PATTERN.fullmatch(value) is None
+        or value.endswith(("-direct", "-harness"))
+        for value in identifiers
+    ):
+        raise ValueError("task IDs must be safe unambiguous path components")
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError("task IDs must be unique")
     return tasks
 
 
-def materialize(workspace: Path, task: dict[str, str]) -> None:
+def materialize(workspace: Path, task: dict[str, Any]) -> None:
     workspace.mkdir(parents=True)
-    target = workspace / task["path"]
+    files = task.get("files")
+    if isinstance(files, dict):
+        for raw_path, content in files.items():
+            target = _workspace_target(workspace, str(raw_path))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(str(content), encoding="utf-8")
+        return
+    target = _workspace_target(workspace, task["path"])
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(task["initial"], encoding="utf-8")
+
+
+def _workspace_target(workspace: Path, raw_path: str) -> Path:
+    root = workspace.resolve()
+    target = (root / raw_path).resolve()
+    if target == root or root not in target.parents:
+        raise ValueError(f"task path escapes workspace: {raw_path}")
+    return target
 
 
 def verifier_command(task_file: Path, task_id: str) -> list[str]:
     return [sys.executable, str(VERIFIER), str(task_file), task_id]
 
 
-def verify(workspace: Path, command: list[str]) -> bool:
-    return subprocess.run(command, cwd=workspace, check=False).returncode == 0
+def verify(
+    workspace: Path,
+    command: list[str],
+    *,
+    status: dict[str, bool] | None = None,
+    timeout: int = 30,
+) -> bool:
+    try:
+        passed = subprocess.run(
+            command, cwd=workspace, check=False, timeout=timeout
+        ).returncode == 0
+    except subprocess.TimeoutExpired:
+        if status is not None:
+            status["timed_out"] = True
+        return False
+    if status is not None:
+        status["timed_out"] = False
+    return passed
 
 
-def changed_paths(workspace: Path, task: dict[str, str]) -> list[str]:
-    expected = {task["path"]}
+def changed_paths(workspace: Path, task: dict[str, Any]) -> list[str]:
+    initial_paths = (
+        {str(path) for path in task["files"]}
+        if isinstance(task.get("files"), dict)
+        else {task["path"]}
+    )
     actual = {
         path.relative_to(workspace).as_posix()
         for path in workspace.rglob("*")
         if path.is_file() and ".agentic-harness" not in path.parts
     }
-    initial_paths = {task["path"]}
-    return sorted((actual - initial_paths) | ({task["path"]} if actual & expected else set()))
+    return sorted(actual | initial_paths)
 
 
 def run_direct(
-    workspace: Path, task: dict[str, str], transcript: Path, model: str
+    workspace: Path, task: dict[str, Any], transcript: Path, model: str
 ) -> dict[str, Any]:
     env = os.environ.copy()
     env.update(
@@ -108,7 +161,7 @@ def run_direct(
 
 
 def run_harness(
-    workspace: Path, task: dict[str, str], transcript: Path, review: list[str], model: str
+    workspace: Path, task: dict[str, Any], transcript: Path, review: list[str], model: str
 ) -> dict[str, Any]:
     previous = os.environ.get("REAL_AGENT_TRANSCRIPT")
     os.environ["REAL_AGENT_TRANSCRIPT"] = str(transcript)
@@ -161,14 +214,22 @@ def run(output: Path, task_file: Path, seed: int, model: str) -> dict[str, Any]:
                 if arm == "direct"
                 else run_harness(workspace, task, transcript, review, model)
             )
-            passed = verify(workspace, review)
+            verification_status: dict[str, bool] = {}
+            passed = verify(workspace, review, status=verification_status)
             rows.append(
                 {
                     "task_id": task["id"], "arm": arm, "arm_position": position,
                     **measured, "verifier_pass": passed,
+                    "verifier_timed_out": verification_status["timed_out"],
                     "false_accept": bool(measured["accepted"]) and not passed,
                     "unintended_paths": [
-                        path for path in changed_paths(workspace, task) if path != task["path"]
+                        path
+                        for path in changed_paths(workspace, task)
+                        if path not in (
+                            set(task["files"])
+                            if isinstance(task.get("files"), dict)
+                            else {task["path"]}
+                        )
                     ],
                 }
             )

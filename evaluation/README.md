@@ -39,6 +39,43 @@ python evaluation/run_real_agent_comparison.py \
   --model gpt-5.6-sol
 ```
 
+## Harder Real-Agent Follow-up
+
+The first [harder pilot](results/hard-real-agent-20260712/README.md) was
+invalidated after adversarial review showed that three verifiers missed stated
+invariants. It is retained but must not be used for primary claims. A separately
+frozen [revision-2 pilot](results/hard-real-agent-v2-20260712/README.md) was also
+invalidated when a prohibited literal special-case passed its boundary verifier.
+Both invalid runs remain published for audit and are excluded from primary
+claims. Revision 3 uses exact source-state verification for that exact-source
+requirement, safe unique task IDs, and a bounded scoring verifier.
+
+The [revision-3 result](results/hard-real-agent-v3-20260712/README.md) produced
+9/10 verifier passes in each arm. Direct trusted exit-zero and accepted the one
+failed result; Harness refused it after four attempts. Harness did not repair
+the task or improve final success and used more time and tokens. This supports
+only a narrow fail-closed policy-integrity claim. All 20 rows, 23 attempts,
+hashes, tokens, and limitations are published.
+
+Revision 3 was subsequently invalidated because five fixed behavioral probes
+could be passed by input-ignoring implementations. Revision 4 replaces fixed
+vectors with runtime-generated property cases and applies symlink-aware
+workspace containment to expected paths. Revision 3 remains available only as
+an invalid audit artifact.
+
+The [revision-4 result](results/hard-real-agent-v4-20260712/README.md) is the
+fourth invalid pilot. Import-time candidate code could replace its random
+generator before challenges were drawn, and behavioral module paths did not use
+the symlink guard. Revision 5 draws challenges before candidate import and
+validates every manifest and behavioral path through one containment helper.
+
+The [revision-5 result](results/hard-real-agent-v5-20260712/README.md) is the
+current harder study. Both arms passed 9/10 verifiers. Direct accepted its one
+failed result; Harness refused it after four attempts but did not repair it and
+used more time and tokens. The result supports only a narrow fail-closed
+policy-integrity claim. All rows, attempts, hashes, tokens, and limitations are
+published.
+
 ## Checked-in Release Snapshot
 
 [`results/representative/`](results/representative/README.md) is an immutable

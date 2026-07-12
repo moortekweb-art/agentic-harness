@@ -1,0 +1,438 @@
+Updated [routes.py]([local-path] to remove exact duplicates while preserving first-seen order and case.
+
+Direct verification passed, including case-sensitive duplicates and empty input.
+OpenAI Codex v0.144.1
+--------
+workdir: [local-path]
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: low
+reasoning summaries: none
+session id: [redacted]
+--------
+user
+Fix unique_routes to remove exact duplicates while preserving first-seen order and case. Do not sort or lowercase values.
+Work only inside the current directory. Inspect the relevant file, make the smallest correct edit, and verify it if practical. Do not create reports or notes.
+warning: Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.
+codex
+I’ll inspect the repository and relevant implementation, then make the minimal change and run the focused verification. I’m using the clean-code and verification skills because this is a scoped bug fix with an explicit behavior contract.
+exec
+/bin/bash -lc "sed -n '1,240p' [local-path] && sed -n '1,240p' [local-path] && rg -n \"unique_routes\" ." in [local-path]
+ succeeded in 0ms:
+---
+name: clean-code
+description: Pragmatic coding standards - concise, direct, no over-engineering, no unnecessary comments
+allowed-tools: Read, Write, Edit
+version: 2.0
+priority: CRITICAL
+---
+
+# Clean Code - Pragmatic AI Coding Standards
+
+> **CRITICAL SKILL** - Be **concise, direct, and solution-focused**.
+
+---
+
+## Core Principles
+
+| Principle | Rule |
+|-----------|------|
+| **SRP** | Single Responsibility - each function/class does ONE thing |
+| **DRY** | Don't Repeat Yourself - extract duplicates, reuse |
+| **KISS** | Keep It Simple - simplest solution that works |
+| **YAGNI** | You Aren't Gonna Need It - don't build unused features |
+| **Boy Scout** | Leave code cleaner than you found it |
+
+---
+
+## Naming Rules
+
+| Element | Convention |
+|---------|------------|
+| **Variables** | Reveal intent: `userCount` not `n` |
+| **Functions** | Verb + noun: `getUserById()` not `user()` |
+| **Booleans** | Question form: `isActive`, `hasPermission`, `canEdit` |
+| **Constants** | SCREAMING_SNAKE: `MAX_RETRY_COUNT` |
+
+> **Rule:** If you need a comment to explain a name, rename it.
+
+---
+
+## Function Rules
+
+| Rule | Description |
+|------|-------------|
+| **Small** | Max 20 lines, ideally 5-10 |
+| **One Thing** | Does one thing, does it well |
+| **One Level** | One level of abstraction per function |
+| **Few Args** | Max 3 arguments, prefer 0-2 |
+| **No Side Effects** | Don't mutate inputs unexpectedly |
+
+---
+
+## Code Structure
+
+| Pattern | Apply |
+|---------|-------|
+| **Guard Clauses** | Early returns for edge cases |
+| **Flat > Nested** | Avoid deep nesting (max 2 levels) |
+| **Composition** | Small functions composed together |
+| **Colocation** | Keep related code close |
+
+---
+
+## AI Coding Style
+
+| Situation | Action |
+|-----------|--------|
+| User asks for feature | Write it directly |
+| User reports bug | Fix it, don't explain |
+| No clear requirement | Ask, don't assume |
+
+---
+
+## Anti-Patterns (DON'T)
+
+| ❌ Pattern | ✅ Fix |
+|-----------|-------|
+| Comment every line | Delete obvious comments |
+| Helper for one-liner | Inline the code |
+| Factory for 2 objects | Direct instantiation |
+| utils.ts with 1 function | Put code where used |
+| "First we import..." | Just write code |
+| Deep nesting | Guard clauses |
+| Magic numbers | Named constants |
+| God functions | Split by responsibility |
+
+---
+
+## 🔴 Before Editing ANY File (THINK FIRST!)
+
+**Before changing a file, ask yourself:**
+
+| Question | Why |
+|----------|-----|
+| **What imports this file?** | They might break |
+| **What does this file import?** | Interface changes |
+| **What tests cover this?** | Tests might fail |
+| **Is this a shared component?** | Multiple places affected |
+
+**Quick Check:**
+```
+File to edit: UserService.ts
+└── Who imports this? → UserController.ts, AuthController.ts
+└── Do they need changes too? → Check function signatures
+```
+
+> 🔴 **Rule:** Edit the file + all dependent files in the SAME task.
+> 🔴 **Never leave broken imports or missing updates.**
+
+---
+
+## Summary
+
+| Do | Don't |
+|----|-------|
+| Write code directly | Write tutorials |
+| Let code self-document | Add obvious comments |
+| Fix bugs immediately | Explain the fix first |
+| Inline small things | Create unnecessary files |
+| Name things clearly | Use abbreviations |
+| Keep functions small | Write 100+ line functions |
+
+> **Remember: The user wants working code, not a programming lesson.**
+
+---
+
+## 🔴 Self-Check Before Completing (MANDATORY)
+
+**Before saying "task complete", verify:**
+
+| Check | Question |
+|-------|----------|
+| ✅ **Goal met?** | Did I do exactly what user asked? |
+| ✅ **Files edited?** | Did I modify all necessary files? |
+| ✅ **Code works?** | Did I test/verify the change? |
+| ✅ **No errors?** | Lint and TypeScript pass? |
+| ✅ **Nothing forgotten?** | Any edge cases missed? |
+
+> 🔴 **Rule:** If ANY check fails, fix it before completing.
+
+---
+
+## Verification Scripts (MANDATORY)
+
+> 🔴 **CRITICAL:** Each agent runs ONLY their own skill's scripts after completing work.
+
+### Agent → Script Mapping
+
+| Agent | Script | Command |
+|-------|--------|---------|
+| **frontend-specialist** | UX Audit | `python ~/.claude/skills/frontend-design/scripts/ux_audit.py .` |
+| **frontend-specialist** | A11y Check | `python ~/.claude/skills/frontend-design/scripts/accessibility_checker.py .` |
+| **backend-specialist** | API Validator | `python ~/.claude/skills/api-patterns/scripts/api_validator.py .` |
+| **mobile-developer** | Mobile Audit | `python ~/.claude/skills/mobile-design/scripts/mobile_audit.py .` |
+| **database-architect** | Schema Validate | `python ~/.claude/skills/database-design/scripts/schema_validator.py .` |
+| **security-auditor** | Security Scan | `python ~/.claude/skills/vulnerability-scanner/scripts/security_scan.py .` |
+| **seo-specialist** | SEO Check | `python ~/.claude/skills/seo-fundamentals/scripts/seo_checker.py .` |
+| **seo-specialist** | GEO Check | `python ~/.claude/skills/geo-fundamentals/scripts/geo_checker.py .` |
+| **performance-optimizer** | Lighthouse | `python ~/.claude/skills/performance-profiling/scripts/lighthouse_audit.py <url>` |
+| **test-engineer** | Test Runner | `python ~/.claude/skills/testing-patterns/scripts/test_runner.py .` |
+| **test-engineer** | Playwright | `python ~/.claude/skills/webapp-testing/scripts/playwright_runner.py <url>` |
+| **Any agent** | Lint Check | `python ~/.claude/skills/lint-and-validate/scripts/lint_runner.py .` |
+| **Any agent** | Type Coverage | `python ~/.claude/skills/lint-and-validate/scripts/type_coverage.py .` |
+| **Any agent** | i18n Check | `python ~/.claude/skills/i18n-localization/scripts/i18n_checker.py .` |
+
+> ❌ **WRONG:** `test-engineer` running `ux_audit.py`
+> ✅ **CORRECT:** `frontend-specialist` running `ux_audit.py`
+
+---
+
+### 🔴 Script Output Handling (READ → SUMMARIZE → ASK)
+
+**When running a validation script, you MUST:**
+
+1. **Run the script** and capture ALL output
+2. **Parse the output** - identify errors, warnings, and passes
+3. **Summarize to user** in this format:
+
+```markdown
+## Script Results: [script_name.py]
+
+### ❌ Errors Found (X items)
+- [File:Line] Error description 1
+- [File:Line] Error description 2
+
+### ⚠️ Warnings (Y items)
+- [File:Line] Warning description
+
+### ✅ Passed (Z items)
+- Check 1 passed
+- Check 2 passed
+
+**Should I fix the X errors?**
+```
+
+4. **Wait for user confirmation** before fixing
+5. **After fixing** → Re-run script to confirm
+
+> 🔴 **VIOLATION:** Running script and ignoring output = FAILED task.
+> 🔴 **VIOLATION:** Auto-fixing without asking = Not allowed.
+> 🔴 **Rule:** Always READ output → SUMMARIZE → ASK → then fix.
+
+---
+name: verification-before-completion
+description: Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always
+trigger: when about to mark work complete, claim a task is done, or say something is working
+---
+
+# Verification Before Completion
+
+## Overview
+
+Claiming work is complete without verification is dishonesty, not efficiency.
+
+**Core principle:** Evidence before claims, always.
+
+**Violating the letter of this rule is violating the spirit of this rule.**
+
+## The Iron Law
+
+```
+NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
+```
+
+If you haven't run the verification command in this message, you cannot claim it passes.
+
+## The Gate Function
+
+```
+BEFORE claiming any status or expressing satisfaction:
+
+1. IDENTIFY: What command proves this claim?
+2. RUN: Execute the FULL command (fresh, complete)
+3. READ: Full output, check exit code, count failures
+4. VERIFY: Does output confirm the claim?
+   - If NO: State actual status with evidence
+   - If YES: State claim WITH evidence
+5. ONLY THEN: Make the claim
+
+Skip any step = lying, not verifying
+```
+
+## Common Failures
+
+| Claim | Requires | Not Sufficient |
+|-------|----------|----------------|
+| Tests pass | Test command output: 0 failures | Previous run, "should pass" |
+| Linter clean | Linter output: 0 errors | Partial check, extrapolation |
+| Build succeeds | Build command: exit 0 | Linter passing, logs look good |
+| Bug fixed | Test original symptom: passes | Code changed, assumed fixed |
+| Regression test works | Red-green cycle verified | Test passes once |
+| Agent completed | VCS diff shows changes | Agent reports "success" |
+| Requirements met | Line-by-line checklist | Tests passing |
+
+## Red Flags - STOP
+
+- Using "should", "probably", "seems to"
+- Expressing satisfaction before verification ("Great!", "Perfect!", "Done!", etc.)
+- About to commit/push/PR without verification
+- Trusting agent success reports
+- Relying on partial verification
+- Thinking "just this once"
+- Tired and wanting work over
+- **ANY wording implying success without having run verification**
+
+## Rationalization Prevention
+
+| Excuse | Reality |
+|--------|---------|
+| "Should work now" | RUN the verification |
+| "I'm confident" | Confidence ≠ evidence |
+| "Just this once" | No exceptions |
+| "Linter passed" | Linter ≠ compiler |
+| "Agent said success" | Verify independently |
+| "I'm tired" | Exhaustion ≠ excuse |
+| "Partial check is enough" | Partial proves nothing |
+| "Different words so rule doesn't apply" | Spirit over letter |
+
+## Key Patterns
+
+**Tests:**
+```
+✅ [Run test command] [See: 34/34 pass] "All tests pass"
+❌ "Should pass now" / "Looks correct"
+```
+
+**Regression tests (TDD Red-Green):**
+```
+✅ Write → Run (pass) → Revert fix → Run (MUST FAIL) → Restore → Run (pass)
+❌ "I've written a regression test" (without red-green verification)
+```
+
+**Build:**
+```
+✅ [Run build] [See: exit 0] "Build passes"
+❌ "Linter passed" (linter doesn't check compilation)
+```
+
+**Requirements:**
+```
+✅ Re-read plan → Create checklist → Verify each → Report gaps or completion
+❌ "Tests pass, phase complete"
+```
+
+**Agent delegation:**
+```
+✅ Agent reports success → Check VCS diff → Verify changes → Report actual state
+❌ Trust agent report
+```
+
+## Why This Matters
+
+From 24 failure memories:
+- your human partner said "I don't believe you" - trust broken
+- Undefined functions shipped - would crash
+- Missing requirements shipped - incomplete features
+- Time wasted on false completion → redirect → rework
+- Violates: "Honesty is a core value. If you lie, you'll be replaced."
+
+## When To Apply
+
+**ALWAYS before:**
+- ANY variation of success/completion claims
+- ANY expression of satisfaction
+- ANY positive statement about work state
+- Committing, PR creation, task completion
+- Moving to next task
+- Delegating to agents
+
+**Rule applies to:**
+- Exact phrases
+- Paraphrases and synonyms
+- Implications of success
+- ANY communication suggesting completion/correctness
+
+## The Bottom Line
+
+**No shortcuts for verification.**
+
+Run the command. Read the output. THEN claim the result.
+
+This is non-negotiable.
+./routes.py:1:def unique_routes(routes):
+
+exec
+/bin/bash -lc "sed -n '1,160p' routes.py && rg --files -g '"'!*.pyc'"' -g '"'!__pycache__'"' . && git status --short" in [local-path]
+ exited 128 in 0ms:
+def unique_routes(routes):
+    return sorted(set(route.lower() for route in routes))
+./routes.py
+fatal: not a git repository (or any of the parent directories): .git
+
+codex
+The function currently lowercases into a set and sorts, which violates all three constraints. I found no test suite in the directory, so I’ll replace only that expression and verify representative duplicate/case/order behavior directly.
+apply patch
+patch: completed
+[local-path]
+diff --git a/routes.py b/routes.py
+index b053cc18a384b3eb7421f8bdff68d76b3d7b32e1..5a19bf284a8265b87fd9e895d29a7e4188972339
+--- a/routes.py
++++ b/routes.py
+@@ -1,2 +1,2 @@
+ def unique_routes(routes):
+-    return sorted(set(route.lower() for route in routes))
++    return list(dict.fromkeys(routes))
+
+diff --git a/routes.py b/routes.py
+index b053cc18a384b3eb7421f8bdff68d76b3d7b32e1..5a19bf284a8265b87fd9e895d29a7e4188972339
+--- a/routes.py
++++ b/routes.py
+@@ -1,2 +1,2 @@
+ def unique_routes(routes):
+-    return sorted(set(route.lower() for route in routes))
++    return list(dict.fromkeys(routes))
+
+exec
+/bin/bash -lc "python - <<'PY'
+from routes import unique_routes
+
+routes = ['/Home', '/about', '/Home', '/home', '/about', '/Contact']
+expected = ['/Home', '/about', '/home', '/Contact']
+actual = unique_routes(routes)
+assert actual == expected, (actual, expected)
+assert unique_routes([]) == []
+print('unique_routes verification passed')
+PY
+sed -n '1,40p' routes.py" in [local-path]
+ succeeded in 0ms:
+unique_routes verification passed
+def unique_routes(routes):
+    return list(dict.fromkeys(routes))
+
+diff --git a/routes.py b/routes.py
+index b053cc18a384b3eb7421f8bdff68d76b3d7b32e1..5a19bf284a8265b87fd9e895d29a7e4188972339
+--- a/routes.py
++++ b/routes.py
+@@ -1,2 +1,2 @@
+ def unique_routes(routes):
+-    return sorted(set(route.lower() for route in routes))
++    return list(dict.fromkeys(routes))
+
+codex
+Updated [routes.py]([local-path] to remove exact duplicates while preserving first-seen order and case.
+
+Direct verification passed, including case-sensitive duplicates and empty input.
+diff --git a/routes.py b/routes.py
+index b053cc18a384b3eb7421f8bdff68d76b3d7b32e1..5a19bf284a8265b87fd9e895d29a7e4188972339
+--- a/routes.py
++++ b/routes.py
+@@ -1,2 +1,2 @@
+ def unique_routes(routes):
+-    return sorted(set(route.lower() for route in routes))
++    return list(dict.fromkeys(routes))
+
+tokens used
+16,731

@@ -1,0 +1,125 @@
+Updated both version declarations to `2.4.1`. The dependency constraint remains `widget>=2.4.0`. Direct verification passed.
+OpenAI Codex v0.144.1
+--------
+workdir: [local-path]
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: low
+reasoning summaries: none
+session id: [redacted]
+--------
+user
+Bump the package version from 2.4.0 to 2.4.1 in both pyproject.toml and package/__init__.py. Do not change the dependency constraint.
+Work only inside the current directory. Inspect the relevant file, make the smallest correct edit, and verify it if practical. Do not create reports or notes.
+codex
+I’ll inspect the two version declarations, update only those values, and verify the dependency constraint and diff remain unchanged otherwise.
+exec
+/bin/bash -lc "pwd && rg -n \"2\\.4\\.0|version|dependency\" pyproject.toml package/__init__.py && git diff -- pyproject.toml package/__init__.py" in [local-path]
+ exited 1 in 0ms:
+[local-path]
+package/__init__.py:1:__version__ = "2.4.0"
+pyproject.toml:2:version = "2.4.0"
+pyproject.toml:3:dependencies = ["widget>=2.4.0"]
+diff --git a/pyproject.toml b/package/__init__.py
+index 3a0ed57..3d67cd6 100644
+--- a/pyproject.toml
++++ b/package/__init__.py
+@@ -1,3 +1 @@
+-[project]
+-version = "2.4.0"
+-dependencies = ["widget>=2.4.0"]
++__version__ = "2.4.0"
+
+exec
+/bin/bash -lc "git status --short && sed -n '1,20p' pyproject.toml && sed -n '1,20p' package/__init__.py" in [local-path]
+ exited 128 in 0ms:
+fatal: not a git repository (or any of the parent directories): .git
+
+apply patch
+patch: completed
+[local-path]
+[local-path]
+diff --git a/package/__init__.py b/package/__init__.py
+index 3d67cd6bb497cf0c862b60ff30e8b273aae5d851..54499df347963349cfb542a31e2ae2b19e63337c
+--- a/package/__init__.py
++++ b/package/__init__.py
+@@ -1 +1 @@
+-__version__ = "2.4.0"
++__version__ = "2.4.1"
+diff --git a/pyproject.toml b/pyproject.toml
+index 3a0ed577f26f1ee4f9cead471e2312b3a9134b98..e23913206da04500994fd4f5805eed6e5ce6206d
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,3 +1,3 @@
+ [project]
+-version = "2.4.0"
++version = "2.4.1"
+ dependencies = ["widget>=2.4.0"]
+
+diff --git a/package/__init__.py b/package/__init__.py
+index 3d67cd6bb497cf0c862b60ff30e8b273aae5d851..54499df347963349cfb542a31e2ae2b19e63337c
+--- a/package/__init__.py
++++ b/package/__init__.py
+@@ -1 +1 @@
+-__version__ = "2.4.0"
++__version__ = "2.4.1"
+diff --git a/pyproject.toml b/pyproject.toml
+index 3a0ed577f26f1ee4f9cead471e2312b3a9134b98..e23913206da04500994fd4f5805eed6e5ce6206d
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,3 +1,3 @@
+ [project]
+-version = "2.4.0"
++version = "2.4.1"
+ dependencies = ["widget>=2.4.0"]
+
+codex
+The two declarations are updated. I’m doing a direct content check now; this directory has no usable Git worktree metadata, so verification will compare the actual file lines.
+exec
+/bin/bash -lc "sed -n '1,10p' pyproject.toml && sed -n '1,10p' package/__init__.py && test \""'$(sed -n '"'2p' pyproject.toml)\" = 'version = \"2.4.1\"' && test \""'$(sed -n '"'3p' pyproject.toml)\" = 'dependencies = [\"widget>=2.4.0\"]' && test \""'$(sed -n '"'1p' package/__init__.py)\" = '__version__ = \"2.4.1\"'" in [local-path]
+ succeeded in 0ms:
+[project]
+version = "2.4.1"
+dependencies = ["widget>=2.4.0"]
+__version__ = "2.4.1"
+
+diff --git a/package/__init__.py b/package/__init__.py
+index 3d67cd6bb497cf0c862b60ff30e8b273aae5d851..54499df347963349cfb542a31e2ae2b19e63337c
+--- a/package/__init__.py
++++ b/package/__init__.py
+@@ -1 +1 @@
+-__version__ = "2.4.0"
++__version__ = "2.4.1"
+diff --git a/pyproject.toml b/pyproject.toml
+index 3a0ed577f26f1ee4f9cead471e2312b3a9134b98..e23913206da04500994fd4f5805eed6e5ce6206d
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,3 +1,3 @@
+ [project]
+-version = "2.4.0"
++version = "2.4.1"
+ dependencies = ["widget>=2.4.0"]
+
+codex
+Updated both version declarations to `2.4.1`. The dependency constraint remains `widget>=2.4.0`. Direct verification passed.
+diff --git a/package/__init__.py b/package/__init__.py
+index 3d67cd6bb497cf0c862b60ff30e8b273aae5d851..54499df347963349cfb542a31e2ae2b19e63337c
+--- a/package/__init__.py
++++ b/package/__init__.py
+@@ -1 +1 @@
+-__version__ = "2.4.0"
++__version__ = "2.4.1"
+diff --git a/pyproject.toml b/pyproject.toml
+index 3a0ed577f26f1ee4f9cead471e2312b3a9134b98..e23913206da04500994fd4f5805eed6e5ce6206d
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,3 +1,3 @@
+ [project]
+-version = "2.4.0"
++version = "2.4.1"
+ dependencies = ["widget>=2.4.0"]
+
+tokens used
+10,714
