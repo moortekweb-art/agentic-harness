@@ -148,6 +148,12 @@ attempts. See the
 [summary](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/results/representative/summary.md), and
 [raw JSONL](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/results/representative/raw.jsonl).
 
+A first preregistered [real Codex comparison](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/results/real-agent-20260712/README.md)
+also publishes all records and redacted transcripts. Both arms passed all ten
+easy tasks, so it found no correctness advantage; Harness cost more time and
+tokens. That negative result is a starting point for harder evaluation, not a
+marketing claim.
+
 ## Execution Methods
 
 ### Installed coding agents

@@ -24,7 +24,10 @@ is not an adoption study or a general coding benchmark.
 - Arms: one direct invocation versus the same command through Agentic Harness.
 - Tasks: the ten entries in `real_agent_tasks.json`.
 - Seed: `20260712`; arm order is randomized per task from that seed.
-- Prompt, workspace contents, sandbox (`workspace-write`), and timeout are equal.
+- The user task objective, workspace contents, sandbox (`workspace-write`), and
+  timeout are equal. The Harness arm necessarily adds its persisted-plan and
+  structured-evidence instructions. Results therefore compare the end-to-end
+  systems, not an isolated gate with byte-identical full prompts.
 - The direct arm accepts an exit-zero agent completion claim.
 - The Harness arm permits at most three attempts and accepts only after the
   external deterministic verifier passes.

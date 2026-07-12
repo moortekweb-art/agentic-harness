@@ -1,0 +1,41 @@
+{
+  "agent": "codex-cli 0.144.1",
+  "arms": {
+    "direct": {
+      "accepted": 10,
+      "false_accepts": 0,
+      "mean_attempts": 1.0,
+      "mean_elapsed_seconds": 15.147,
+      "mean_tokens": 14990.7,
+      "runs": 10,
+      "runs_with_unintended_paths": 0,
+      "total_tokens": 149907,
+      "verifier_passes": 10
+    },
+    "harness": {
+      "accepted": 10,
+      "false_accepts": 0,
+      "mean_attempts": 1.0,
+      "mean_elapsed_seconds": 26.938,
+      "mean_tokens": 16711.1,
+      "runs": 10,
+      "runs_with_unintended_paths": 0,
+      "total_tokens": 167111,
+      "verifier_passes": 10
+    }
+  },
+  "data_quality": {
+    "comparison_scope": "end_to_end_systems",
+    "full_prompt_identity": false,
+    "records": 20,
+    "secret_scan_passed": true,
+    "transcripts": 20,
+    "unique_task_arm_pairs": 20
+  },
+  "disclaimer": "One-agent ten-task synthetic comparison; not broad model or adoption proof.",
+  "finished_at": "2026-07-12T06:21:59.211035Z",
+  "schema": "agentic_harness.real_agent_comparison.v1",
+  "seed": 20260712,
+  "started_from_commit": "90f5212cd59df0b0419515872a7a1db3ccb743ab",
+  "token_metrics_available": true
+}
