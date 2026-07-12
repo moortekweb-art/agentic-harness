@@ -6,8 +6,9 @@ publishing, which avoids storing a PyPI token in repository secrets.
 
 The publish workflow is checked in at `.github/workflows/publish.yml`.
 `docs/templates/publish.yml` is retained only as a reference copy. The trusted
-publisher described below is configured and was most recently verified by the
-successful v0.7.0 publication run `29159578285`.
+publisher configuration is described below. Determine current publication
+status from PyPI, the matching GitHub release, and the workflow run for the
+candidate tag; do not infer it from a historical receipt.
 
 Before uploading, the workflow installs the project with test extras and runs:
 
@@ -22,11 +23,10 @@ verified artifacts. The workflow then copies only `*.whl` and `*.tar.gz` into
 `pypi-dist/` for PyPI; `SHA256SUMS` remains release evidence and is not passed to
 the PyPI upload action.
 
-## Name Availability Blocker
+## Distribution name
 
-As of 2026-07-04, the `agentic-harness` project name on PyPI is already used by
-an unrelated project. Do not configure trusted publishing for this repository
-under that PyPI project unless ownership or a project transfer has been resolved.
+The `agentic-harness` project name on PyPI belongs to an unrelated project. Do
+not configure trusted publishing for this repository under that name.
 
 This repository now uses `local-agentic-harness` as the Python distribution
 name while keeping the installed CLI command as `agentic-harness`.
@@ -75,10 +75,13 @@ Repository owners must keep both publishing environments protected:
   release tags;
 - `github-release`, with a required reviewer and the same release-tag policy.
 
-The steady state verified after v0.7.0 has required reviewer
-`moortekweb-art` and exactly one deployment policy on each environment: tag
-pattern `v*`. No default-branch deployment policy remains. This tag-only policy
-is intentional; a normal release must originate from a release tag.
+The required steady state has:
+
+- required reviewer `moortekweb-art`; and
+- exactly one deployment policy on each environment: tag pattern `v*`.
+
+No default-branch deployment policy remains. This tag-only policy is
+intentional; a normal release must originate from a release tag.
 
 GitHub evaluates an environment deployment policy against the workflow-run
 ref, not the ref checked out by a later step. A recovery dispatch therefore
@@ -121,11 +124,14 @@ successful recovery run verified that only the wheel and sdist are uploaded.
 ## Manual Verification
 
 ```bash
+VERSION="$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+TAG="v${VERSION}"
 python -m pip install -e ".[test]"
 python -m agentic_harness.cli release-smoke --dist-dir /tmp/agentic-harness-dist
 python -m pip index versions local-agentic-harness
-gh release view v0.7.0 --repo moortekweb-art/agentic-harness
-gh run view 29159578285 --repo moortekweb-art/agentic-harness
+gh release view "$TAG" --repo moortekweb-art/agentic-harness
+gh run list --workflow publish.yml --branch "$TAG" --limit 5 \
+  --repo moortekweb-art/agentic-harness
 ```
 
 The publish workflow should not use `PYPI_TOKEN`, `username`, or `password`.

@@ -213,6 +213,7 @@ h3 {
 }
 
 .start-panel {
+  align-self: start;
   display: flex;
   flex-direction: column;
   padding: 22px;
@@ -271,6 +272,10 @@ select {
 #objective {
   min-height: 220px;
   flex: 1 1 220px;
+}
+
+#checks {
+  min-height: 72px;
 }
 
 input[type="search"] {
@@ -682,6 +687,50 @@ button:disabled {
   margin: 8px 0 0;
 }
 
+.final-result.blocked,
+.final-result.failed {
+  border-color: rgba(154, 47, 47, 0.35);
+  background: rgba(154, 47, 47, 0.07);
+}
+
+.receipt-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.receipt-metrics > div,
+.worker-claim {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 90%, var(--accent) 10%);
+}
+
+.receipt-metrics span,
+.worker-claim strong {
+  display: block;
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+}
+
+.worker-claim {
+  margin-top: 10px;
+}
+
+.final-result h4 {
+  margin: 14px 0 0;
+  font-size: 0.86rem;
+}
+
+.final-result ul {
+  margin: 7px 0 0;
+  padding-left: 20px;
+  color: var(--muted);
+}
+
 .progress-group {
   margin-top: 16px;
 }
@@ -939,6 +988,7 @@ dialog::backdrop {
   }
 
   .start-panel {
+    align-self: stretch;
     display: block;
   }
 

@@ -13,43 +13,53 @@ did, and refuses to accept completion until an independent command passes.
 
 ## Quick Start
 
-### 1. See the completion gate
+Install the current source build that contains this first-run flow:
 
 ```bash
-pipx install local-agentic-harness
-agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
+pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git
 ```
 
-The packaged example starts with a failing test, runs the same goal engine, and
-ends only after the test passes. It is a controlled mechanics demo with a mock
-coding agent, not evidence about model quality. Its durable report is written to
-`.agentic-harness/runs/<goal-id>/report.md`. The complete under two minutes
-recording path is in the [terminal demo script](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/demo-script.md).
+The latest published build is 0.7.2. Until a later release includes this flow,
+use the current-source command above for the exact receipt names shown below.
 
-### 2. Use it on a real project
+### Run a verified task in the browser
 
 ```bash
 cd /path/to/your/project
-agentic-harness selftest
 agentic-harness gui
 ```
 
-In Setup, choose an installed coding agent or compatible model and the command
-that independently proves the result. Enter one outcome and start. The browser
-shows the plan, checkpoints, changed files, checks, and final evidence.
+The app confirms the current workspace. In Setup, choose an installed coding
+agent or compatible model and enter the command that independently proves the
+result. Then describe one outcome and start. The browser shows the plan,
+changed files, checks, and final evidence. Work is marked done only when the
+verification command passes.
 
-The same configured workspace has a concise CLI path:
+See the loaded [desktop result](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/assets/agentic-harness-gui.png) and
+[mobile result](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/assets/agentic-harness-gui-mobile.png) from the packaged demo.
+
+### Run the same verified task from the terminal
 
 ```bash
-agentic-harness do "fix the failing tests and verify the result"
+cd /path/to/your/project
+agentic-harness do "fix the failing tests" --check "python -m pytest tests/ -q"
 agentic-harness check
 agentic-harness report
 ```
 
-For a foreground autonomous run, use `agentic-harness goal "..."` and resume an
-interrupted durable goal with `agentic-harness goal`. Run
-`agentic-harness quickstart` to print the shortest path detected for the current
-project.
+`--check` is the independent completion gate. A worker saying “done” cannot
+replace it. The durable report is written to
+`.agentic-harness/runs/<goal-id>/report.md`.
+
+### Try the gate without an agent account
+
+```bash
+agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
+```
+
+The packaged example starts with a failing test and ends only after the test
+passes. It is a controlled mechanics demo with a mock coding agent, not evidence
+about model quality. See the complete [terminal demo script](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/demo-script.md).
 
 ## Product Boundary
 
@@ -61,8 +71,9 @@ state model, packaged static browser assets, and two interfaces:
 
 This is the same install, not two products. Both interfaces use
 `.agentic-harness/` inside the selected workspace. The portable embedded engine
-is the default; private controllers and machine-specific sidecars are not
-required.
+is the default and does not require an external orchestration service.
+
+## Advanced Workflows
 
 ### Recipes
 
@@ -97,7 +108,7 @@ plan -> act -> record progress -> evaluate -> repair if needed
                          pass --------+-------- fail
                            |                     |
                            v                     +--> continue or block
-                     accepted done
+                     verified done
 ```
 
 The original objective remains attached to the goal across cycles and recovery.
@@ -128,11 +139,14 @@ failures that can be retried.
 | Agentic Harness | 18 | 0 | 100% | 12 | 2.0 |
 
 This is a controlled gate evaluation, not a real-model benchmark or adoption
-claim. Its value is narrower: the direct baseline
-produced 12 false accepts; Agentic Harness produced 0 false accepts. It caught
-all 12 premature claims and recovered every repairable task at the explicit
-cost of more attempts. See the
+claim. The table comes from the immutable v0.7.2 release snapshot. Validate it
+against the v0.7.2 tag, not current main, because the default branch may contain
+later source changes. Its value is narrower: the direct baseline produced
+12 false accepts; Agentic Harness produced 0 false accepts. It caught all 12
+premature claims and recovered every repairable task at the explicit cost of more
+attempts. See the
 [method](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/README.md),
+[snapshot receipt](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/results/representative/README.md),
 [summary](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/results/representative/summary.md), and
 [raw JSONL](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/results/representative/raw.jsonl).
 
@@ -200,7 +214,7 @@ Set the key outside the project before running the CLI or GUI:
 
 ```bash
 export MODEL_PROVIDER_API_KEY="use-your-secret-entry-path"
-agentic-harness do "complete and verify one bounded goal"
+agentic-harness do "complete and verify one bounded goal" --check "python -m pytest -q"
 ```
 
 Do not put a literal API key in `.agentic-harness/config.yml`. Model-agent
@@ -275,28 +289,21 @@ while preserving its evidence. Start a fresh goal only when the objective is
 intentionally separate.
 
 GUI stop is cooperative: the current bounded tool step finishes, then the task
-is recorded as stopped. A late worker result cannot be accepted as done after
-cancellation. Session-only API keys are deliberately absent after a GUI process
-restart and must be entered again.
+ends as `Failed with evidence` with a stopped-by-user reason. A late worker
+result cannot be accepted as done after cancellation. Session-only API keys are
+deliberately absent after a GUI process restart and must be entered again.
 
-## Optional Turnstone Integration
+## Optional External Orchestration
 
 [Turnstone](https://github.com/turnstonelabs/turnstone) is a separate,
 self-hosted orchestration framework. It is not bundled, imported, or installed
 by `local-agentic-harness`, and the default embedded GUI does not need it.
 
-Operators who already run Turnstone may place an operator-maintained
-Turnstone-compatible wrapper behind the explicit `local-goal` backend:
-
-```bash
-export AGENTIC_HARNESS_LOCAL_GOAL=/absolute/path/to/compatible-wrapper
-agentic-harness-gui --backend local-goal --project-dir /path/to/project --no-open
-```
-
-That path uses a narrow command contract and is opt-in. A direct Turnstone
-REST/SDK adapter is not part of this release. See
+Operators who already use an external orchestrator can opt into the generic
+`local-goal` compatibility boundary. A direct Turnstone REST/SDK adapter is not
+part of this release. See
 [Turnstone integration](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/TURNSTONE_INTEGRATION.md) for the exact boundary,
-capability preflight, lifecycle expectations, and private-deployment note.
+capability preflight, and lifecycle expectations.
 
 ## Other Adapters
 
@@ -312,7 +319,7 @@ from agentic_harness import Goal, Supervisor, Worker
 
 ## Installation
 
-Install the released distribution from PyPI:
+Install the latest released distribution from PyPI (currently 0.7.2):
 
 ```bash
 pipx install local-agentic-harness
@@ -322,10 +329,11 @@ The distribution name avoids a collision with the unrelated
 `agentic-harness` package on PyPI. The installed CLI command remains `agentic-harness`.
 The same installation also provides `agentic-harness-gui`.
 
-Install the current GitHub source with:
+The default branch can contain unreleased CLI and receipt changes. Install the
+current GitHub source with:
 
 ```bash
-pipx install git+https://github.com/moortekweb-art/agentic-harness.git
+pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git
 ```
 
 For development:

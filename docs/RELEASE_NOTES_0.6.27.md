@@ -5,12 +5,12 @@ ready state and records the now-working PyPI trusted-publishing path.
 
 ## Changes
 
-- Ready-state summaries containing local-goal or Hermes control language are
+- Ready-state summaries containing local-goal or controller-specific language are
   translated to "The assistant is ready for a new task." on the main surface.
 - The original backend response remains available in Advanced details for
   diagnosis and audit evidence.
 - Regression coverage now includes the real idle response that previously
-  exposed `local goal`, `Hermes`, `operator`, and `Codex` terminology.
+  exposed backend, controller, operator, and provider-specific terminology.
 - PyPI documentation now records the successful v0.6.26 trusted-publishing run
   and the wheel/sdist-only staging fix used by the publish workflow.
 - Desktop and mobile captures are refreshed from the corrected release

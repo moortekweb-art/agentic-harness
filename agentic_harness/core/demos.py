@@ -61,13 +61,13 @@ rm -rf .agentic-harness
 
 from __future__ import annotations
 
+import os
 import shutil
-import sys
 from pathlib import Path
 
 
 def main() -> int:
-    objective = " ".join(sys.argv[1:])
+    objective = os.environ.get("AGENTIC_HARNESS_OBJECTIVE", "").partition("\\n")[0].strip()
     path = Path("calculator.py")
     content = path.read_text(encoding="utf-8")
     if "return left + right + 1" not in content:

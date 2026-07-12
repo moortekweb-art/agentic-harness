@@ -7,7 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from agentic_harness.core.safety import subprocess_environment
+from agentic_harness.core.safety import (
+    command_uses_windows_shell,
+    resolve_command_executable,
+    subprocess_environment,
+)
 from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.state import Goal
 
@@ -109,15 +113,17 @@ def command_passes(
     """Require a command to exit successfully."""
 
     def check(goal: Goal) -> tuple[bool, str]:
+        resolved_command = resolve_command_executable(command)
         try:
             proc = subprocess.run(
-                command,
+                resolved_command,
                 cwd=str(cwd),
                 env=subprocess_environment(secret_env_names),
                 text=True,
                 capture_output=True,
                 timeout=timeout,
                 check=False,
+                shell=command_uses_windows_shell(resolved_command),
             )
         except subprocess.TimeoutExpired:
             return False, f"independent command timed out after {timeout}s"

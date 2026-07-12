@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import urllib.error
 
 import pytest
@@ -146,6 +148,62 @@ def test_coding_agent_worker_formats_command_and_writes_transcript(monkeypatch, 
     events = TaskEventStore(tmp_path, goal.id).read()
     assert [event["tool"]["status"] for event in events] == ["started", "completed"]
     assert all(event["tool"]["name"] == "coding_agent" for event in events)
+
+
+def test_coding_agent_worker_launches_the_resolved_executable(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    resolved = r"C:\Tools\codex.cmd"
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        "agentic_harness.adapters.coding_agent.resolve_command_executable",
+        lambda command: [resolved, *command[1:]],
+    )
+
+    def fake_run(command: list[str], **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "done\n", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = CodingAgentWorker(
+        ["codex", "exec", "{objective}"],
+        cwd=tmp_path,
+    ).run(Goal("finish safely"))
+
+    assert result.success is True
+    assert calls == [[resolved, "exec", "finish safely"]]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires real Windows cmd.exe semantics")
+def test_coding_agent_windows_cmd_shim_does_not_execute_objective_metacharacters(
+    tmp_path,
+) -> None:
+    receiver = tmp_path / "receiver.py"
+    received = tmp_path / "received.txt"
+    injected = tmp_path / "injected.txt"
+    receiver.write_text(
+        "import pathlib, sys\n"
+        f"pathlib.Path({str(received)!r}).write_text(sys.argv[1], encoding='utf-8')\n"
+        "print('worker complete')\n",
+        encoding="utf-8",
+    )
+    shim = tmp_path / "coding-agent.cmd"
+    shim.write_text(
+        f'@echo off\r\n"{sys.executable}" "{receiver}" %*\r\n',
+        encoding="utf-8",
+    )
+    objective = f"fix&echo injected>{injected}"
+
+    result = CodingAgentWorker([str(shim), "{objective}"], cwd=tmp_path).run(
+        Goal(objective)
+    )
+
+    assert result.success is True
+    assert received.read_text(encoding="utf-8") == objective
+    assert not injected.exists()
 
 
 def test_coding_agent_worker_uses_durable_continuation_instruction_for_autonomy(

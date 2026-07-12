@@ -19,16 +19,106 @@ from agentic_harness.cli import build_supervisor, format_quickstart_text, main
 from agentic_harness.core.config import load_config
 from agentic_harness.core.errors import ConfigError
 from agentic_harness.core.recipes import list_recipes, load_recipe
+from agentic_harness.core.safety import format_command
 from agentic_harness.core.state import GoalStatus
 from agentic_harness.core.worker import WorkerResult
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+PASSING_REVIEW_YAML = (
+    "review_command:\n"
+    f"  - {sys.executable}\n"
+    "  - -c\n"
+    "  - 'raise SystemExit(0)'\n"
+)
 
 
 def current_package_version() -> str:
     metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     return str(metadata["project"]["version"])
+
+
+def worker_only_review() -> dict[str, object]:
+    return {
+        "passed": True,
+        "criteria": [
+            {
+                "name": "worker_success",
+                "passed": True,
+                "message": "worker reported success",
+                "independent": False,
+            }
+        ],
+    }
+
+
+def write_noop_config_with_review(project_dir: Path, command: list[str]) -> None:
+    config_dir = project_dir / ".agentic-harness"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.yml").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "worker": "noop",
+                "allow_noop_success": True,
+                "review_command": command,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def write_marker_check(script: Path, marker: Path, *, returncode: int = 0) -> None:
+    script.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('ran', encoding='utf-8')\n"
+        f"raise SystemExit({returncode})\n",
+        encoding="utf-8",
+    )
+
+
+def write_secret_coding_agent_config(
+    project_dir: Path,
+    *,
+    summary_secret: str,
+    outcome_secret: str,
+    error_secret: str,
+) -> None:
+    worker = project_dir / "secret_worker.py"
+    outcome = {
+        "status": "blocked",
+        "summary": summary_secret,
+        "checkpoint": outcome_secret,
+        f"api_key={outcome_secret}": "worker-controlled metadata key",
+    }
+    worker.write_text(
+        "import json\n"
+        "import sys\n"
+        f"outcome = {outcome!r}\n"
+        'print("HARNESS_RESULT_JSON=" + json.dumps(outcome))\n'
+        f"print({error_secret!r}, file=sys.stderr)\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    config_dir = project_dir / ".agentic-harness"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.yml").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "worker": "coding_agent",
+                "coding_agent_command": [sys.executable, str(worker)],
+                "review_command": [
+                    sys.executable,
+                    "-c",
+                    "raise SystemExit(0)",
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_init_without_backend_creates_safe_placeholder(tmp_path, capsys, monkeypatch) -> None:
@@ -63,7 +153,8 @@ def test_init_auto_selects_detected_backend(tmp_path, capsys, monkeypatch) -> No
     assert rc == 0
     config = load_config(tmp_path)
     assert config.worker == "coding_agent"
-    assert config.coding_agent_command[:3] == ["codex", "exec", "--skip-git-repo-check"]
+    assert Path(config.coding_agent_command[0]).stem.lower() == "codex"
+    assert config.coding_agent_command[1:3] == ["exec", "--skip-git-repo-check"]
     output = capsys.readouterr().out
     assert "Configured codex tool." in output
     assert "Next: agentic-harness fix-tests" in output
@@ -106,13 +197,11 @@ def test_run_auto_configures_detected_backend(tmp_path, capsys, monkeypatch) -> 
     output = capsys.readouterr().out
     assert rc == 0
     assert "Configured codex tool." in output
-    assert "Result: done" in output
+    assert "Result: Verified done" in output
     assert load_config(tmp_path).worker == "coding_agent"
-    assert load_config(tmp_path).coding_agent_command[:3] == [
-        "codex",
-        "exec",
-        "--skip-git-repo-check",
-    ]
+    command = load_config(tmp_path).coding_agent_command
+    assert Path(command[0]).stem.lower() == "codex"
+    assert command[1:3] == ["exec", "--skip-git-repo-check"]
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/coding-agent.log"))
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
 
@@ -153,7 +242,7 @@ def test_init_shell_uses_demo_mock_agent_when_present(tmp_path, capsys) -> None:
     assert rc == 0
     config = load_config(tmp_path)
     assert config.worker == "shell"
-    assert config.shell_command == [sys.executable, "mock_coding_agent.py", "{objective}"]
+    assert config.shell_command == [sys.executable, "mock_coding_agent.py"]
     assert config.review_command == [sys.executable, "-m", "pytest", "tests/", "-q"]
     assert "Configured shell tool." in capsys.readouterr().out
 
@@ -341,7 +430,7 @@ def test_run_demo_fix_tests_executes_end_to_end(tmp_path, monkeypatch, capsys) -
     assert "Confirm starting tests fail" in output
     assert "Expected failure observed." in output
     assert "Recipe: fix-tests" in output
-    assert "Result: done" in output
+    assert "Result: Verified done" in output
     assert "Changed: 1 file" in output
     assert "- modified calculator.py" in output
     assert "Report: .agentic-harness/runs/" in output
@@ -460,7 +549,7 @@ def test_direct_recipe_auto_initializes_packaged_demo(tmp_path, capsys) -> None:
     assert rc == 0
     assert "Configured shell tool." in output
     assert "Recipe: fix-tests" in output
-    assert "Result: done" in output
+    assert "Result: Verified done" in output
     assert (demo / ".agentic-harness" / "config.yml").exists()
     assert list((demo / ".agentic-harness" / "runs").glob("*/shell-worker.log"))
     assert list((demo / ".agentic-harness" / "runs").glob("*/report.md"))
@@ -523,6 +612,12 @@ def test_start_here_shows_beginner_commands(capsys) -> None:
     assert "Creates config automatically" in output
     assert "agentic-harness status" in output
     assert "No prompt design" in output
+    gui = output.index("agentic-harness gui")
+    do = output.index('agentic-harness do "fix the failing tests" --check "python -m pytest -q"')
+    check = output.index("agentic-harness check", do)
+    report = output.index("agentic-harness report", check)
+    demo = output.index("agentic-harness run-demo fix-tests", report)
+    assert gui < do < check < report < demo
 
 
 def test_top_level_help_shows_beginner_guide() -> None:
@@ -550,6 +645,19 @@ def test_command_specific_help_still_works() -> None:
 
     assert proc.returncode == 0
     assert "usage: agentic-harness continue" in proc.stdout
+
+
+def test_check_help_stays_on_the_embedded_durable_result_path() -> None:
+    proc = subprocess.run(
+        [sys.executable, "-m", "agentic_harness.cli", "check", "--help"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0
+    assert "usage: agentic-harness check" in proc.stdout
+    assert "--doc-root" not in proc.stdout
 
 
 def test_release_smoke_help_is_available() -> None:
@@ -682,6 +790,7 @@ def test_installed_artifact_smoke_checks_version_commands(
     tmp_root = tmp_path / "smoke"
     labels: list[str] = []
     commands: dict[str, list[str]] = {}
+    required_outputs: dict[str, str | None] = {}
 
     def fake_run_release_step(
         label: str,
@@ -693,6 +802,7 @@ def test_installed_artifact_smoke_checks_version_commands(
     ) -> bool:
         labels.append(label)
         commands[label] = command
+        required_outputs[label] = required_stdout
         if label == "Smoke wheel run-until-done":
             project_dir = Path(command[command.index("--project-dir") + 1])
             run_dir = project_dir / ".agentic-harness" / "runs" / "goal"
@@ -770,6 +880,19 @@ def test_installed_artifact_smoke_checks_version_commands(
     assert "Smoke wheel run" in labels
     assert "Smoke wheel status default text" in labels
     assert "Smoke wheel run-until-done" in labels
+    independent_check = [
+        str(cli._venv_python(tmp_root / "wheel" / "venv")),
+        "-c",
+        "raise SystemExit(0)",
+    ]
+    for label in ("Smoke wheel run", "Smoke wheel run-until-done"):
+        command = commands[label]
+        check_index = command.index("--check")
+        assert cli.split_command(command[check_index + 1]) == independent_check
+        assert required_outputs[label] == "Result: Verified done"
+    assert required_outputs["Smoke wheel status default text"] == (
+        "Result: Verified done"
+    )
     assert "Smoke wheel strict goal" in labels
     assert "Smoke wheel recipe until-done" in labels
     assert "Smoke wheel run auto-config" in labels
@@ -802,7 +925,7 @@ def test_easy_shell_configures_and_runs_recipe(tmp_path, capsys) -> None:
     assert rc == 0
     assert "Configured shell tool." in output
     assert "Next: agentic-harness fix-tests" in output
-    assert "Result: done" in output
+    assert "Result: Verified done" in output
     assert load_config(tmp_path).worker == "shell"
 
 
@@ -864,7 +987,8 @@ def test_fix_tests_recipe_runs_with_plain_report(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -874,7 +998,7 @@ def test_fix_tests_recipe_runs_with_plain_report(tmp_path, capsys) -> None:
     output = capsys.readouterr().out
     assert rc == 0
     assert "Recipe: fix-tests" in output
-    assert "Result: done" in output
+    assert "Result: Verified done" in output
     assert "Review: passed" in output
     assert "Report: .agentic-harness/runs/" in output
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
@@ -897,7 +1021,7 @@ def test_verify_tests_alias_runs_with_report_artifact(tmp_path, capsys) -> None:
     output = capsys.readouterr().out
     assert rc == 0
     assert "Recipe: verify-tests" in output
-    assert "Result: done" in output
+    assert "Result: Verified done" in output
     assert "Report: .agentic-harness/runs/" in output
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
 
@@ -912,7 +1036,7 @@ def test_lint_fix_alias_failure_writes_report_artifact(tmp_path, capsys) -> None
     output = capsys.readouterr().out
     assert rc == 1
     assert "Recipe: lint-fix" in output
-    assert "Result: not done" in output
+    assert "Result: Failed with evidence" in output
     assert "Report: .agentic-harness/runs/" in output
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
 
@@ -927,7 +1051,7 @@ def test_run_recipe_auto_initializes_available_backend(
     output = capsys.readouterr().out
     assert rc == 1
     assert "Configured shell tool." in output
-    assert "Result: not done" in output
+    assert "Result: Failed with evidence" in output
     assert "Report: .agentic-harness/runs/" in output
     assert "no worker configured" not in output
     assert load_config(tmp_path).worker == "shell"
@@ -982,7 +1106,8 @@ def test_direct_recipe_until_done_restarts_failed_attempt_and_finishes(
     output = capsys.readouterr().out
     assert rc == 0
     assert "Recipe: fix-tests" in output
-    assert "Result: done" in output
+    assert "Result: Verified done" in output
+    assert "Status: verified done" in output
     assert "Report: .agentic-harness/runs/" in output
     assert (tmp_path / "attempts.txt").read_text(encoding="utf-8") == "2"
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
@@ -1021,6 +1146,22 @@ def test_recipe_result_keeps_no_worker_tip_for_programmatic_failures() -> None:
     output = cli.format_recipe_result_text(recipe, goal, report_path="report.md")
 
     assert "Tip: run agentic-harness init-agent codex before using coding recipes." in output
+
+
+def test_recipe_result_does_not_trust_legacy_raw_done() -> None:
+    recipe = load_recipe("fix-tests")
+    goal = Goal(
+        objective=recipe.objective,
+        status=GoalStatus.DONE,
+        review=worker_only_review(),
+    )
+
+    output = cli.format_recipe_result_text(recipe, goal)
+
+    assert "Result: Failed with evidence" in output
+    assert "Status: failed with evidence" in output
+    assert "Status: done" not in output
+    assert "Result: done" not in output
 
 
 def test_report_plain_text_for_no_active_run(tmp_path, capsys) -> None:
@@ -1089,6 +1230,26 @@ def test_next_reports_done_goal_next_step(tmp_path, capsys) -> None:
     assert rc == 0
     assert "State: goal" in output
     assert "is done" in output
+    assert "Verified done" in output
+    assert "Next: agentic-harness report" in output
+
+
+def test_next_does_not_describe_legacy_raw_done_as_trusted_completion(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    legacy = Supervisor(project_dir=tmp_path, allow_noop_success=True)
+    legacy.start("legacy next-step state")
+    legacy.continue_goal()
+    legacy.review()
+
+    output = cli.format_next_text(tmp_path)
+
+    assert "Failed with evidence" in output
+    assert "is done" not in output
     assert "Next: agentic-harness report" in output
 
 
@@ -1122,7 +1283,8 @@ def test_continue_without_active_goal_returns_json_and_does_not_poison_guard(
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -1177,7 +1339,8 @@ def test_review_reports_invalid_transition_as_json(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -1193,6 +1356,116 @@ def test_review_reports_invalid_transition_as_json(tmp_path, capsys) -> None:
     assert "cannot review" in error_payload["error"]
 
 
+def test_review_without_independent_verification_does_not_finalize_done(
+    tmp_path,
+    capsys,
+) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: shell",
+                "shell_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                '  - "print(\'worker exited zero\')"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert main(["--project-dir", str(tmp_path), "start", "require real evidence"]) == 0
+    capsys.readouterr()
+    assert main(["--project-dir", str(tmp_path), "continue"]) == 0
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "review"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["ok"] is False
+    assert "independent verification command" in payload["error"]
+    state_path = next((config_dir / "runs").glob("*/state.json"))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["status"] == "review"
+    assert state["review"] is None
+
+
+def test_review_verify_alias_runs_independent_check(tmp_path, capsys) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: shell",
+                "shell_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                '  - "print(\'worker exited zero\')"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert main(["--project-dir", str(tmp_path), "start", "verify independently"]) == 0
+    capsys.readouterr()
+    assert main(["--project-dir", str(tmp_path), "continue"]) == 0
+    capsys.readouterr()
+    verification = f'{sys.executable} -c "raise SystemExit(0)"'
+
+    rc = main(
+        [
+            "--project-dir",
+            str(tmp_path),
+            "review",
+            "--verify",
+            verification,
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["status"] == "done"
+    assert payload["review"]["criteria"][0]["independent"] is True
+
+
+def test_failed_independent_review_returns_nonzero(tmp_path, capsys) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: shell",
+                "shell_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                '  - "print(\'worker exited zero\')"',
+                "review_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                "  - 'raise SystemExit(1)'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert main(["--project-dir", str(tmp_path), "start", "fail the real check"]) == 0
+    capsys.readouterr()
+    assert main(["--project-dir", str(tmp_path), "continue"]) == 0
+    capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), "review"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert payload["status"] == "failed"
+    assert payload["review"]["passed"] is False
+
+
 def test_run_reports_missing_shell_executable_as_failed_goal(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
@@ -1203,6 +1476,10 @@ def test_run_reports_missing_shell_executable_as_failed_goal(tmp_path, capsys) -
                 "worker: shell",
                 "shell_command:",
                 "  - definitely-missing-agentic-harness-tool",
+                "review_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                "  - 'raise SystemExit(0)'",
                 "",
             ]
         ),
@@ -1747,7 +2024,7 @@ def test_review_cli_never_echoes_failed_command_output(
     assert main(["--project-dir", str(tmp_path), "continue"]) == 0
     capsys.readouterr()
 
-    assert main(["--project-dir", str(tmp_path), "review"]) == 0
+    assert main(["--project-dir", str(tmp_path), "review"]) == 1
     output = capsys.readouterr().out
 
     assert secret not in output
@@ -1771,7 +2048,8 @@ def test_cli_start_status_continue_review_round_trip(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -1791,6 +2069,131 @@ def test_cli_start_status_continue_review_round_trip(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "status", "--format", "json"]) == 0
     status = json.loads(capsys.readouterr().out)
     assert status["id"] == started["id"]
+    assert status["result_category"] == "verified_done"
+    assert status["result_label"] == "Verified done"
+
+
+def test_cli_review_override_executes_and_replaces_durable_check_attribution(
+    tmp_path, capsys
+) -> None:
+    baseline_script = tmp_path / "baseline-check.py"
+    baseline_marker = tmp_path / "baseline-ran.txt"
+    override_script = tmp_path / "override-check.py"
+    override_marker = tmp_path / "override-ran.txt"
+    write_marker_check(baseline_script, baseline_marker, returncode=1)
+    write_marker_check(override_script, override_marker)
+    baseline_command = [sys.executable, str(baseline_script)]
+    override_command = [sys.executable, str(override_script)]
+    write_noop_config_with_review(tmp_path, baseline_command)
+    supervisor = build_supervisor(tmp_path)
+    supervisor.start(
+        "review using the requested command",
+        metadata={
+            "interface": "cli",
+            "safety": {
+                "allowed_paths": ["src"],
+                "checks": [
+                    {
+                        "id": "check-1",
+                        "label": " ".join(baseline_command),
+                        "argv": baseline_command,
+                    }
+                ],
+                "path_enforcement": False,
+                "secret_env_names": [],
+                "preexisting_changes": ["owned.txt"],
+            },
+        },
+    )
+    supervisor.continue_goal()
+
+    rc = main(
+        [
+            "--project-dir",
+            str(tmp_path),
+            "review",
+            "--check",
+            format_command(override_command),
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["status"] == "done"
+    assert override_marker.read_text(encoding="utf-8") == "ran"
+    assert not baseline_marker.exists()
+    persisted = build_supervisor(tmp_path).status()
+    assert persisted is not None
+    safety = persisted.metadata["safety"]
+    assert safety["allowed_paths"] == ["src"]
+    assert safety["preexisting_changes"] == ["owned.txt"]
+    assert safety["checks"][0]["argv"] == override_command
+
+    assert main(["--project-dir", str(tmp_path), "report"]) == 0
+    report = capsys.readouterr().out
+    assert "override-check.py" in report
+    assert "baseline-check.py" not in report
+
+
+def test_cli_resume_override_executes_and_replaces_durable_check_attribution(
+    tmp_path, capsys
+) -> None:
+    baseline_script = tmp_path / "baseline-resume-check.py"
+    baseline_marker = tmp_path / "baseline-resume-ran.txt"
+    override_script = tmp_path / "override-resume-check.py"
+    override_marker = tmp_path / "override-resume-ran.txt"
+    write_marker_check(baseline_script, baseline_marker, returncode=1)
+    write_marker_check(override_script, override_marker)
+    baseline_command = [sys.executable, str(baseline_script)]
+    override_command = [sys.executable, str(override_script)]
+    write_noop_config_with_review(tmp_path, baseline_command)
+    supervisor = build_supervisor(tmp_path)
+    supervisor.start(
+        "resume using the requested command",
+        metadata={
+            "interface": "cli",
+            "safety": {
+                "allowed_paths": ["package"],
+                "checks": [
+                    {
+                        "id": "check-1",
+                        "label": " ".join(baseline_command),
+                        "argv": baseline_command,
+                    }
+                ],
+                "path_enforcement": False,
+                "secret_env_names": [],
+                "preexisting_changes": ["existing.patch"],
+            },
+        },
+    )
+    supervisor.continue_goal()
+
+    rc = main(
+        [
+            "--project-dir",
+            str(tmp_path),
+            "run-until-done",
+            "--check",
+            format_command(override_command),
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["status"] == "done"
+    assert override_marker.read_text(encoding="utf-8") == "ran"
+    assert not baseline_marker.exists()
+    safety = payload["metadata"]["safety"]
+    assert safety["allowed_paths"] == ["package"]
+    assert safety["preexisting_changes"] == ["existing.patch"]
+    assert safety["checks"][0]["argv"] == override_command
+
+    assert main(["--project-dir", str(tmp_path), "report"]) == 0
+    report = capsys.readouterr().out
+    assert "override-resume-check.py" in report
+    assert "baseline-resume-check.py" not in report
 
 
 def test_cli_status_text_reports_no_active_goal(tmp_path, capsys) -> None:
@@ -1807,7 +2210,8 @@ def test_cli_status_text_summarizes_active_goal(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -1818,10 +2222,11 @@ def test_cli_status_text_summarizes_active_goal(tmp_path, capsys) -> None:
 
     output = capsys.readouterr().out
     assert rc == 0
+    assert "Result: Verified done" in output
     assert "Goal:" in output
     assert "Objective: ship text status" in output
-    assert "Status: done" in output
-    assert "Worker: success" in output
+    assert "Status: verified done" in output
+    assert "Worker: passed" in output
     assert "Review: passed" in output
 
 
@@ -1829,7 +2234,8 @@ def test_cli_run_executes_start_continue_review_round_trip(tmp_path, capsys) -> 
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -1845,7 +2251,8 @@ def test_cli_run_default_output_writes_report(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -1854,7 +2261,7 @@ def test_cli_run_default_output_writes_report(tmp_path, capsys) -> None:
 
     output = capsys.readouterr().out
     assert rc == 0
-    assert "Result: done" in output
+    assert "Result: Verified done" in output
     assert "Objective: ship plain run output" in output
     assert "Report: .agentic-harness/runs/" in output
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
@@ -1911,7 +2318,8 @@ def test_run_until_done_default_output_writes_report(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -1920,7 +2328,7 @@ def test_run_until_done_default_output_writes_report(tmp_path, capsys) -> None:
 
     output = capsys.readouterr().out
     assert rc == 0
-    assert "Result: done" in output
+    assert "Result: Verified done" in output
     assert "Objective: ship report handoff" in output
     assert "Report: .agentic-harness/runs/" in output
     assert list((tmp_path / ".agentic-harness" / "runs").glob("*/report.md"))
@@ -2208,6 +2616,203 @@ def test_easy_do_uses_portable_project_engine_without_optional_sidecar(
     assert "preexisting_changes" in state["metadata"]["safety"]
 
 
+def test_easy_do_without_verification_fails_with_plain_guidance_before_goal_creation(
+    tmp_path,
+    capsys,
+) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: shell",
+                "shell_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                '  - "print(\'worker claim only\')"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rc = main(["--project-dir", str(tmp_path), "do", "prove this result"])
+
+    output = capsys.readouterr().out
+    assert rc == 2
+    assert output.startswith("Could not start verified work.\n")
+    assert "--check" in output
+    assert "No goal was started." in output
+    assert not (config_dir / "current.json").exists()
+    assert not (config_dir / "runs").exists()
+
+
+def test_easy_do_accepts_verify_alias_and_records_command(tmp_path, capsys) -> None:
+    worker = tmp_path / "worker.py"
+    worker.write_text(
+        "import json\n"
+        "outcome = {\"status\": \"complete\", \"summary\": \"claimed done\", "
+        "\"checkpoint\": \"ready\", \"current_subgoal\": \"final audit\", "
+        "\"plan\": [{\"step\": \"work\", \"status\": \"completed\"}], "
+        "\"requirements\": [{\"id\": \"R1\", \"status\": \"satisfied\", "
+        "\"evidence\": [\"review:1\"]}], \"blockers\": []}\n"
+        "print('HARNESS_RESULT_JSON=' + json.dumps(outcome))\n",
+        encoding="utf-8",
+    )
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: coding_agent",
+                "coding_agent_command:",
+                f"  - {sys.executable}",
+                f"  - {worker}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    verification = f'{sys.executable} -c "raise SystemExit(0)"'
+
+    rc = main(
+        [
+            "--project-dir",
+            str(tmp_path),
+            "do",
+            "finish with an explicit check",
+            "--verify",
+            verification,
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["status"] == "done"
+    assert payload["metadata"]["safety"]["checks"][0]["argv"] == [
+        sys.executable,
+        "-c",
+        "raise SystemExit(0)",
+    ]
+
+
+@pytest.mark.parametrize("command", ["run", "run-until-done"])
+def test_completion_commands_without_independent_verification_fail_before_goal_creation(
+    tmp_path,
+    capsys,
+    command,
+) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: shell",
+                "shell_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                '  - "print(\'worker claim only\')"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rc = main(["--project-dir", str(tmp_path), command, "do not trust worker exit"])
+
+    output = capsys.readouterr().out
+    assert rc == 2
+    assert "independent verification command" in output
+    assert "--check" in output
+    assert not (config_dir / "current.json").exists()
+    assert not (config_dir / "runs").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="single quotes are literal in Windows argv syntax")
+@pytest.mark.parametrize(
+    ("command_args", "needs_active_goal"),
+    [
+        (["run", "reject malformed check"], False),
+        (["run-until-done", "reject malformed check"], False),
+        (["goal", "reject malformed check"], False),
+        (["do", "reject malformed check"], False),
+        (["review"], True),
+    ],
+)
+def test_completion_commands_report_malformed_check_as_usage_error(
+    tmp_path,
+    capsys,
+    command_args: list[str],
+    needs_active_goal: bool,
+) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        encoding="utf-8",
+    )
+    if needs_active_goal:
+        supervisor = build_supervisor(tmp_path)
+        supervisor.start("review malformed check safely")
+        supervisor.continue_goal()
+
+    rc = main(
+        [
+            "--project-dir",
+            str(tmp_path),
+            *command_args,
+            "--check",
+            "'",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert rc == 2
+    assert "invalid --check command" in output
+
+
+@pytest.mark.parametrize("command", ["run-until-done", "goal"])
+def test_resuming_legacy_raw_done_never_returns_success(
+    tmp_path,
+    capsys,
+    command: str,
+) -> None:
+    verification = [sys.executable, "-c", "raise SystemExit(0)"]
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
+        encoding="utf-8",
+    )
+    legacy = Supervisor(project_dir=tmp_path, allow_noop_success=True)
+    legacy.start(
+        "legacy raw done with a saved check",
+        metadata={
+            "safety": {
+                "checks": [
+                    {
+                        "label": " ".join(verification),
+                        "argv": verification,
+                    }
+                ]
+            }
+        },
+    )
+    legacy.continue_goal()
+    legacy.review()
+
+    rc = main(["--project-dir", str(tmp_path), command, "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "done"
+    assert rc == 1
+
+
 def test_easy_do_reports_portable_setup_when_no_execution_method_exists(
     tmp_path,
     monkeypatch,
@@ -2318,7 +2923,7 @@ def test_run_recipe_with_failing_review_returns_one(tmp_path, capsys) -> None:
 
     output = capsys.readouterr().out
     assert rc == 1
-    assert "not done" in output
+    assert "Failed with evidence" in output
 
 
 def test_cli_report_for_no_active_goal(tmp_path, capsys) -> None:
@@ -2505,7 +3110,8 @@ def test_cli_accept_on_done_goal_returns_done(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -2524,7 +3130,8 @@ def test_cli_accept_with_reason_on_done_goal(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -2536,6 +3143,46 @@ def test_cli_accept_with_reason_on_done_goal(tmp_path, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert rc == 0
     assert payload["status"] == "done"
+
+
+@pytest.mark.parametrize(
+    ("finalize", "expected_status", "expected_label"),
+    [
+        (True, "done", "Failed with evidence"),
+        (False, "review", "In progress"),
+    ],
+)
+def test_cli_accept_rejects_legacy_worker_only_completion(
+    tmp_path,
+    capsys,
+    finalize: bool,
+    expected_status: str,
+    expected_label: str,
+) -> None:
+    legacy = Supervisor(project_dir=tmp_path, allow_noop_success=True)
+    legacy.start("legacy worker-only completion")
+    legacy.continue_goal()
+    legacy.review(finalize=finalize)
+
+    rc = main(
+        [
+            "--project-dir",
+            str(tmp_path),
+            "accept",
+            "--reason",
+            "verified manually",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 2
+    assert payload["ok"] is False
+    assert "cannot accept" in payload["error"]
+    assert expected_label in payload["error"]
+    persisted = legacy.status()
+    assert persisted is not None
+    assert persisted.status.value == expected_status
+    assert persisted.metadata.get("accepted") is not True
 
 
 def test_cli_accept_rejects_planning_goal(tmp_path, capsys) -> None:
@@ -2563,7 +3210,7 @@ def test_cli_accept_rejects_failed_goal(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\n",
+        "version: 1\nworker: noop\n" + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -2620,6 +3267,210 @@ def test_format_status_text_shows_no_active_goal() -> None:
     assert format_status_text(None) == "No active goal."
 
 
+def test_status_text_labels_legacy_raw_done_as_failed_with_evidence() -> None:
+    goal = Goal(
+        "legacy raw done state",
+        status=GoalStatus.DONE,
+        review=worker_only_review(),
+    )
+
+    output = cli.format_status_text(goal)
+
+    assert "Result: Failed with evidence" in output
+    assert "Status: failed with evidence" in output
+    assert "Status: done" not in output
+    assert "Result: Verified done" not in output
+
+
+def test_status_text_keeps_the_terminal_verification_receipt_visible() -> None:
+    goal = Goal(
+        "show the durable receipt",
+        status=GoalStatus.DONE,
+        metadata={
+            "attempt_history": [{"attempt": 1, "success": True}],
+            "safety": {
+                "checks": [
+                    {
+                        "label": "python -m pytest -q",
+                        "argv": ["python", "-m", "pytest", "-q"],
+                    }
+                ]
+            },
+        },
+        review={
+            "passed": True,
+            "criteria": [
+                {
+                    "name": "command_passes",
+                    "passed": True,
+                    "message": "independent command passed",
+                    "independent": True,
+                }
+            ],
+        },
+    )
+
+    output = cli.format_status_text(goal)
+
+    assert "Attempts: 1" in output
+    assert "Retries: 0" in output
+    assert "Verification commands:" in output
+    assert "- python -m pytest -q" in output
+    assert "independent command passed" in output
+
+
+def test_report_text_labels_legacy_raw_done_without_raw_done_status() -> None:
+    goal = Goal(
+        "legacy worker-only report state",
+        status=GoalStatus.DONE,
+        review=worker_only_review(),
+    )
+
+    output = cli.format_report_text(goal)
+
+    assert "Result: Failed with evidence" in output
+    assert "Status: failed with evidence" in output
+    assert "Status: done" not in output
+
+
+def test_status_json_normalizes_legacy_worker_only_done_to_failed(
+    tmp_path, capsys
+) -> None:
+    legacy = Supervisor(project_dir=tmp_path, allow_noop_success=True)
+    legacy.start("legacy worker-only terminal state")
+    legacy.continue_goal()
+    legacy.review()
+
+    rc = main(["--project-dir", str(tmp_path), "status", "--format", "json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["status"] == "failed"
+    assert payload["result_category"] == "failed"
+    assert payload["result_label"] == "Failed with evidence"
+    assert payload["history"][-1]["to"] == "done"
+    assert payload["history"][-1]["reason"] == "review passed"
+    assert "state_status" not in payload
+
+
+@pytest.mark.parametrize(
+    ("command_args", "start_first", "expected_rc"),
+    [
+        (["continue"], True, 0),
+        (["run", "redact worker JSON", "--json"], False, 1),
+        (
+            [
+                "run-until-done",
+                "redact resumed worker JSON",
+                "--max-attempts",
+                "1",
+                "--json",
+            ],
+            False,
+            1,
+        ),
+        (
+            ["do", "redact easy worker JSON", "--blocker-limit", "1", "--json"],
+            False,
+            1,
+        ),
+        (
+            ["goal", "redact goal worker JSON", "--blocker-limit", "1", "--json"],
+            False,
+            1,
+        ),
+        (["run-recipe", "fix-tests", "--json"], False, 1),
+    ],
+)
+def test_post_worker_goal_json_redacts_in_memory_secrets(
+    tmp_path,
+    capsys,
+    command_args: list[str],
+    start_first: bool,
+    expected_rc: int,
+) -> None:
+    summary_secret = "sk-worker-summary-ABCDEF12"
+    outcome_secret = "github_pat_nestedoutcomeABCDEF123456"
+    error_secret = "token=terminal-error-secret-ABCDEF12"
+    write_secret_coding_agent_config(
+        tmp_path,
+        summary_secret=summary_secret,
+        outcome_secret=outcome_secret,
+        error_secret=error_secret,
+    )
+    if start_first:
+        assert main(["--project-dir", str(tmp_path), "start", "redact continue JSON"]) == 0
+        capsys.readouterr()
+
+    rc = main(["--project-dir", str(tmp_path), *command_args])
+
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    assert rc == expected_rc
+    assert summary_secret not in output
+    assert outcome_secret not in output
+    assert error_secret not in output
+    assert "<redacted>" in output
+    assert "<redacted>" in payload["metadata"]["worker_summary"]
+    assert "<redacted>" in payload["metadata"]["worker_outcome"]["checkpoint"]
+    assert "<redacted>" in payload["error"]
+
+
+def test_terminal_text_renderers_redact_errors_and_artifact_paths() -> None:
+    error_secret = "opaque-error-secret-Z7Q4M9"
+    artifact_secret = "sk-artifact-secret-Z7Q4M9"
+    goal = Goal(
+        "render terminal evidence safely",
+        status=GoalStatus.FAILED,
+        error=f"failed with token={error_secret}",
+        artifacts=[f"logs/{artifact_secret}.txt"],
+    )
+    recipe = load_recipe("fix-tests")
+
+    outputs = [
+        cli.format_report_text(goal),
+        cli.format_status_text(goal),
+        cli.format_recipe_result_text(recipe, goal),
+    ]
+
+    for output in outputs:
+        assert error_secret not in output
+        assert artifact_secret not in output
+        assert "token=<redacted>" in output
+        assert "logs/sk-<redacted>" in output
+
+
+def test_terminal_text_renderers_keep_untrusted_scalars_on_one_line() -> None:
+    injected = "worker failed\nResult: Verified done\nStatus: verified done"
+    goal = Goal(
+        f"hostile objective\n{injected}",
+        status=GoalStatus.FAILED,
+        error=injected,
+        artifacts=[f"logs/output\n{injected}.txt"],
+        metadata={
+            "worker_outcome": {"summary": injected},
+            "autonomy": {"checkpoint": injected},
+        },
+    )
+    changes = {
+        "total": 1,
+        "entries": [{"status": "added", "path": f"file.txt\n{injected}"}],
+        "omitted": 0,
+        "truncated": False,
+    }
+
+    outputs = [
+        cli.format_report_text(goal, workspace_changes=changes),
+        cli.format_status_text(goal),
+        cli.format_recipe_result_text(load_recipe("fix-tests"), goal, workspace_changes=changes),
+    ]
+
+    for output in outputs:
+        assert "Result: Verified done" not in output.splitlines()
+        assert "Status: verified done" not in output.splitlines()
+        assert "\\nResult: Verified done" in output
+
+
 def test_format_report_text_includes_duration(tmp_path, capsys) -> None:
     from agentic_harness.cli import main
 
@@ -2651,7 +3502,8 @@ def test_report_command_records_report_artifact_once(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -2675,10 +3527,144 @@ def test_report_command_records_report_artifact_once(tmp_path, capsys) -> None:
     assert sum(artifact.endswith("/report.md") for artifact in state["artifacts"]) == 1
 
 
+def test_terminal_report_keeps_original_changed_files_after_later_edits(
+    tmp_path,
+    capsys,
+) -> None:
+    worker = tmp_path / "worker.py"
+    worker.write_text(
+        "from pathlib import Path\n"
+        "Path('first.txt').write_text('first\\n', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: shell",
+                "shell_command:",
+                f"  - {sys.executable}",
+                f"  - {worker}",
+                "review_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                "  - \"from pathlib import Path; assert Path('first.txt').exists()\"",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["--project-dir", str(tmp_path), "run", "create the first file"]) == 0
+    capsys.readouterr()
+    (tmp_path / "later.txt").write_text("unrelated later edit\n", encoding="utf-8")
+
+    assert main(["--project-dir", str(tmp_path), "report"]) == 0
+
+    output = capsys.readouterr().out
+    report_path = next((config_dir / "runs").glob("*/report.md"))
+    report = report_path.read_text(encoding="utf-8")
+    state_path = next((config_dir / "runs").glob("*/state.json"))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    frozen_paths = {
+        row["path"] for row in state["metadata"]["terminal_workspace_changes"]["entries"]
+    }
+    assert "first.txt" in output
+    assert "first.txt" in report
+    assert "first.txt" in frozen_paths
+    assert "later.txt" not in output
+    assert "later.txt" not in report
+    assert "later.txt" not in frozen_paths
+
+
 def test_format_report_text_shows_no_active_run() -> None:
     from agentic_harness.cli import format_report_text
 
     assert "No active run" in format_report_text(None)
+
+
+def test_report_text_separates_worker_claim_from_independent_receipt() -> None:
+    prior_review = {
+        "passed": False,
+        "criteria": [
+            {
+                "name": "command_passes",
+                "passed": False,
+                "message": "independent command failed with exit code 1",
+                "independent": True,
+            }
+        ],
+    }
+    current_review = {
+        "passed": True,
+        "criteria": [
+            {
+                "name": "command_passes",
+                "passed": True,
+                "message": "independent command passed",
+                "independent": True,
+            }
+        ],
+    }
+    goal = Goal(
+        "repair and prove the behavior",
+        status=GoalStatus.DONE,
+        metadata={
+            "worker_outcome": {"summary": "I finished everything"},
+            "review_history": [prior_review],
+            "autonomy": {"cycle": 2},
+            "safety": {
+                "checks": [
+                    {
+                        "label": "python -m pytest tests/ -q",
+                        "argv": ["python", "-m", "pytest", "tests/", "-q"],
+                    }
+                ]
+            },
+        },
+        review=current_review,
+    )
+
+    output = cli.format_report_text(goal)
+
+    assert "Result: Verified done" in output
+    assert "Status: verified done" in output
+    assert "Worker claim (untrusted): I finished everything" in output
+    assert "Reason: Independent verification passed." in output
+    assert "Attempts: 2" in output
+    assert "Retries: 1" in output
+    assert "Verification commands:" in output
+    assert "- python -m pytest tests/ -q" in output
+    assert "Verification attempts:" in output
+    assert "- Attempt 1: failed" in output
+    assert "- Attempt 2: passed" in output
+
+
+def test_report_text_labels_terminal_blocker_without_false_done() -> None:
+    goal = Goal(
+        "wait for a dependency",
+        status=GoalStatus.FAILED,
+        metadata={
+            "worker_outcome": {"summary": "worker said done"},
+            "autonomy": {
+                "status": "blocked",
+                "operator_intervention_required": True,
+                "blocker": {"reason": "required dependency is unavailable"},
+                "cycle": 1,
+            },
+        },
+        error="required dependency is unavailable",
+    )
+
+    output = cli.format_report_text(goal)
+
+    assert "Result: Blocked with reason" in output
+    assert "Status: blocked with reason" in output
+    assert "Reason: required dependency is unavailable" in output
+    assert "Worker claim (untrusted): worker said done" in output
+    assert "Verified done" not in output
 
 
 def test_cli_reset_loop_guard_resets_circuit_breaker(tmp_path, capsys) -> None:
@@ -2727,7 +3713,7 @@ def test_cli_restart_restarts_failed_goal(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\n",
+        "version: 1\nworker: noop\n" + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -2794,7 +3780,7 @@ def test_cli_restart_clears_metadata(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\n",
+        "version: 1\nworker: noop\n" + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()
@@ -2826,7 +3812,8 @@ def test_cli_repair_restores_current_marker(tmp_path, capsys) -> None:
     assert main(["--project-dir", str(tmp_path), "init"]) == 0
     config_path = tmp_path / ".agentic-harness" / "config.yml"
     config_path.write_text(
-        "version: 1\nworker: noop\nallow_noop_success: true\n",
+        "version: 1\nworker: noop\nallow_noop_success: true\n"
+        + PASSING_REVIEW_YAML,
         encoding="utf-8",
     )
     capsys.readouterr()

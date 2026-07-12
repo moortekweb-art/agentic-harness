@@ -72,10 +72,21 @@ jobs:
               "Scripts" if os.name == "nt" else "bin",
               "python.exe" if os.name == "nt" else "python",
           )
+          bin_dir = os.path.dirname(python_bin)
+          harness_bin = os.path.join(
+              bin_dir,
+              "agentic-harness.exe" if os.name == "nt" else "agentic-harness",
+          )
+          gui_bin = os.path.join(
+              bin_dir,
+              "agentic-harness-gui.exe" if os.name == "nt" else "agentic-harness-gui",
+          )
           wheels = glob.glob("dist/*.whl")
           if len(wheels) != 1:
               raise SystemExit(f"expected one built wheel, found {wheels!r}")
           subprocess.check_call([python_bin, "-m", "pip", "install", wheels[0]])
+          subprocess.check_call([harness_bin, "--version"])
+          subprocess.check_call([gui_bin, "--help"])
           subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "--help"])
           subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "--version"])
           subprocess.check_call([python_bin, "-m", "agentic_harness.cli", "version"])

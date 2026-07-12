@@ -7,6 +7,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from agentic_harness.core.presentation import safe_inline_text
+
 SNAPSHOT_SCHEMA = "agentic_harness.workspace_snapshot.v1"
 MAX_FILES = 5000
 MAX_HASH_BYTES = 1_000_000
@@ -80,14 +82,16 @@ def workspace_change_summary(
 def format_workspace_change_lines(summary: dict[str, Any] | None) -> list[str]:
     if summary is None:
         return []
+    if summary.get("evidence_unavailable") is True:
+        return ["Changed-file evidence: unavailable at the terminal boundary"]
     total = int(summary.get("total", 0))
     noun = "file" if total == 1 else "files"
     lines = [f"Changed: {total} {noun}"]
     for entry in summary.get("entries", []):
         if not isinstance(entry, dict):
             continue
-        status = str(entry.get("status", "changed"))
-        path = str(entry.get("path", ""))
+        status = safe_inline_text(entry.get("status", "changed"))
+        path = safe_inline_text(entry.get("path", ""))
         if path:
             lines.append(f"- {status} {path}")
     omitted = int(summary.get("omitted", 0))

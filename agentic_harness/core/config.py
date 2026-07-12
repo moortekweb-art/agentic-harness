@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from agentic_harness.core.errors import ConfigError
+from agentic_harness.core.safety import resolve_command_executable
 
 CONFIG_DIR = ".agentic-harness"
 CONFIG_NAME = "config.yml"
@@ -328,6 +329,14 @@ def _tool_config_content(project_dir: Path, tool: str) -> str:
     payload = yaml.safe_load(content)
     if not isinstance(payload, dict):
         raise ConfigError(f"invalid built-in config template for {tool}")
+    worker = payload.get("worker")
+    if isinstance(worker, dict):
+        command = worker.get("coding_agent_command")
+        if isinstance(command, list) and all(isinstance(item, str) for item in command):
+            worker["coding_agent_command"] = resolve_command_executable(
+                command,
+                always=True,
+            )
     detected = detect_review_command(project_dir)
     if detected:
         payload["review_command"] = detected
@@ -366,7 +375,7 @@ def demo_shell_config(*, python_executable: str | None = None) -> str:
     payload = {
         "version": 1,
         "worker": "shell",
-        "shell_command": [executable, "mock_coding_agent.py", "{objective}"],
+        "shell_command": [executable, "mock_coding_agent.py"],
         "review_command": [executable, "-m", "pytest", "tests/", "-q"],
         "review_command_timeout": 120,
     }

@@ -175,22 +175,6 @@ Anthropic, Gemini, Turnstone workstreams, MCP, parallel sub-agents, cluster
 routing, RBAC, and SSO are not silently provided by selecting the embedded
 backend.
 
-## Private Deployment Note
-
-> This note describes one maintainer environment, not public package behavior
-> or a release guarantee.
-
-The maintainer's external deployment manifest records a local-only Turnstone
-sidecar pinned to v1.7.2. The same manifest records v1.7.3 as
-`validated-promote-recommended`, meaning it is a validated promotion candidate,
-not proof that production has already been upgraded.
-
-That manifest, its wrapper, container images, ports, routing choices, service
-state, and promotion approval are outside this repository. Public users should
-select and verify their own Turnstone release from the
-[upstream repository](https://github.com/turnstonelabs/turnstone) rather than
-copying a private deployment pin.
-
 ## Verification Checklist for an Optional Adapter
 
 Before calling a Turnstone-backed deployment usable:

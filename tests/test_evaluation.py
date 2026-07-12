@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EVALUATION = ROOT / "evaluation"
 MANIFEST = EVALUATION / "tasks.json"
 RUNNER = EVALUATION / "run_gate_benchmark.py"
+REPRESENTATIVE = EVALUATION / "results" / "representative"
+V072_RELEASE_COMMIT = "751aead465edbdd09c2a93cc2162164c70a998ce"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -147,6 +149,57 @@ def test_manifest_contains_24_balanced_maintenance_tasks() -> None:
     assert all(task["maintenance_kind"] for task in tasks)
     assert all(task["initial"] != task["expected"] for task in tasks)
     assert all(task["incorrect"] not in {task["initial"], task["expected"]} for task in tasks)
+
+
+def test_checked_in_representative_data_is_the_immutable_v072_release_snapshot() -> None:
+    environment = json.loads((REPRESENTATIVE / "environment.json").read_text(encoding="utf-8"))
+    summary = json.loads((REPRESENTATIVE / "summary.json").read_text(encoding="utf-8"))
+    rows = _read_jsonl(REPRESENTATIVE / "raw.jsonl")
+    snapshot_readme = (REPRESENTATIVE / "README.md").read_text(encoding="utf-8")
+    evaluation_readme = (EVALUATION / "README.md").read_text(encoding="utf-8")
+
+    assert environment["git_commit"] == V072_RELEASE_COMMIT
+    assert environment["harness_version"] == "0.7.2"
+    assert environment["git_dirty"] is False
+    assert len(environment["source_checksums"]) == 9
+    assert environment["agent_command"] == [
+        "python",
+        "evaluation/scripted_coding_agent.py",
+    ]
+    assert environment["verifier_command"] == [
+        "python",
+        "evaluation/verify_fixture.py",
+    ]
+
+    assert summary["task_count"] == 24
+    assert summary["record_count"] == 48
+    assert summary["pristine_arm_mismatches"] == 0
+    assert len(rows) == 48
+    assert len({row["task_id"] for row in rows}) == 24
+    assert sum(row["arm"] == "baseline" for row in rows) == 24
+    assert sum(row["arm"] == "harness" for row in rows) == 24
+    assert summary["arms"]["baseline"]["runs"] == 24
+    assert summary["arms"]["harness"]["runs"] == 24
+    for task_id in {row["task_id"] for row in rows}:
+        assert {row["arm"] for row in rows if row["task_id"] == task_id} == {
+            "baseline",
+            "harness",
+        }
+
+    serialized_snapshot = "\n".join(
+        (REPRESENTATIVE / name).read_text(encoding="utf-8")
+        for name in ("environment.json", "raw.jsonl", "summary.json", "summary.md", "README.md")
+    )
+    assert "/mnt/raid0" not in serialized_snapshot
+    assert "/Users/" not in serialized_snapshot
+    assert "immutable v0.7.2 release snapshot" in snapshot_readme.casefold()
+    for name in ("environment.json", "raw.jsonl", "summary.json", "summary.md"):
+        assert f"`{name}`" in snapshot_readme
+    assert "those four files were copied byte-for-byte" in snapshot_readme.casefold()
+    assert V072_RELEASE_COMMIT in snapshot_readme
+    assert "validate against that tag commit, not current main" in snapshot_readme.casefold()
+    assert "immutable v0.7.2 release snapshot" in evaluation_readme.casefold()
+    assert "not current main" in evaluation_readme.casefold()
 
 
 def test_cli_compares_pristine_arms_and_catches_false_claims(tmp_path: Path) -> None:

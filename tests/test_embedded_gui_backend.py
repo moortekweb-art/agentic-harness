@@ -77,7 +77,7 @@ def _wait_for_terminal(backend: EmbeddedExecutionBackend) -> dict[str, object]:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         task = backend.status()
-        if task["status"] in {"done", "blocked", "stopped"}:
+        if task["status"] in {"done", "blocked", "failed"}:
             return task
         time.sleep(0.02)
     raise AssertionError(f"task did not finish: {backend.status()}")
@@ -189,7 +189,7 @@ def test_terminal_history_keeps_each_goals_original_changed_files(tmp_path) -> N
     assert "b.txt" not in first_paths
     assert "b.txt" in second_paths
     first_report = next(path for path in first.artifacts if Path(path).name == "report.md")
-    assert "Status: done" in EmbeddedExecutionBackend(tmp_path).preview_artifact(
+    assert "Result: Verified done" in EmbeddedExecutionBackend(tmp_path).preview_artifact(
         first_report,
         goal_id=first.id,
     )["content"]
@@ -579,7 +579,7 @@ def test_terminal_report_is_refreshed_after_blocked_goal_recovers(tmp_path) -> N
     final_report = backend.preview_artifact(report_path)["content"]
 
     assert finished["status"] == "done"
-    assert "Status: done" in final_report
+    assert "Result: Verified done" in final_report
     assert "Accepted: yes" in final_report
     assert final_report != blocked_report
 
@@ -637,8 +637,8 @@ print("HARNESS_RESULT_JSON=" + json.dumps({
     stopping = backend.stop()
     stopped = _wait_for_terminal(backend)
 
-    assert stopping["status"] in {"stopping", "stopped"}
-    assert stopped["status"] == "stopped"
+    assert stopping["status"] in {"stopping", "failed"}
+    assert stopped["status"] == "failed"
     assert stopped["final_result"]["accepted"] is False
     assert (tmp_path / "partial.txt").read_text(encoding="utf-8") == "kept"
     assert stopped["artifacts"]
@@ -672,7 +672,7 @@ def test_embedded_backend_stop_during_review_prevents_late_acceptance(tmp_path) 
     backend.stop()
     stopped = _wait_for_terminal(backend)
 
-    assert stopped["status"] == "stopped"
+    assert stopped["status"] == "failed"
     assert stopped["final_result"]["accepted"] is False
     assert backend.store.read_current_goal().metadata.get("accepted") is not True
 
@@ -698,5 +698,5 @@ def test_embedded_backend_stop_during_completion_audit_prevents_acceptance(
     backend.stop()
     stopped = _wait_for_terminal(backend)
 
-    assert stopped["status"] == "stopped"
+    assert stopped["status"] == "failed"
     assert stopped["final_result"]["accepted"] is False

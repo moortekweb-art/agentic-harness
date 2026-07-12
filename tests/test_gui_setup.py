@@ -9,11 +9,19 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.adapters.model_agent import ProviderResponse
+from agentic_harness.core.config import load_config
 from agentic_harness.core.factory import build_supervisor
-from agentic_harness.core.safety import format_command, goal_safety_metadata, split_command
+from agentic_harness.core.safety import (
+    command_uses_windows_shell,
+    format_command,
+    goal_safety_metadata,
+    resolve_command_executable,
+    split_command,
+)
 
 
 def test_windows_command_split_preserves_backslashes_and_removes_outer_quotes() -> None:
@@ -39,6 +47,25 @@ def test_windows_command_format_and_split_round_trip() -> None:
     assert split_command(format_command(command, windows=True), windows=True) == command
 
 
+def test_windows_command_resolution_uses_the_exact_discovered_shim(
+    monkeypatch,
+) -> None:
+    resolved = r"C:\Users\Michael\AppData\Roaming\npm\codex.cmd"
+    monkeypatch.setattr(
+        "agentic_harness.core.safety.shutil.which",
+        lambda executable: resolved if executable == "codex" else None,
+    )
+
+    command = resolve_command_executable(
+        ["codex", "exec", "{objective}"],
+        windows=True,
+    )
+
+    assert command == [resolved, "exec", "{objective}"]
+    assert command_uses_windows_shell(command, windows=True) is True
+    assert command_uses_windows_shell([r"C:\Tools\codex.exe"], windows=True) is False
+
+
 def test_setup_detects_project_specific_check_without_assuming_pytest(tmp_path: Path) -> None:
     (tmp_path / "package.json").write_text(
         json.dumps({"scripts": {"test": "vitest run"}}),
@@ -56,6 +83,481 @@ def test_setup_detects_project_specific_check_without_assuming_pytest(tmp_path: 
         "local_model",
         "cloud_model",
     }
+
+
+def test_setup_reports_available_agents_without_exposing_executable_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    locations = {
+        "codex": r"C:\Tools\Codex\codex.exe",
+        "codewhale": "/opt/private/bin/codewhale",
+    }
+    looked_up: list[str] = []
+
+    def find_agent(name: str) -> str | None:
+        looked_up.append(name)
+        return locations.get(name)
+
+    monkeypatch.setattr("shutil.which", find_agent)
+
+    setup = EmbeddedExecutionBackend(tmp_path).setup()
+    options = {option["key"]: option for option in setup["execution_options"]}
+    coding_agent = options["coding_agent"]
+
+    assert all(isinstance(option["available"], bool) for option in options.values())
+    assert all(isinstance(option["recommended"], bool) for option in options.values())
+    assert coding_agent["available"] is True
+    assert coding_agent["recommended"] is True
+    assert coding_agent["recommended_agent"] == "codex"
+    assert coding_agent["agents"] == [
+        {"key": "codex", "label": "Codex", "available": True, "recommended": True},
+        {
+            "key": "codewhale",
+            "label": "CodeWhale",
+            "available": True,
+            "recommended": False,
+        },
+        {
+            "key": "opencode",
+            "label": "OpenCode",
+            "available": False,
+            "recommended": False,
+        },
+        {"key": "aider", "label": "Aider", "available": False, "recommended": False},
+    ]
+    assert set(looked_up) == {"codex", "codewhale", "opencode", "aider"}
+    serialized = json.dumps(setup)
+    assert r"C:\Tools\Codex" not in serialized
+    assert "/opt/private/bin" not in serialized
+
+
+def test_setup_has_no_recommended_agent_when_none_are_available(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+
+    setup = EmbeddedExecutionBackend(tmp_path).setup()
+    coding_agent = next(
+        option for option in setup["execution_options"] if option["key"] == "coding_agent"
+    )
+
+    assert coding_agent["available"] is False
+    assert coding_agent["recommended"] is False
+    assert coding_agent["recommended_agent"] == ""
+    assert not any(agent["recommended"] for agent in coding_agent["agents"])
+
+
+def test_coding_agent_setup_rejects_an_unavailable_executable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with pytest.raises(ValueError, match="codex is not available on PATH"):
+        backend.configure(
+            {
+                "execution": "coding_agent",
+                "agent": "codex",
+                "verification_command": f"{sys.executable} -c \"print('verified')\"",
+            }
+        )
+
+    assert not (tmp_path / ".agentic-harness" / "config.yml").exists()
+
+
+def test_configured_coding_agent_keeps_its_public_label_after_reload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda name: f"/private/tools/{name}" if name == "codewhale" else None,
+    )
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    backend.configure(
+        {
+            "execution": "coding_agent",
+            "agent": "codewhale",
+            "verification_command": f"{sys.executable} -c \"print('verified')\"",
+        }
+    )
+
+    assert EmbeddedExecutionBackend(tmp_path).setup()["worker"] == {
+        "type": "coding_agent",
+        "agent": "codewhale",
+        "label": "CodeWhale",
+    }
+
+
+def test_configure_persists_the_resolved_coding_agent_executable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    resolved = tmp_path / "private" / "codex"
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda name: str(resolved) if name == "codex" else None,
+    )
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    backend.configure(
+        {
+            "execution": "coding_agent",
+            "agent": "codex",
+            "verification_command": f"{sys.executable} -c \"print('verified')\"",
+        }
+    )
+
+    assert load_config(tmp_path).coding_agent_command[0] == str(resolved)
+
+
+def test_configure_preserves_a_valid_existing_absolute_agent_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    executable = tmp_path / "private" / "codex"
+    executable.parent.mkdir()
+    executable.write_text("", encoding="utf-8")
+    executable.chmod(0o700)
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    original_command = [str(executable), "custom", "{objective}"]
+    (config_dir / "config.yml").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "worker": {
+                    "type": "coding_agent",
+                    "coding_agent_command": original_command,
+                },
+                "review_command": [sys.executable, "-c", "print('verified')"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    setup = backend.setup()
+    backend.configure(
+        {
+            "execution": "coding_agent",
+            "agent": "current",
+            "verification_command": f"{sys.executable} -c \"print('verified')\"",
+        }
+    )
+
+    coding_agent = next(
+        option for option in setup["execution_options"] if option["key"] == "coding_agent"
+    )
+    current = next(
+        agent for agent in coding_agent["agents"] if agent["key"] == "current"
+    )
+    assert current["available"] is True
+    assert setup["worker"] == {
+        "type": "coding_agent",
+        "agent": "current",
+        "label": "Current configured agent",
+    }
+    assert load_config(tmp_path).coding_agent_command == original_command
+
+
+def test_selecting_a_named_agent_explicitly_replaces_custom_argv(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    executable = tmp_path / "private" / "codex"
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    original_command = [str(executable), "custom", "{objective}"]
+    (config_dir / "config.yml").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "worker": {
+                    "type": "coding_agent",
+                    "coding_agent_command": original_command,
+                },
+                "review_command": [sys.executable, "-c", "print('verified')"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "agentic_harness.gui.backend.resolve_executable",
+        lambda name: str(executable) if name in {"codex", str(executable)} else None,
+    )
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    backend.configure(
+        {
+            "execution": "coding_agent",
+            "agent": "codex",
+            "verification_command": f"{sys.executable} -c \"print('verified')\"",
+        }
+    )
+
+    assert load_config(tmp_path).coding_agent_command == [
+        str(executable),
+        "exec",
+        "--skip-git-repo-check",
+        "{objective}",
+    ]
+
+
+def test_unknown_existing_coding_agent_config_keeps_a_generic_public_label(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker:",
+                "  type: coding_agent",
+                "  coding_agent_command:",
+                "    - custom-agent",
+                "    - run",
+                "    - '{objective}'",
+                "review_command:",
+                f"  - {sys.executable}",
+                "  - -c",
+                "  - print('verified')",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert EmbeddedExecutionBackend(tmp_path).setup()["worker"] == {
+        "type": "coding_agent",
+        "agent": "current",
+        "label": "Current configured agent",
+    }
+
+
+def test_custom_coding_agent_has_a_safe_current_option_and_round_trips(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    original_command = ["private-custom-agent", "run", "--profile", "secret-profile", "{objective}"]
+    (config_dir / "config.yml").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "worker": {
+                    "type": "coding_agent",
+                    "coding_agent_command": original_command,
+                    "coding_agent_timeout": 90_001,
+                    "coding_agent_transcript": "private/transcripts/{goal_id}.log",
+                },
+                "review_command": [sys.executable, "-c", "print('verified')"],
+                "review_command_timeout": 4_001,
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "agentic_harness.gui.backend.resolve_executable",
+        lambda executable: "/private/bin/custom-agent"
+        if executable == "private-custom-agent"
+        else None,
+    )
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    setup = backend.setup()
+    coding_agent = next(
+        option for option in setup["execution_options"] if option["key"] == "coding_agent"
+    )
+    backend.configure(
+        {
+            "execution": "coding_agent",
+            "agent": "current",
+            "verification_command": f"{sys.executable} -c \"print('still verified')\"",
+        }
+    )
+
+    assert setup["worker"] == {
+        "type": "coding_agent",
+        "agent": "current",
+        "label": "Current configured agent",
+    }
+    assert coding_agent["recommended_agent"] == "current"
+    assert {
+        "key": "current",
+        "label": "Current configured agent",
+        "available": True,
+        "recommended": True,
+    } in coding_agent["agents"]
+    assert "private-custom-agent" not in json.dumps(setup)
+    assert "secret-profile" not in json.dumps(setup)
+    assert "/private/bin" not in json.dumps(setup)
+    config = load_config(tmp_path)
+    assert config.coding_agent_command == original_command
+    assert config.coding_agent_timeout == 90_001
+    assert config.coding_agent_transcript == "private/transcripts/{goal_id}.log"
+    assert config.review_command_timeout == 4_001
+
+
+def test_model_setup_preserves_hidden_advanced_values_when_fields_are_absent(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "worker": "model_agent",
+                "llm": {
+                    "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+                    "model": "local-model",
+                    "max_steps": 75,
+                    "timeout": 4_444,
+                },
+                "llm_retries": 101,
+                "llm_retry_delay": 3_601.0,
+                "review_command": [sys.executable, "-c", "print('verified')"],
+                "review_command_timeout": 4_002,
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    backend.configure(
+        {
+            "execution": "local_model",
+            "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+            "model": "local-model",
+            "verification_command": f"{sys.executable} -c \"print('still verified')\"",
+        }
+    )
+
+    config = load_config(tmp_path)
+    assert config.llm_max_steps == 75
+    assert config.llm_timeout == 4_444
+    assert config.llm_retries == 101
+    assert config.llm_retry_delay == 3_601.0
+    assert config.review_command_timeout == 4_002
+
+
+@pytest.mark.parametrize(
+    ("worker", "settings"),
+    [
+        ("shell", {"shell_command": [sys.executable, "-c", "print('work')"]}),
+        ("tmux", {"tmux_command": "python worker.py"}),
+        (
+            "github_actions",
+            {
+                "github_owner": "owner",
+                "github_repo": "repo",
+                "github_workflow_id": "verify.yml",
+            },
+        ),
+        (
+            "local_llm",
+            {
+                "llm_endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+                "llm_model": "legacy-local-model",
+            },
+        ),
+    ],
+)
+def test_setup_is_read_only_for_worker_types_the_gui_cannot_faithfully_edit(
+    tmp_path: Path,
+    worker: str,
+    settings: dict[str, object],
+) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "worker": worker,
+                **settings,
+                "review_command": [sys.executable, "-c", "print('verified')"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    setup = EmbeddedExecutionBackend(tmp_path).setup()
+
+    assert setup["configured"] is True
+    assert setup["editable"] is False
+    assert setup["worker"]["type"] == worker
+
+
+def test_read_only_worker_setup_rejects_a_destructive_gui_save(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    config_path = config_dir / "config.yml"
+    original = yaml.safe_dump(
+        {
+            "version": 1,
+            "worker": "shell",
+            "shell_command": [sys.executable, "-c", "print('work')"],
+            "review_command": [sys.executable, "-c", "print('verified')"],
+        },
+        sort_keys=False,
+    )
+    config_path.write_text(original, encoding="utf-8")
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with pytest.raises(ValueError, match="read-only"):
+        backend.configure(
+            {
+                "execution": "local_model",
+                "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+                "model": "replacement-model",
+                "verification_command": f"{sys.executable} -c \"print('verified')\"",
+            }
+        )
+
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_readiness_refuses_config_without_independent_verification_command(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker:",
+                "  type: coding_agent",
+                "  coding_agent_command:",
+                "    - custom-agent",
+                "    - run",
+                "    - '{objective}'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    readiness = EmbeddedExecutionBackend(tmp_path).readiness()
+
+    assert readiness["state"] == "verification_required"
+    assert readiness["label"] == "Verification needed"
+    assert readiness["can_start"] is False
+    assert readiness["can_queue"] is False
+    assert "independent verification command" in readiness["summary"]
 
 
 def test_model_setup_keeps_entered_api_key_in_memory_only(tmp_path: Path) -> None:
@@ -129,6 +631,52 @@ def test_session_only_cloud_key_must_be_reentered_after_restart(tmp_path: Path) 
 
     assert restarted.readiness()["state"] == "credential_required"
     assert restarted.readiness()["can_start"] is False
+
+
+def test_editing_model_limits_preserves_the_existing_session_credential(
+    tmp_path: Path,
+) -> None:
+    backend = EmbeddedExecutionBackend(tmp_path)
+    body = {
+        "execution": "cloud_model",
+        "endpoint": "https://api.example.test/v1/chat/completions",
+        "model": "my-cloud-model",
+        "confirm_remote_data": True,
+        "verification_command": f"{sys.executable} -c \"print('verified')\"",
+    }
+    backend.configure({**body, "api_key": "temporary-secret"})
+
+    backend.configure({**body, "max_cycles": 12})
+
+    config = load_config(tmp_path)
+    assert config.llm_credential_source == "session"
+    assert backend.api_key == "temporary-secret"
+    assert backend.setup()["credential"] == {
+        "source": "session",
+        "configured": True,
+    }
+    assert backend.readiness()["state"] == "ready"
+
+
+def test_editing_after_restart_keeps_missing_session_key_explicit(
+    tmp_path: Path,
+) -> None:
+    first = EmbeddedExecutionBackend(tmp_path)
+    body = {
+        "execution": "cloud_model",
+        "endpoint": "https://api.example.test/v1/chat/completions",
+        "model": "my-cloud-model",
+        "confirm_remote_data": True,
+        "verification_command": f"{sys.executable} -c \"print('verified')\"",
+    }
+    first.configure({**body, "api_key": "temporary-secret"})
+    restarted = EmbeddedExecutionBackend(tmp_path)
+
+    restarted.configure({**body, "max_cycles": 12})
+
+    assert load_config(tmp_path).llm_credential_source == "session"
+    assert restarted.api_key is None
+    assert restarted.readiness()["state"] == "credential_required"
 
 
 def test_reentering_session_key_resumes_orphaned_goal(

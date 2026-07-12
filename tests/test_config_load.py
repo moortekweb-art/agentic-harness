@@ -569,7 +569,23 @@ def test_write_tool_config_opencode(tmp_path) -> None:
     assert path.exists()
     config = load_config(tmp_path)
     assert config.worker == "coding_agent"
-    assert "opencode" in config.coding_agent_command
+    assert Path(config.coding_agent_command[0]).stem.lower() == "opencode"
+    assert config.coding_agent_command[1:] == ["run", "{objective}"]
+
+
+def test_write_tool_config_materializes_the_discovered_agent_executable(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    resolved = r"C:\Users\Michael\AppData\Roaming\npm\codex.cmd"
+    monkeypatch.setattr(
+        "agentic_harness.core.safety.shutil.which",
+        lambda executable: resolved if executable == "codex" else None,
+    )
+
+    write_tool_config(tmp_path, tool="codex")
+
+    assert load_config(tmp_path).coding_agent_command[0] == resolved
 
 
 def test_write_tool_config_detects_node_review_command(tmp_path) -> None:

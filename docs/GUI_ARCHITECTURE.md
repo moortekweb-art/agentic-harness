@@ -34,8 +34,9 @@ structured completion claim
         v
 independent deterministic review
         |
-        +-- pass -> accepted result and preserved evidence
-        +-- fail -> repair cycle or explicit blocker
+        +-- pass -> Verified done
+        +-- wait -> Blocked with reason
+        +-- fail -> repair cycle or Failed with evidence
 ```
 
 The embedded model worker supports user-selected OpenAI-compatible endpoints
@@ -145,11 +146,18 @@ a countable denominator. Otherwise the GUI shows an active, indeterminate
 state. It reaches 100 percent only after the deterministic reviewer accepts the
 goal.
 
-Worker text is not completion evidence. A strict result needs a completed plan,
-satisfied requirements with evidence, no blockers, and an independent passing
-review command. Budget exhaustion, malformed output, missing credentials,
-failed checks, cancellation, and repeated no-progress cycles remain visibly
-blocked or stopped.
+Worker text is not completion evidence. The GUI derives its trusted result from
+durable state and independent review:
+
+- `Verified done` requires a completed plan, satisfied requirements with
+  evidence, no blockers, and an independent passing review command.
+- `Blocked with reason` identifies the missing credential, authority, operator
+  decision, repeated blocker, or exhausted resource that prevents progress.
+- `Failed with evidence` records a failed execution, failed independent check,
+  or cancellation while preserving the attempt and review evidence.
+
+Repairable failures return to the worker within the configured budgets. No
+worker-authored completion claim can select one of these trusted categories.
 
 ## Network boundary
 
@@ -180,7 +188,8 @@ A GUI release must prove:
 - keys do not enter configuration, URLs, events, history, exports, transcripts,
   or API responses;
 - interruption, restart, continuation, budget exhaustion, repeated blockers,
-  failed review, and successful acceptance have honest durable states;
+  and failed review map to `Blocked with reason` or `Failed with evidence`;
+- successful independent review maps to `Verified done`;
 - desktop and narrow layouts expose setup, progress, evidence, and recovery
   without overflow; and
 - wheel and source distributions contain both entry points and all browser

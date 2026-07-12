@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from agentic_harness.core.config import load_config
@@ -73,16 +74,27 @@ def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
     quick_start = readme.split("## Quick Start", 1)[1].split("## Product Boundary", 1)[0]
 
     assert len(quick_start.split()) <= 300
-    assert "pipx install local-agentic-harness" in quick_start
+    assert (
+        "pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git"
+        in quick_start
+    )
+    assert "latest published build is 0.7.2" in quick_start
+    assert "agentic-harness gui" in quick_start
+    assert (
+        'agentic-harness do "fix the failing tests" '
+        '--check "python -m pytest tests/ -q"'
+    ) in quick_start
+    assert ".agentic-harness/runs/<goal-id>/report.md" in quick_start
     assert "agentic-harness run-demo fix-tests" in quick_start
     assert "controlled mechanics demo" in quick_start
-    assert ".agentic-harness/runs/<goal-id>/report.md" in quick_start
-    assert "agentic-harness gui" in quick_start
     assert "agentic-harness create-demo" not in quick_start
     assert "python -m pip install -r requirements-dev.txt" not in quick_start
-    assert quick_start.index("agentic-harness run-demo") < quick_start.index("agentic-harness gui")
+    assert quick_start.index("agentic-harness gui") < quick_start.index("agentic-harness run-demo")
     assert "docs/demo-script.md" in quick_start
-    assert "under two minutes" in quick_start
+    assert "agentic-harness selftest" not in quick_start
+    assert "agentic-harness goal" not in quick_start
+    assert "agentic-harness quickstart" not in quick_start
+    assert "agentic-harness run-recipe" not in quick_start
     assert "agentic-harness lint-fix" in readme
     assert "agentic-harness typecheck-fix" in readme
     assert "agentic-harness update-docs" in readme
@@ -100,6 +112,37 @@ def test_readme_documents_released_distribution_install() -> None:
     assert "pipx install local-agentic-harness" in installation
     assert "The installed CLI command remains `agentic-harness`." in installation
     assert "After the first PyPI publish" not in installation
+
+
+def test_public_getting_started_docs_use_one_verified_task_story() -> None:
+    use_cases = (REPO_ROOT / "USE_CASES.md").read_text(encoding="utf-8")
+    examples = (REPO_ROOT / "examples/README.md").read_text(encoding="utf-8")
+
+    assert (
+        "pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git"
+        in use_cases
+    )
+    assert "latest PyPI release remains available" in use_cases
+    assert "agentic-harness gui" in use_cases
+    assert (
+        'agentic-harness do "draft release notes for the last three commits" '
+        '--check "python -m pytest tests/ -q"'
+    ) in use_cases
+    assert "cat > .agentic-harness/config.yml" not in use_cases
+    assert "github_token: token-from-your-secret-store" not in use_cases
+
+    demo = examples.index("fix-failing-tests-demo")
+    advanced = examples.index("## Advanced examples")
+    shell = examples.index("shell-worker")
+    assert demo < advanced < shell
+
+
+def test_package_description_leads_with_the_completion_gate() -> None:
+    payload = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert payload["project"]["description"] == (
+        "Run coding agents and only mark work done when independent checks pass."
+    )
 
 
 def test_gui_docs_describe_one_install_with_two_interfaces() -> None:
@@ -134,6 +177,7 @@ def test_evidence_contract_documents_common_cross_adapter_acceptance_boundary() 
 
 def test_readme_links_reproducible_gate_evaluation_without_model_quality_claims() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    normalized = " ".join(readme.casefold().split())
 
     assert "## Controlled Evaluation" in readme
     assert "24 task-behavior cases across six maintenance payloads" in readme
@@ -141,6 +185,9 @@ def test_readme_links_reproducible_gate_evaluation_without_model_quality_claims(
     assert "12 false accepts" in readme
     assert "0 false accepts" in readme
     assert "not a real-model benchmark" in readme
+    assert "immutable v0.7.2 release snapshot" in normalized
+    assert "validate it against the v0.7.2 tag, not current main" in normalized
+    assert "evaluation/results/representative/README.md" in readme
     assert "evaluation/results/representative/raw.jsonl" in readme
 
 
@@ -162,12 +209,41 @@ def test_active_product_docs_are_provider_neutral() -> None:
         assert "Mode 3A" not in text, path
 
 
+def test_public_product_docs_do_not_expose_private_infrastructure() -> None:
+    public_docs = [
+        REPO_ROOT / "README.md",
+        REPO_ROOT / "USE_CASES.md",
+        REPO_ROOT / "examples/README.md",
+        REPO_ROOT / "docs/TURNSTONE_INTEGRATION.md",
+    ]
+    private_markers = (
+        "/mnt/raid0",
+        "/Users/MikeMacMini",
+        "Hermes",
+        "Node1",
+        "Mode 3A",
+        "Utility Hub",
+    )
+
+    for path in public_docs:
+        text = path.read_text(encoding="utf-8")
+        normalized = text.casefold()
+        for marker in private_markers:
+            assert marker.casefold() not in normalized, (path, marker)
+
+    assert not (REPO_ROOT / "docs/agentic-harness-gui-design").exists()
+
+
 def test_turnstone_is_documented_as_an_optional_external_backend() -> None:
     guide = (REPO_ROOT / "docs/TURNSTONE_INTEGRATION.md").read_text(encoding="utf-8")
 
     assert "turnstonelabs/turnstone" in guide
     assert "optional" in guide.lower()
     assert "not bundled" in guide.lower()
+    assert "Private Deployment Note" not in guide
+    assert "maintainer's external deployment manifest" not in guide
+    assert "v1.7.2" not in guide
+    assert "v1.7.3" not in guide
 
 
 def test_gui_deployment_guide_is_portable_and_uses_placeholders() -> None:
@@ -198,17 +274,92 @@ def test_recovery_docs_preserve_failed_goal_evidence() -> None:
     assert "preserving its evidence" in readme
 
 
-def test_terminal_demo_script_uses_packaged_auto_config_path() -> None:
+def test_terminal_demo_script_uses_packaged_run_demo_path() -> None:
     script = (REPO_ROOT / "docs" / "demo-script.md").read_text(encoding="utf-8")
+    normalized = " ".join(script.split())
 
-    assert "Target recording length: 80-110 seconds." in script
-    assert "90-120 seconds" not in script
+    assert "Target: complete the recording in under two minutes." in script
+    assert "Record the actual elapsed time" in script
+    assert "seconds on Linux" not in script
+    assert "not a published-release performance guarantee" in script
+    assert "This is a target, not a measured result." not in normalized
     assert "agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force" in script
-    assert "agentic-harness create-demo fix-tests /tmp/agentic-harness-demo" in script
-    assert "agentic-harness fix-tests     # auto-creates demo config" in script
-    assert "agentic-harness status" in script
     assert "agentic-harness report" in script
+    assert "## Optional variants" in script
+    assert "agentic-harness create-demo" not in script
+    assert "agentic-harness quickstart" not in script
+    assert "agentic-harness status" not in script
     assert "cat > .agentic-harness/config.yml" not in script
+
+
+def test_public_demo_leads_with_one_canonical_path_and_trusted_receipts() -> None:
+    script = (REPO_ROOT / "docs/demo-script.md").read_text(encoding="utf-8")
+    normalized = " ".join(script.split())
+
+    canonical = script.split("## Optional variants", 1)[0]
+    assert "agentic-harness run-demo fix-tests" in canonical
+    assert "agentic-harness create-demo" not in canonical
+    assert "agentic-harness quickstart" not in canonical
+    assert "agentic-harness init-agent" not in canonical
+    assert "agentic-harness run-recipe" not in canonical
+    assert "Result: Verified done" in script
+    assert "Blocked with reason" in script
+    assert "Failed with evidence" in script
+    assert "Status: done" not in script
+    assert "Target: complete the recording in under two minutes." in script
+    assert "This is a target, not a measured result." not in normalized
+
+
+def test_public_gui_docs_use_the_exact_trusted_result_categories() -> None:
+    docs = [
+        REPO_ROOT / "docs/GUI_DESIGN.md",
+        REPO_ROOT / "docs/GUI_ARCHITECTURE.md",
+        REPO_ROOT / "docs/CODEX_GOAL_PARITY.md",
+    ]
+
+    for path in docs:
+        text = path.read_text(encoding="utf-8")
+        for category in ("Verified done", "Blocked with reason", "Failed with evidence"):
+            assert category in text, (path, category)
+        assert "### Done" not in text, path
+        assert "Status: done" not in text, path
+
+
+def test_public_cli_goal_examples_include_an_explicit_independent_check() -> None:
+    docs = [
+        REPO_ROOT / "docs/demo-script.md",
+        REPO_ROOT / "docs/CODEX_GOAL_PARITY.md",
+    ]
+
+    examples = []
+    for path in docs:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("agentic-harness do "):
+                examples.append((path, line))
+
+    assert examples
+    for path, command in examples:
+        assert " --check " in command, (path, command)
+
+
+def test_release_guides_are_generic_and_old_receipts_are_historical() -> None:
+    checklist = (REPO_ROOT / "docs/RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
+    publishing = (REPO_ROOT / "docs/PYPI_TRUSTED_PUBLISHING.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "The current source candidate is v0.7.2" not in checklist
+    assert "final accepted result" not in checklist
+    assert 'gh release view "$TAG"' in checklist
+    assert "was most recently verified by" not in publishing
+    assert "The steady state verified after v0.7.0" not in publishing
+    assert "gh release view v0.7.0" not in publishing
+    assert "gh run view 29159578285" not in publishing
+    assert "## Historical publication receipt: v0.7.0" in publishing
+
+
+def test_unresolved_launch_draft_is_not_shipped() -> None:
+    assert not (REPO_ROOT / "docs/launch-posts.md").exists()
 
 
 def test_killer_demo_readme_says_first_pytest_is_expected_to_fail() -> None:
@@ -247,11 +398,12 @@ def test_killer_demo_runs_failure_fix_review_cycle(tmp_path) -> None:
     )
 
     assert run.returncode == 0, run.stderr
-    assert "Result: done" in run.stdout
+    assert "Result: Verified done" in run.stdout
     assert "Review: passed" in run.stdout
     config = (demo / ".agentic-harness" / "config.yml").read_text(encoding="utf-8")
     assert "mock_coding_agent.py" in config
     assert sys.executable in config
+    assert "{objective}" not in config
 
     status = subprocess.run(
         [sys.executable, "-m", "agentic_harness.cli", "status"],
@@ -263,7 +415,7 @@ def test_killer_demo_runs_failure_fix_review_cycle(tmp_path) -> None:
     )
 
     assert status.returncode == 0, status.stderr
-    assert "Status: done" in status.stdout
+    assert "Status: verified done" in status.stdout
 
     report = subprocess.run(
         [sys.executable, "-m", "agentic_harness.cli", "report"],
@@ -275,12 +427,17 @@ def test_killer_demo_runs_failure_fix_review_cycle(tmp_path) -> None:
     )
 
     assert report.returncode == 0, report.stderr
-    assert "Result: done" in report.stdout
+    assert "Result: Verified done" in report.stdout
     assert "Review: passed" in report.stdout
     assert "Report: .agentic-harness/runs/" in report.stdout
     report_paths = list((demo / ".agentic-harness" / "runs").glob("*/report.md"))
     assert report_paths
-    assert "Report: .agentic-harness/runs/" in report_paths[0].read_text(encoding="utf-8")
+    report_text = report_paths[0].read_text(encoding="utf-8")
+    assert "Report: .agentic-harness/runs/" in report_text
+    assert "Worker claim (untrusted): fixed calculator for objective: Fix the failing tests" in (
+        report_text
+    )
+    assert "{objective}" not in report_text
     assert list((demo / ".agentic-harness" / "runs").glob("*/shell-worker.log"))
 
     after = subprocess.run(
@@ -334,7 +491,7 @@ def test_packaged_demo_generator_runs_failure_fix_review_cycle(tmp_path) -> None
     )
 
     assert run.returncode == 0, run.stderr
-    assert "Result: done" in run.stdout
+    assert "Result: Verified done" in run.stdout
     assert "Review: passed" in run.stdout
     config = (demo / ".agentic-harness" / "config.yml").read_text(encoding="utf-8")
     assert "mock_coding_agent.py" in config

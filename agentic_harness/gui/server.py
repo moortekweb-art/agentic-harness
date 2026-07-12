@@ -534,7 +534,8 @@ def make_handler(
                     task = service.status() if embedded else status_task(bridge)
                     if not embedded:
                         session.record(task)
-                    self.wfile.write(_websocket_text_frame(json.dumps(task, sort_keys=True)))
+                    message = redact_secrets(json.dumps(task, sort_keys=True))
+                    self.wfile.write(_websocket_text_frame(message))
                     self.wfile.flush()
                     time.sleep(2)
                 except OSError:

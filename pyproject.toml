@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "local-agentic-harness"
 version = "0.7.2"
-description = "A local-first, provider-neutral goal runner with a CLI, GUI, bounded tools, and deterministic review gates."
+description = "Run coding agents and only mark work done when independent checks pass."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 license = "MIT"

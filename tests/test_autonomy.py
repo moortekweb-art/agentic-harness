@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 
@@ -796,6 +797,351 @@ def test_autonomous_runner_resumes_same_goal_after_process_restart(tmp_path: Pat
     assert resumed.status is GoalStatus.DONE
     assert resumed.metadata["autonomy"]["cycle"] == 2
     assert "finish the second half" in second_worker.instructions[0]
+
+
+def test_autonomous_runner_reruns_review_after_interrupted_completion_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = Supervisor(
+        project_dir=tmp_path,
+        worker=SequenceWorker(
+            [
+                WorkerResult(
+                    success=True,
+                    summary="complete",
+                    outcome=complete_outcome(),
+                )
+            ]
+        ),
+        reviewer=passing_reviewer(),
+    )
+    original_audit = AutonomousRunner._completion_audit
+
+    def crash_after_review(
+        self: AutonomousRunner,
+        goal: Goal,
+        outcome: dict[str, object],
+    ) -> dict[str, object]:
+        raise RuntimeError("simulated crash after durable review")
+
+    monkeypatch.setattr(AutonomousRunner, "_completion_audit", crash_after_review)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        AutonomousRunner(first).step("preserve durable review evidence")
+
+    persisted = first.status()
+    assert persisted is not None
+    assert persisted.status is GoalStatus.REVIEW
+    assert persisted.review is not None
+    assert persisted.review["criteria"][0]["message"] == "focused check passed"
+    assert "completion_audit" not in persisted.metadata["autonomy"]
+
+    resumed_review_calls = 0
+
+    def replacement_review(goal: Goal) -> tuple[bool, str]:
+        nonlocal resumed_review_calls
+        resumed_review_calls += 1
+        return True, "resumed focused check passed"
+
+    monkeypatch.setattr(AutonomousRunner, "_completion_audit", original_audit)
+    resumed = Supervisor(
+        project_dir=tmp_path,
+        reviewer=DeterministicReviewer(
+            [ReviewCriterion(name="replacement_review", check=replacement_review)]
+        ),
+    )
+
+    goal = AutonomousRunner(resumed).step()
+
+    assert goal.status is GoalStatus.DONE
+    assert resumed_review_calls == 1
+    assert goal.review is not None
+    assert goal.review["criteria"][0]["message"] == "resumed focused check passed"
+    history = goal.metadata["review_history"]
+    assert [item["criteria"][0]["message"] for item in history] == [
+        "focused check passed"
+    ]
+    audit = goal.metadata["autonomy"]["completion_audit"]
+    assert audit["review"] == goal.review
+
+
+def test_resumed_completion_reruns_review_after_workspace_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = tmp_path / "result.txt"
+    artifact.write_text("good", encoding="utf-8")
+
+    def content_is_good(goal: Goal) -> tuple[bool, str]:
+        passed = artifact.read_text(encoding="utf-8") == "good"
+        return passed, "content is good" if passed else "content changed after review"
+
+    first = Supervisor(
+        project_dir=tmp_path,
+        worker=SequenceWorker(
+            [WorkerResult(success=True, summary="complete", outcome=complete_outcome())]
+        ),
+        reviewer=DeterministicReviewer(
+            [ReviewCriterion(name="content_is_good", check=content_is_good)]
+        ),
+    )
+    original_audit = AutonomousRunner._completion_audit
+
+    def crash_after_review(
+        self: AutonomousRunner,
+        goal: Goal,
+        outcome: dict[str, object],
+    ) -> dict[str, object]:
+        raise RuntimeError("simulated crash after durable review")
+
+    monkeypatch.setattr(AutonomousRunner, "_completion_audit", crash_after_review)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        AutonomousRunner(first).step("do not accept stale review evidence")
+
+    persisted = first.status()
+    assert persisted is not None
+    assert persisted.status is GoalStatus.REVIEW
+    assert persisted.review is not None
+    assert persisted.review["passed"] is True
+
+    artifact.write_text("bad", encoding="utf-8")
+    resumed_review_calls = 0
+
+    def changed_content_fails(goal: Goal) -> tuple[bool, str]:
+        nonlocal resumed_review_calls
+        resumed_review_calls += 1
+        return False, "content changed after review"
+
+    monkeypatch.setattr(AutonomousRunner, "_completion_audit", original_audit)
+    resumed = Supervisor(
+        project_dir=tmp_path,
+        reviewer=DeterministicReviewer(
+            [ReviewCriterion(name="content_is_good", check=changed_content_fails)]
+        ),
+    )
+
+    goal = AutonomousRunner(resumed).step()
+
+    assert resumed_review_calls == 1
+    assert goal.status is not GoalStatus.DONE
+    assert goal.metadata.get("accepted") is not True
+
+
+def test_resumed_completion_reruns_review_after_symlink_retarget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "good.txt").write_text("good", encoding="utf-8")
+    (tmp_path / "bad.txt").write_text("bad", encoding="utf-8")
+    selected = tmp_path / "selected.txt"
+    selected.symlink_to("good.txt")
+
+    def selected_is_good(goal: Goal) -> tuple[bool, str]:
+        passed = selected.read_text(encoding="utf-8") == "good"
+        return passed, "selected content is good" if passed else "selected content is bad"
+
+    first = Supervisor(
+        project_dir=tmp_path,
+        worker=SequenceWorker(
+            [WorkerResult(success=True, summary="complete", outcome=complete_outcome())]
+        ),
+        reviewer=DeterministicReviewer(
+            [ReviewCriterion(name="selected_is_good", check=selected_is_good)]
+        ),
+    )
+    original_audit = AutonomousRunner._completion_audit
+
+    def crash_after_review(
+        self: AutonomousRunner,
+        goal: Goal,
+        outcome: dict[str, object],
+    ) -> dict[str, object]:
+        raise RuntimeError("simulated crash after durable review")
+
+    monkeypatch.setattr(AutonomousRunner, "_completion_audit", crash_after_review)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        AutonomousRunner(first).step("do not accept stale symlink-selected evidence")
+
+    selected.unlink()
+    selected.symlink_to("bad.txt")
+    resumed_review_calls = 0
+
+    def changed_selection_fails(goal: Goal) -> tuple[bool, str]:
+        nonlocal resumed_review_calls
+        resumed_review_calls += 1
+        return False, "selected content is bad"
+
+    monkeypatch.setattr(AutonomousRunner, "_completion_audit", original_audit)
+    resumed = Supervisor(
+        project_dir=tmp_path,
+        reviewer=DeterministicReviewer(
+            [ReviewCriterion(name="selected_is_good", check=changed_selection_fails)]
+        ),
+    )
+    goal = AutonomousRunner(resumed).step()
+
+    assert resumed_review_calls == 1
+    assert goal.status is not GoalStatus.DONE
+    assert goal.metadata.get("accepted") is not True
+
+
+def test_resumed_completion_reruns_review_after_large_file_rewrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = tmp_path / "large.bin"
+    artifact.write_bytes(b"a" * 1_000_001)
+
+    def content_is_original(goal: Goal) -> tuple[bool, str]:
+        passed = artifact.read_bytes().startswith(b"a")
+        return passed, "large content is original" if passed else "large content changed"
+
+    first = Supervisor(
+        project_dir=tmp_path,
+        worker=SequenceWorker(
+            [WorkerResult(success=True, summary="complete", outcome=complete_outcome())]
+        ),
+        reviewer=DeterministicReviewer(
+            [ReviewCriterion(name="content_is_original", check=content_is_original)]
+        ),
+    )
+    original_audit = AutonomousRunner._completion_audit
+
+    def crash_after_review(
+        self: AutonomousRunner,
+        goal: Goal,
+        outcome: dict[str, object],
+    ) -> dict[str, object]:
+        raise RuntimeError("simulated crash after durable review")
+
+    monkeypatch.setattr(AutonomousRunner, "_completion_audit", crash_after_review)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        AutonomousRunner(first).step("do not accept stale large-file evidence")
+
+    stat = artifact.stat()
+    artifact.write_bytes(b"b" * 1_000_001)
+    os.utime(artifact, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    resumed_review_calls = 0
+
+    def changed_content_fails(goal: Goal) -> tuple[bool, str]:
+        nonlocal resumed_review_calls
+        resumed_review_calls += 1
+        return False, "large content changed"
+
+    monkeypatch.setattr(AutonomousRunner, "_completion_audit", original_audit)
+    resumed = Supervisor(
+        project_dir=tmp_path,
+        reviewer=DeterministicReviewer(
+            [ReviewCriterion(name="content_is_original", check=changed_content_fails)]
+        ),
+    )
+    goal = AutonomousRunner(resumed).step()
+
+    assert resumed_review_calls == 1
+    assert goal.status is not GoalStatus.DONE
+    assert goal.metadata.get("accepted") is not True
+
+
+def test_autonomous_runner_reruns_review_after_resumed_check_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline_command = ["python", "check-a.py"]
+    override_command = ["python", "check-b.py"]
+    baseline_review_calls = 0
+
+    def baseline_review(goal: Goal) -> tuple[bool, str]:
+        nonlocal baseline_review_calls
+        baseline_review_calls += 1
+        return True, "check A passed"
+
+    first = Supervisor(
+        project_dir=tmp_path,
+        worker=SequenceWorker(
+            [
+                WorkerResult(
+                    success=True,
+                    summary="complete",
+                    outcome=complete_outcome(),
+                )
+            ]
+        ),
+        reviewer=DeterministicReviewer(
+            [ReviewCriterion(name="command_passes", check=baseline_review)]
+        ),
+    )
+    first.start(
+        "attribute the command that actually passed",
+        metadata={
+            "safety": {
+                "checks": [
+                    {
+                        "id": "check-1",
+                        "label": "python check-a.py",
+                        "argv": baseline_command,
+                    }
+                ]
+            }
+        },
+    )
+    original_audit = AutonomousRunner._completion_audit
+
+    def crash_after_review(
+        self: AutonomousRunner,
+        goal: Goal,
+        outcome: dict[str, object],
+    ) -> dict[str, object]:
+        raise RuntimeError("simulated crash after check A")
+
+    monkeypatch.setattr(AutonomousRunner, "_completion_audit", crash_after_review)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        AutonomousRunner(first).step()
+    assert baseline_review_calls == 1
+
+    with first.store.autonomy_locked():
+        with first.store.locked():
+            overridden = first.store.read_current_goal()
+            assert overridden is not None
+            overridden.metadata["safety"]["checks"] = [
+                {
+                    "id": "check-1",
+                    "label": "python check-b.py",
+                    "argv": override_command,
+                }
+            ]
+            first.store.write_goal(overridden)
+
+    override_review_calls = 0
+
+    def override_review(goal: Goal) -> tuple[bool, str]:
+        nonlocal override_review_calls
+        override_review_calls += 1
+        return True, "check B passed"
+
+    monkeypatch.setattr(AutonomousRunner, "_completion_audit", original_audit)
+    resumed = Supervisor(
+        project_dir=tmp_path,
+        reviewer=DeterministicReviewer(
+            [ReviewCriterion(name="command_passes", check=override_review)]
+        ),
+    )
+
+    goal = AutonomousRunner(resumed).step()
+
+    assert goal.status is GoalStatus.DONE
+    assert override_review_calls == 1
+    assert goal.review is not None
+    assert goal.review["criteria"][0]["message"] == "check B passed"
+    history = goal.metadata["review_history"]
+    assert [item["criteria"][0]["message"] for item in history] == ["check A passed"]
+    current_context = goal.review["context"]
+    prior_context = history[0]["context"]
+    assert current_context["worker_run_id"] == goal.metadata["worker_run_id"]
+    assert prior_context["worker_run_id"] == goal.metadata["worker_run_id"]
+    assert (
+        current_context["verification_commands_sha256"]
+        != prior_context["verification_commands_sha256"]
+    )
 
 
 def test_autonomous_runner_rejects_a_changed_persisted_objective(tmp_path: Path) -> None:

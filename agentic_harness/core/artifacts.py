@@ -14,6 +14,7 @@ from typing import Any, Iterator, cast
 from agentic_harness.core.errors import StateLockError
 from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.state import Goal, SAFE_GOAL_ID
+from agentic_harness.core.workspace import workspace_change_summary
 
 fcntl = importlib.import_module("fcntl") if importlib.util.find_spec("fcntl") else None
 msvcrt = importlib.import_module("msvcrt") if importlib.util.find_spec("msvcrt") else None
@@ -96,6 +97,29 @@ class ArtifactStore:
         return candidate
 
     def write_goal(self, goal: Goal, *, make_current: bool = True) -> Path:
+        if (
+            goal.status.is_terminal
+            and not isinstance(goal.metadata.get("terminal_workspace_changes"), dict)
+        ):
+            try:
+                changes = workspace_change_summary(
+                    self.root.resolve().parent,
+                    goal.metadata.get("workspace_snapshot")
+                    if isinstance(goal.metadata.get("workspace_snapshot"), dict)
+                    else None,
+                    limit=100,
+                )
+            except OSError:
+                changes = None
+            if not isinstance(changes, dict):
+                changes = {
+                    "total": 0,
+                    "entries": [],
+                    "omitted": 0,
+                    "truncated": True,
+                    "evidence_unavailable": True,
+                }
+            goal.metadata["terminal_workspace_changes"] = changes
         run_dir = self.goal_dir(goal)
         run_dir.mkdir(parents=True, exist_ok=True)
         state_path = run_dir / "state.json"

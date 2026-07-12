@@ -1,153 +1,91 @@
 # Agentic Harness Terminal Demo Script
 
-Target recording length: 80-110 seconds.
+Target: complete the recording in under two minutes.
 
-This is a deterministic mechanics demo. It uses the packaged mock coding-agent
-worker to demonstrate the real failure, execution, evidence, and independent
-review lifecycle without requiring a model account or API key. It is not a
-model-quality benchmark or evidence that one coding agent outperforms another.
+Record the actual elapsed time with the review or release evidence. A timing
+from one development machine is not a published-release performance guarantee.
 
-The script uses real commands and summarizes the shape of expected output
-instead of scripted fake output. Run it from a clean terminal. A repository
-checkout is needed only for the development fallback.
+This deterministic mechanics demo uses the packaged mock coding-agent worker.
+It shows a real failing check, a repair, preserved evidence, and independent
+verification without requiring a model account or API key. It is not a
+model-quality benchmark.
 
 ## Setup
 
-Time: 10-15 seconds
-
-Command:
+This recording path describes current source behavior. Install it with:
 
 ```bash
-pipx install local-agentic-harness
+pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git
 ```
 
-Expected output summary:
+The same installation provides `agentic-harness` and `agentic-harness-gui`.
+The latest PyPI release remains 0.7.2 and can use earlier receipt wording until
+a later release includes these changes.
 
-- `pipx` creates an isolated environment.
-- The distribution is `local-agentic-harness` and installs both
-  `agentic-harness` and `agentic-harness-gui`.
-- If recording unpublished changes from a checkout, use the development
-  fallback:
+## Canonical recording path
 
-```bash
-python -m pip install -e .
-```
-
-## 1. Run The Complete Demo
-
-Time: 20-30 seconds
-
-Command:
+Run one command from a clean terminal:
 
 ```bash
 agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
 ```
 
-Expected output summary:
+The command creates an isolated demo project, installs its test dependency,
+shows the deliberate pytest failure, runs the packaged repair worker, and runs
+the independent pytest check again. Let the real output remain visible; do not
+paste fabricated sample output.
 
-- Creates the packaged fix-tests demo under `/tmp/agentic-harness-demo`.
-- Installs the demo test dependency.
-- Shows the initial pytest failure.
-- Runs `agentic-harness fix-tests`.
-- Prints `Status: done` and `Review: passed`.
-- Verifies the final pytest run passes.
+The final trusted receipt should show:
 
-## 2. Inspect The No-Hidden-YAML Path
+- `Result: Verified done`
+- the independent check and its passing result;
+- the changed file;
+- the number of attempts and retries; and
+- the durable report path below `.agentic-harness/runs/<goal-id>/report.md`.
 
-Time: 30-40 seconds
+Agentic Harness uses three explicit terminal result categories:
 
-Command:
+- `Verified done` — independent verification passed.
+- `Blocked with reason` — an operator decision, credential, authority, or
+  resource is required.
+- `Failed with evidence` — execution or independent verification failed and
+  the evidence was preserved.
+
+A worker saying “done” is an untrusted claim, not a result category.
+
+## Optional variants
+
+These variants come after the reproducible path above and are not part of its
+timing target.
+
+### Inspect the durable receipt
 
 ```bash
-rm -rf /tmp/agentic-harness-demo
-agentic-harness create-demo fix-tests /tmp/agentic-harness-demo
 cd /tmp/agentic-harness-demo
-python -m pip install -r requirements-dev.txt
-python -m pytest tests/ -q   # expected to fail
-agentic-harness fix-tests     # auto-creates demo config
-agentic-harness status
-agentic-harness report
-python -m pytest tests/ -q   # should pass
-```
-
-Expected output summary:
-
-- The first pytest run fails because `calculator.py` has a deliberate bug.
-- `fix-tests` creates `.agentic-harness/config.yml` for the generated demo.
-- The mock coding-agent worker edits `calculator.py`.
-- `status` prints `Status: done`.
-- `report` prints the run summary, review result, changed file, and report path.
-- The final pytest run passes.
-
-## 3. Show The Artifact Trail
-
-Time: 10-15 seconds
-
-Command:
-
-```bash
-find .agentic-harness -maxdepth 4 -type f | sort
-```
-
-Expected output summary:
-
-- Shows `.agentic-harness/config.yml`.
-- Shows `.agentic-harness/runs/<goal-id>/shell-worker.log`.
-- Shows `.agentic-harness/runs/<goal-id>/report.md`.
-- Shows saved goal state.
-
-## 4. Show The Shortest Path For This Machine
-
-Time: 10 seconds
-
-Command:
-
-```bash
-agentic-harness quickstart
-```
-
-Expected output summary:
-
-- If Codex, CodeWhale, OpenCode, or Aider is installed, prints the direct
-  `fix-tests` -> `status` -> `report` path for that backend.
-- If no coding-agent backend is installed, points back to the packaged shell
-  demo path.
-
-## Coding Agent Demo Variant
-
-Use this separate variant when recording with a real coding-agent backend
-instead of the deterministic mock mechanics demo. Its duration and result
-depend on that external agent and must not be presented as the reproducible
-80-110 second path above.
-
-Command:
-
-```bash
-agentic-harness init-agent codex --force
-agentic-harness run-recipe fix-tests --explain
-agentic-harness fix-tests
-agentic-harness status
 agentic-harness report
 ```
 
-Expected output summary:
+The report should repeat the trusted result, independent verification, changed
+file, attempts, and artifact location.
 
-- `init-agent codex --force` writes a Codex-backed config for the current
-  project.
-- `run-recipe fix-tests --explain` previews the objective and pytest review
-  gate without running the worker.
-- `fix-tests` reaches `done` only if the coding agent exits successfully and
-  the pytest review command passes.
-- The transcript is written under `.agentic-harness/runs/<goal-id>/`.
-- If tests fail, the goal status is `failed` with the review failure recorded
-  in state.
+### Run a real configured coding agent
 
-## Recording Tips
+Use this only in a project where a coding-agent worker has already been
+configured. Runtime and outcome depend on that external agent.
 
-- Use `asciinema rec agentic-harness-demo.cast` for a clean terminal recording.
-- Set terminal font size to 16-18 px before recording.
-- Use a dark, high-contrast theme so output remains readable.
-- Keep the terminal width around 100-120 columns.
-- Pause briefly after `run-demo`, `status`, and `report` so viewers can see the
-  completion gate and artifact path.
-- Do not paste sample output. Let the real command output appear on screen.
+```bash
+agentic-harness do "fix the failing tests" --check "python -m pytest tests/ -q"
+agentic-harness report
+```
+
+The explicit `--check` remains the acceptance boundary. The task can end as
+`Verified done`, `Blocked with reason`, or `Failed with evidence`; the coding
+agent cannot select the trusted category itself.
+
+## Recording tips
+
+- Use `asciinema rec agentic-harness-demo.cast` for a terminal recording.
+- Set the terminal font size to 16–18 px and width to roughly 100–120 columns.
+- Use a high-contrast theme.
+- Pause on the independent check and durable report path.
+- Record the actual duration alongside the release evidence.
