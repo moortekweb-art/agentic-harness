@@ -19,7 +19,13 @@ import pytest
 
 from agentic_harness.core.local_goal_bridge import CommandResult, LocalGoalBridge
 from agentic_harness.gui import server as gui_server_module
-from agentic_harness.gui.api import modes_payload, start_task, task_from_command_result
+from agentic_harness.gui.api import (
+    health_payload,
+    modes_payload,
+    start_task,
+    status_task,
+    task_from_command_result,
+)
 from agentic_harness.gui.server import (
     GuiPortUnavailable,
     GuiSecurityError,
@@ -39,10 +45,10 @@ def test_gui_modes_use_human_labels() -> None:
     labels = [mode["label"] for mode in modes_payload()]
 
     assert labels == [
-        "Use this computer",
-        "Plan, then execute",
-        "Use a long-running orchestrator",
-        "Try an experimental executor",
+        "Quick task",
+        "Plan first",
+        "Keep working",
+        "Safe experiment",
     ]
 
 
@@ -58,6 +64,156 @@ def test_default_gui_surface_has_no_manual_babysitting_control() -> None:
     assert 'id="startButton" title="Start this verified goal" disabled' in html
     assert 'id="continueButton" hidden' in html
     assert 'id="acceptButton" hidden' in html
+
+
+def test_gui_api_exposes_only_state_appropriate_human_actions() -> None:
+    working = task_from_command_result(
+        CommandResult(("status",), 0, '{"classification":"working"}', ""),
+        fallback_status="working",
+    )
+    review = task_from_command_result(
+        CommandResult(("status",), 0, '{"classification":"needs_review"}', ""),
+        fallback_status="checking",
+    )
+    ready = task_from_command_result(
+        CommandResult(("status",), 0, '{"classification":"idle","active_goal":null}', ""),
+        fallback_status="ready",
+    )
+
+    assert [row["action"] for row in working["allowed_actions"]] == ["stop"]
+    assert [row["action"] for row in review["allowed_actions"]] == [
+        "continue",
+        "accept",
+        "stop",
+    ]
+    assert ready["allowed_actions"] == []
+
+
+def test_managed_acceptance_becomes_verified_gui_result_only_with_matching_last_run() -> None:
+    run_dir = "/tmp/reports/runs/goal-1"
+    status_payload = {
+        "contract": "local_node1_goal_supervisor.v1",
+        "classification": "accepted",
+        "active_goal": {"accepted": True, "run_dir": run_dir},
+        "goal_state": {"accepted": True, "phase": "done", "review_status": "accepted"},
+        "useful_execution": {"useful": True, "evidence_grounded": True},
+    }
+    last_run_payload = {
+        "contract": "local_node1_goal_last_run_summary.v1",
+        "available": True,
+        "status": "complete",
+        "review_status": "accepted",
+        "run_dir": run_dir,
+        "prompt_path": f"{run_dir}/prompt.md",
+        "complete_source": "global",
+        "summary": "Installed capability: created the requested note.",
+        "owned_file_count": 1,
+        "owned_files_sample": ["reports/quick-task-test.md"],
+        "verification_count": 2,
+        "verification": ["file exists: pass", "content confirmed"],
+    }
+
+    class AcceptedBridge:
+        def available(self) -> bool:
+            return True
+
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(("status", "--json"), 0, json.dumps(status_payload), "")
+
+        def last_run(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(("last-run", "--json"), 0, json.dumps(last_run_payload), "")
+
+    task = status_task(AcceptedBridge())  # type: ignore[arg-type]
+
+    assert task["status"] == "done"
+    assert task["result_category"] == "verified_done"
+    assert task["final_result"]["accepted"] is True
+    assert task["changed_files"] == ["reports/quick-task-test.md"]
+    assert len(task["verification"]) == 2
+    assert task["allowed_actions"] == []
+
+
+def test_managed_acceptance_rejects_mismatched_last_run() -> None:
+    status_payload = {
+        "contract": "local_node1_goal_supervisor.v1",
+        "classification": "accepted",
+        "active_goal": {"accepted": True, "run_dir": "/tmp/runs/current"},
+        "goal_state": {"accepted": True, "phase": "done", "review_status": "accepted"},
+        "useful_execution": {"useful": True, "evidence_grounded": True},
+    }
+    stale_last_run = {
+        "contract": "local_node1_goal_last_run_summary.v1",
+        "available": True,
+        "status": "complete",
+        "review_status": "accepted",
+        "run_dir": "/tmp/runs/stale",
+        "complete_source": "global",
+        "summary": "Installed capability: stale result.",
+        "owned_file_count": 0,
+        "owned_files_sample": [],
+        "verification_count": 1,
+        "verification": ["stale check passed"],
+    }
+
+    class MismatchedBridge:
+        def available(self) -> bool:
+            return True
+
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(("status", "--json"), 0, json.dumps(status_payload), "")
+
+        def last_run(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(("last-run", "--json"), 0, json.dumps(stale_last_run), "")
+
+    task = status_task(MismatchedBridge())  # type: ignore[arg-type]
+
+    assert task["status"] == "needs_review"
+    assert task["result_category"] == "in_progress"
+
+
+def test_managed_acceptance_health_gate_frees_the_next_goal() -> None:
+    run_dir = "/tmp/reports/runs/goal-2"
+    status_payload = {
+        "contract": "local_node1_goal_supervisor.v1",
+        "classification": "accepted",
+        "active_goal": {"accepted": True, "run_dir": run_dir},
+        "goal_state": {"accepted": True, "phase": "done", "review_status": "accepted"},
+        "useful_execution": {"useful": True, "evidence_grounded": True},
+    }
+    last_run_payload = {
+        "contract": "local_node1_goal_last_run_summary.v1",
+        "available": True,
+        "status": "complete",
+        "review_status": "accepted",
+        "run_dir": run_dir,
+        "complete_source": "global",
+        "summary": "Installed capability: accepted work.",
+        "owned_file_count": 0,
+        "owned_files_sample": [],
+        "verification_count": 1,
+        "verification": ["review passed"],
+    }
+
+    class AcceptedHealthBridge:
+        local_goal = Path("/tmp/local-goal")
+
+        def available(self) -> bool:
+            return True
+
+        def background_supervision(self) -> dict[str, object]:
+            return {"active": True, "summary": "active"}
+
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(("status", "--json"), 0, json.dumps(status_payload), "")
+
+        def last_run(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(("last-run", "--json"), 0, json.dumps(last_run_payload), "")
+
+    health = health_payload(AcceptedHealthBridge())  # type: ignore[arg-type]
+
+    assert health["readiness"]["state"] == "done"
+    assert health["readiness"]["can_start"] is True
+    assert health["readiness"]["requires_review"] is False
 
 
 def test_gui_uses_local_custom_icons_across_primary_controls() -> None:
@@ -611,7 +767,8 @@ def test_start_task_refuses_unowned_background_work() -> None:
 
     assert task["status"] == "blocked"
     assert task["needs_human"] is True
-    assert "supervision" in task["summary"].lower()
+    assert "background assistant is paused" in task["summary"].lower()
+    assert "workspace owner" in task["summary"].lower()
     assert bridge.commands == []
 
 
@@ -639,7 +796,7 @@ def test_gui_server_get_api_routes_return_json() -> None:
     assert health["no_babysitting"]["enabled"] is True
     assert health["readiness"]["agent_loop"]["stage"] == "Act"
     assert readiness["agent_loop"]["stage"] == "Act"
-    assert modes["modes"][0]["label"] == "Use this computer"
+    assert modes["modes"][0]["label"] == "Quick task"
     assert tasks["tasks"][0]["status"] == "working"
     assert current["status"] == "working"
     assert details["task"]["status"] == "working"
@@ -901,11 +1058,13 @@ def test_gui_frontend_plumbs_token_without_persisting_or_exporting_it() -> None:
     assert "tokenQuery" not in app
 
 
-def test_gui_frontend_uses_one_verified_goal_without_model_named_modes() -> None:
+def test_gui_frontend_keeps_embedded_flow_single_and_legacy_modes_human_named() -> None:
     app = Path("agentic_harness/gui/static/app.js").read_text(encoding="utf-8")
 
-    assert "mode:" not in app
+    assert 'worker?.type === "local_goal"' in app
+    assert "renderModes(payload.modes || [])" in app
     assert 'objective: els.objective.value.trim()' in app
+    assert "mode: state.mode" in app
     assert "allowed_actions" in app
 
 
@@ -1085,7 +1244,7 @@ def test_gui_server_post_task_workflow_routes() -> None:
     assert accepted["status"] == "done"
     assert stopped["status"] == "stopped"
     assert bridge.commands == [
-        ["enqueue", "--harness-contract", "agentic_harness.external_candidate.v1", "--planner", "planner", "--executor", "executor", "--executor-worker", "long-horizon", "--goal", "GOAL_CONTENT"],
+        ["enqueue", "--harness-contract", "agentic_harness.external_candidate.v1", "--planner", "gpt-5.5", "--executor", "opencode", "--executor-worker", "opencode-kimi-build", "--goal", "GOAL_CONTENT"],
         ["monitor", "--auto-continue", "--auto-dispatch", "--auto-commit-owned", "--json"],
         ["continue", "--feedback", "keep going"],
         ["accept"],

@@ -20,6 +20,8 @@ def test_gui_exposes_setup_goal_progress_and_result_without_machine_specific_cop
         'id="testConnectionButton"',
         'id="connectionResult"',
         'id="workspacePath"',
+        'id="modeSection"',
+        'id="modes"',
         'id="currentSubgoal"',
         'id="checkpoint"',
         'id="planList"',
@@ -100,10 +102,19 @@ def test_gui_recovers_from_slow_requests_and_failed_status_streams() -> None:
     assert 'socket.addEventListener("close", () => {\n    schedulePolling();' in javascript
 
 
-def test_gui_primary_form_puts_required_verification_before_optional_scope() -> None:
+def test_gui_status_stream_advances_managed_work_without_babysitting() -> None:
+    server = Path("agentic_harness/gui/server.py").read_text(encoding="utf-8")
+
+    assert "STREAM_MONITOR_INTERVAL_SECONDS = 8.0" in server
+    assert "task = watch_task(bridge)" in server
+    assert "next_monitor_at = time.monotonic() + STREAM_MONITOR_INTERVAL_SECONDS" in server
+
+
+def test_gui_primary_form_puts_mode_and_verification_before_optional_scope() -> None:
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     objective = html.index('id="objective"')
+    modes = html.index('id="modes"')
     verification = html.index('id="checks"')
     optional_scope = html.index('class="boundaries"')
     safe_areas = html.index('id="safeAreas"')
@@ -112,7 +123,9 @@ def test_gui_primary_form_puts_required_verification_before_optional_scope() -> 
     assert "Verification command for this goal" in html[:optional_scope]
     assert "Pre-filled from Setup. Edit it here to override the default for this run." in html
     assert "Default verification command for this workspace" in html
-    assert objective < verification < optional_scope < safe_areas
+    assert "create, repair, check, or deliver something" in html
+    assert "question that only needs an answer" in html
+    assert objective < modes < verification < optional_scope < safe_areas
     assert "Add scope and checks" not in html
     assert 'id="startHelp" role="status"' in html
 
@@ -124,6 +137,8 @@ def test_gui_explains_why_start_is_disabled() -> None:
     assert "Add the verification command that will prove this goal is complete" in javascript
     assert "Describe the outcome you want before starting." in javascript
     assert "Ready to start this verified goal." in javascript
+    assert "The assistant will choose checks and show the evidence" in javascript
+    assert "mode: state.mode" in javascript
 
 
 def test_gui_primary_actions_and_disabled_cursor_match_interaction_state() -> None:

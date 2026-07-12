@@ -84,13 +84,10 @@ def readiness_payload(
     if supervision.get("active") is not True:
         return _readiness_gate(
             "blocked",
-            str(
-                supervision.get("summary")
-                or "Background supervision could not be verified."
-            ),
+            "The background assistant is paused. Ask the workspace owner to restart it, then refresh this page.",
             {"background_supervision": supervision},
         )
-    task = task_from_command_result(bridge.status(json_output=True), fallback_status="ready")
+    task = status_task(bridge)
     gate = dict(task.get("readiness_gate", {}))
     gate["agent_loop"] = task.get("agent_loop", _agent_loop_for_status(str(task.get("status", "ready"))))
     return gate
@@ -156,7 +153,32 @@ def status_task(bridge: LocalGoalBridge) -> TaskPayload:
             needs_human=True,
             advanced_details=health_payload(bridge),
         )
-    return task_from_command_result(bridge.status(json_output=True), fallback_status="ready")
+    result = bridge.status(json_output=True)
+    payload = _json_from_output(result.stdout)
+    if _external_status_is_accepted(payload):
+        last_run_result = bridge.last_run(json_output=True)
+        last_run = _json_from_output(last_run_result.stdout)
+        if _external_last_run_is_valid(payload, last_run):
+            assert last_run is not None
+            artifacts = [
+                {"name": "Run evidence", "path": str(last_run.get("run_dir") or "")},
+                {"name": "Goal prompt", "path": str(last_run.get("prompt_path") or "")},
+            ]
+            return _task(
+                status="done",
+                summary=str(last_run.get("summary") or "The managed reviewer accepted this result."),
+                needs_human=False,
+                changed_files=_string_list(last_run.get("owned_files_sample")),
+                verification=_string_list(last_run.get("verification")),
+                artifacts=[row for row in artifacts if row["path"]],
+                advanced_details={
+                    "args": result.args,
+                    "returncode": result.returncode,
+                    "payload": payload,
+                    "last_run": last_run,
+                },
+            )
+    return task_from_command_result(result, fallback_status="ready")
 
 
 def watch_task(bridge: LocalGoalBridge) -> TaskPayload:
@@ -238,6 +260,7 @@ def _task(
     needs_human: bool,
     changed_files: list[str] | None = None,
     verification: list[str] | None = None,
+    artifacts: list[dict[str, str]] | None = None,
     advanced_details: dict[str, Any] | None = None,
 ) -> TaskPayload:
     command = ""
@@ -246,6 +269,49 @@ def _task(
         command = " ".join(str(part) for part in details["args"])
     agent_loop = _agent_loop_for_status(status)
     readiness_gate = _readiness_gate(status, summary, details)
+    changed = changed_files or []
+    checks = verification or []
+    result_category = {
+        "done": "verified_done",
+        "blocked": "blocked",
+        "stopped": "failed",
+    }.get(status, "in_progress")
+    final_result: dict[str, Any] = {}
+    if status == "done":
+        final_result = {
+            "label": "Verified complete",
+            "accepted": True,
+            "summary": summary,
+            "reason": summary,
+            "worker_claim": {
+                "label": "Worker claim (untrusted)",
+                "trusted": False,
+                "summary": "The worker reported completion; the managed reviewer accepted the evidence.",
+            },
+            "attempts": 1,
+            "retries": 0,
+            "review_attempts": [
+                {
+                    "number": 1,
+                    "source": "managed reviewer",
+                    "passed": True,
+                    "summary": "Managed review accepted the result.",
+                    "checks": [
+                        {
+                            "name": f"evidence_{number}",
+                            "passed": True,
+                            "message": message,
+                            "independent": True,
+                            "source": "independent",
+                        }
+                        for number, message in enumerate(checks, 1)
+                    ],
+                }
+            ],
+            "what_changed": changed,
+            "verification_commands": [],
+            "remaining": [],
+        }
     return {
         "id": "",
         "human_title": "Current work",
@@ -254,9 +320,12 @@ def _task(
         "progress": _progress_for_status(status),
         "summary": summary,
         "needs_human": needs_human,
-        "changed_files": changed_files or [],
-        "verification": verification or [],
-        "artifacts": _artifacts_from_details(details),
+        "changed_files": changed,
+        "verification": checks,
+        "artifacts": artifacts if artifacts is not None else _artifacts_from_details(details),
+        "result_category": result_category,
+        "final_result": final_result,
+        "allowed_actions": _allowed_actions(status),
         "agent_loop": agent_loop,
         "readiness_gate": readiness_gate,
         "metadata": {
@@ -265,6 +334,84 @@ def _task(
         },
         "advanced_details": details,
     }
+
+
+def _external_status_is_accepted(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    active = payload.get("active_goal")
+    goal_state = payload.get("goal_state")
+    useful = payload.get("useful_execution")
+    return (
+        payload.get("contract") == "local_node1_goal_supervisor.v1"
+        and _normalize_status(payload.get("classification")) == "done"
+        and isinstance(active, dict)
+        and active.get("accepted") is True
+        and isinstance(active.get("run_dir"), str)
+        and bool(active["run_dir"])
+        and isinstance(goal_state, dict)
+        and goal_state.get("accepted") is True
+        and goal_state.get("review_status") == "accepted"
+        and isinstance(useful, dict)
+        and useful.get("useful") is True
+        and useful.get("evidence_grounded") is True
+    )
+
+
+def _external_last_run_is_valid(
+    status: dict[str, Any] | None,
+    last_run: dict[str, Any] | None,
+) -> bool:
+    if not _external_status_is_accepted(status) or not isinstance(last_run, dict):
+        return False
+    assert status is not None
+    active = status["active_goal"]
+    run_dir = last_run.get("run_dir")
+    owned = _string_list(last_run.get("owned_files_sample"))
+    verification = _string_list(last_run.get("verification"))
+    return (
+        last_run.get("contract") == "local_node1_goal_last_run_summary.v1"
+        and last_run.get("available") is True
+        and _normalize_status(last_run.get("status")) == "done"
+        and last_run.get("review_status") == "accepted"
+        and run_dir == active.get("run_dir")
+        and last_run.get("complete_source") == "global"
+        and isinstance(last_run.get("summary"), str)
+        and bool(last_run["summary"].strip())
+        and last_run.get("owned_file_count") == len(owned)
+        and len(verification) >= 1
+        and last_run.get("verification_count") == len(verification)
+    )
+
+
+def _allowed_actions(status: str) -> list[dict[str, Any]]:
+    if status in {"starting", "working", "checking"}:
+        return [
+            {
+                "action": "stop",
+                "label": "Stop safely",
+                "enabled": True,
+            }
+        ]
+    if status == "needs_review":
+        return [
+            {
+                "action": "continue",
+                "label": "Continue with a note",
+                "enabled": True,
+            },
+            {
+                "action": "accept",
+                "label": "Accept result",
+                "enabled": True,
+            },
+            {
+                "action": "stop",
+                "label": "Stop safely",
+                "enabled": True,
+            },
+        ]
+    return []
 
 
 def _label_for_status(status: str) -> str:

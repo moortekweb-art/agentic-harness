@@ -18,6 +18,8 @@ const STATUS_ICONS = Object.freeze({
 });
 
 const state = {
+  mode: "guided",
+  modes: [],
   busy: false,
   authToken: "",
   authPromptPromise: null,
@@ -47,8 +49,12 @@ const els = {
   workspacePath: byId("workspacePath"),
   executionSummary: byId("executionSummary"),
   objective: byId("objective"),
+  modeSection: byId("modeSection"),
+  modes: byId("modes"),
   safeAreas: byId("safeAreas"),
   checks: byId("checks"),
+  verificationLabel: byId("verificationLabel"),
+  verificationHelp: byId("verificationHelp"),
   startButton: byId("startButton"),
   startHelp: byId("startHelp"),
   checkButton: byId("checkButton"),
@@ -229,6 +235,7 @@ function formSnapshot() {
     objective: els.objective.value,
     safeAreas: els.safeAreas.value,
     checks: els.checks.value,
+    mode: state.mode,
   };
 }
 
@@ -236,7 +243,41 @@ function applyFormSnapshot(snapshot) {
   els.objective.value = snapshot.objective || "";
   els.safeAreas.value = snapshot.safeAreas || "";
   els.checks.value = snapshot.checks || "";
+  state.mode = snapshot.mode || "guided";
+  renderModes(state.modes);
   updateStartButton();
+}
+
+function usesHumanModes() {
+  return state.setup?.editable === false && state.setup?.worker?.type === "local_goal";
+}
+
+function renderModes(modes) {
+  state.modes = Array.isArray(modes) ? modes : [];
+  els.modes.replaceChildren();
+  state.modes.forEach((mode) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "mode-card";
+    card.setAttribute("aria-pressed", String(mode.key === state.mode));
+    card.setAttribute("aria-label", `${mode.label}. ${mode.best_for}`);
+
+    const title = document.createElement("strong");
+    title.textContent = mode.label;
+    const description = document.createElement("span");
+    description.textContent = mode.best_for;
+    const note = document.createElement("small");
+    note.textContent = mode.caution;
+    card.append(title, description, note);
+    card.addEventListener("click", () => {
+      state.mode = mode.key;
+      renderModes(state.modes);
+      pushUndo();
+      persistForm();
+      updateStartButton();
+    });
+    els.modes.append(card);
+  });
 }
 
 function pushUndo() {
@@ -288,7 +329,9 @@ function updateStartButton() {
   const canStart = state.readiness.can_start === true;
   const hasObjective = Boolean(els.objective.value.trim());
   const hasVerification = Boolean(els.checks.value.trim());
-  els.startButton.disabled = state.busy || !canStart || !hasObjective || !hasVerification;
+  const verificationRequired = !usesHumanModes();
+  els.startButton.disabled = state.busy || !canStart || !hasObjective
+    || (verificationRequired && !hasVerification);
   if (state.busy) {
     els.startHelp.textContent = "Starting the goal. This can take a few seconds.";
   } else if (!canStart) {
@@ -297,8 +340,10 @@ function updateStartButton() {
       || "Waiting for the current task state to become ready.";
   } else if (!hasObjective) {
     els.startHelp.textContent = "Describe the outcome you want before starting.";
-  } else if (!hasVerification) {
+  } else if (verificationRequired && !hasVerification) {
     els.startHelp.textContent = "Add the verification command that will prove this goal is complete to enable Start.";
+  } else if (!hasVerification) {
+    els.startHelp.textContent = "Ready. The assistant will choose checks and show the evidence before calling this done.";
   } else {
     els.startHelp.textContent = "Ready to start this verified goal.";
   }
@@ -309,10 +354,11 @@ function renderHealth(health) {
   const ready = state.readiness.can_start === true;
   const needsSetup = ["setup_required", "credential_required", "verification_required"]
     .includes(state.readiness.state);
-  const label = ready ? "Ready" : needsSetup ? "Setup needed" : "Task active";
+  const blocked = state.readiness.state === "blocked";
+  const label = ready ? "Ready" : needsSetup ? "Setup needed" : blocked ? "Needs attention" : "Task active";
   els.healthText.textContent = label;
-  els.health.className = ready ? "health ok" : needsSetup ? "health blocked" : "health";
-  els.healthIcon.setAttribute("href", iconHref(ready ? "shield-check" : needsSetup ? "octagon-alert" : "loader-circle"));
+  els.health.className = ready ? "health ok" : needsSetup || blocked ? "health blocked" : "health";
+  els.healthIcon.setAttribute("href", iconHref(ready ? "shield-check" : needsSetup || blocked ? "octagon-alert" : "loader-circle"));
   els.health.setAttribute("aria-label", label);
   els.health.title = state.readiness.summary || label;
   updateStartButton();
@@ -664,6 +710,15 @@ function renderDetectedAgents(setup, worker) {
 function renderSetup(setup) {
   const previousSetup = state.setup;
   state.setup = setup;
+  const humanModes = setup.editable === false && setup.worker?.type === "local_goal";
+  els.modeSection.hidden = !humanModes;
+  els.checks.required = !humanModes;
+  els.verificationLabel.textContent = humanModes
+    ? "How should the result be checked? (optional)"
+    : "Verification command for this goal";
+  els.verificationHelp.textContent = humanModes
+    ? "Leave this blank if you do not know. The assistant must still record its checks and evidence before the result can be accepted."
+    : "Pre-filled from Setup. Edit it here to override the default for this run. This check runs independently, and the task is never verified done unless it passes.";
   els.setupButton.hidden = setup.editable === false;
   els.workspacePath.textContent = setup.workspace || "Unknown workspace";
   const worker = setup.worker || {};
@@ -731,6 +786,11 @@ async function refreshSetup() {
   renderSetup(await api("/api/setup"));
 }
 
+async function refreshModes() {
+  const payload = await api("/api/modes");
+  renderModes(payload.modes || []);
+}
+
 async function refreshTask(force = false) {
   return singleFlight("task", async () => {
     const task = await api("/api/tasks/current");
@@ -766,6 +826,7 @@ async function startWork() {
     const task = await api("/api/tasks", {
       method: "POST",
       body: JSON.stringify({
+        mode: state.mode,
         objective: els.objective.value.trim(),
         safe_areas: linesFrom(els.safeAreas),
         checks: linesFrom(els.checks),
@@ -984,7 +1045,7 @@ document.addEventListener("keydown", handleShortcut);
 captureTokenFromUrl();
 applyTheme(localStorage.getItem(THEME_KEY) || "light");
 restoreForm();
-Promise.all([refreshHealth(), refreshSetup(), refreshTask(), refreshHistory()])
+Promise.all([refreshHealth(), refreshSetup(), refreshModes(), refreshTask(), refreshHistory()])
   .then(connectStatusStream)
   .catch((error) => {
     els.statusLabel.textContent = "Needs attention";

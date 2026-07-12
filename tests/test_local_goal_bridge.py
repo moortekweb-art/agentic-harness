@@ -19,6 +19,10 @@ from agentic_harness.core.local_goal_bridge import (
 def clean_local_goal_env(monkeypatch) -> None:
     monkeypatch.delenv("AGENTIC_HARNESS_DOC_ROOT", raising=False)
     monkeypatch.delenv("AGENTIC_HARNESS_LOCAL_GOAL", raising=False)
+    monkeypatch.delenv("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", raising=False)
+    monkeypatch.delenv("AGENTIC_HARNESS_EXTERNAL_PLANNER", raising=False)
+    monkeypatch.delenv("AGENTIC_HARNESS_EXTERNAL_LONG_WORKER", raising=False)
+    monkeypatch.delenv("AGENTIC_HARNESS_EXTERNAL_EXPERIMENTAL_WORKER", raising=False)
 
 
 def test_local_goal_bridge_defaults_to_current_directory(tmp_path, monkeypatch) -> None:
@@ -138,14 +142,88 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
         "--harness-contract",
         "agentic_harness.external_candidate.v1",
         "--planner",
-        "planner",
+        "gpt-5.5",
         "--executor",
-        "executor",
+        "opencode",
         "--executor-worker",
-        "long-horizon",
+        "opencode-kimi-build",
     ]
     assert "--goal" in command
     assert "fix one thing" in command[-1]
+
+
+def test_human_modes_use_routes_advertised_by_external_backend(tmp_path) -> None:
+    calls: list[list[str]] = []
+    capabilities = """{
+      "external_candidate_contracts": ["agentic_harness.external_candidate.v1"],
+      "lanes": {
+        "local": {"executor": "mini-swe"},
+        "premium_planner_local_builder": {"planners": ["thinkmax"]},
+        "cloud_executor": {
+          "default_executor_worker": "kimi",
+          "executor_workers": ["kimi", "codex"],
+          "adapter_canary_workers": ["codex"]
+        }
+      }
+    }"""
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        calls.append(command)
+        stdout = capabilities if command[-2:] == ["capabilities", "--json"] else "{}"
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+
+    bridge.start_human_goal(mode_key="local", objective="one")
+    bridge.start_human_goal(mode_key="guided", objective="two")
+    bridge.start_human_goal(mode_key="cloud", objective="three")
+    bridge.start_human_goal(mode_key="experimental", objective="four")
+
+    starts = [call for call in calls if "capabilities" not in call]
+    assert starts[0][starts[0].index("--executor") + 1] == "mini-swe"
+    assert starts[1][starts[1].index("--planner") + 1] == "thinkmax"
+    assert starts[1][starts[1].index("--executor") + 1] == "mini-swe"
+    assert starts[2][starts[2].index("--executor-worker") + 1] == "kimi"
+    assert starts[3][starts[3].index("--executor-worker") + 1] == "codex"
+    assert starts[3][starts[3].index("--harness-contract") + 1] == (
+        "agentic_harness.external_candidate.v1"
+    )
+
+
+def test_starting_a_human_goal_invalidates_previous_status_and_last_run(tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        calls.append(command)
+        if command[-2:] == ["capabilities", "--json"]:
+            stdout = '{"lanes":{"local":{"executor":"opencode"}}}'
+        elif "last-run" in command:
+            stdout = '{"status":"complete"}'
+        elif "status" in command:
+            stdout = '{"classification":"idle"}'
+        else:
+            stdout = '{"status":"starting"}'
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+    bridge.status(json_output=True)
+    bridge.last_run(json_output=True)
+    bridge.start_human_goal(mode_key="local", objective="new work")
+    bridge.status(json_output=True)
+    bridge.last_run(json_output=True)
+
+    assert sum("status" in call for call in calls) == 2
+    assert sum("last-run" in call for call in calls) == 2
 
 
 def test_local_goal_bridge_monitor_never_requests_auto_accept(tmp_path) -> None:
@@ -166,6 +244,27 @@ def test_local_goal_bridge_monitor_never_requests_auto_accept(tmp_path) -> None:
 
     assert calls
     assert "--auto-accept" not in calls[0]
+
+
+def test_local_goal_bridge_throttles_duplicate_monitor_calls(tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, '{"status":"working"}', "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+
+    first = bridge.monitor(json_output=True)
+    second = bridge.monitor(json_output=True)
+
+    assert first is second
+    assert len(calls) == 1
 
 
 def test_local_goal_bridge_refuses_unadvertised_candidate_contract(tmp_path) -> None:

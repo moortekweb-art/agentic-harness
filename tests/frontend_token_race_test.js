@@ -124,7 +124,14 @@ function okPayloadFor(url, setupPayload = null, taskPayload = null, healthPayloa
     };
   }
   if (url === "/api/modes") {
-    return { modes: [{ key: "cloud", label: "Cloud", best_for: "tests", caution: "" }] };
+    return {
+      modes: [
+        { key: "local", label: "Quick task", best_for: "small work", caution: "" },
+        { key: "guided", label: "Plan first", best_for: "important work", caution: "recommended" },
+        { key: "cloud", label: "Keep working", best_for: "large work", caution: "" },
+        { key: "experimental", label: "Safe experiment", best_for: "tiny trials", caution: "" },
+      ],
+    };
   }
   if (url === "/api/setup") {
     return setupPayload || {
@@ -261,10 +268,10 @@ async function runApp({
 async function testConcurrentStartup401sShareOnePromptAndAllRetry() {
   const app = await runApp();
   assert.equal(app.document.openDialogs.length, 1);
-  assert.equal(app.fetchCalls.length, 4);
+  assert.equal(app.fetchCalls.length, 5);
   assert.deepEqual(
     app.fetchCalls.map((call) => call.auth),
-    [null, null, null, null],
+    [null, null, null, null, null],
   );
 
   app.document.openDialogs[0].input.value = "correct-token";
@@ -274,8 +281,8 @@ async function testConcurrentStartup401sShareOnePromptAndAllRetry() {
 
   assert.equal(app.document.removedDialogs, 1);
   assert.equal(app.document.openDialogs.length, 0);
-  assert.equal(app.fetchCalls.length, 8);
-  assert.equal(app.fetchCalls.slice(4).every((call) => call.auth === "Bearer correct-token"), true);
+  assert.equal(app.fetchCalls.length, 10);
+  assert.equal(app.fetchCalls.slice(5).every((call) => call.auth === "Bearer correct-token"), true);
   assert.equal(app.elements.get("summary").textContent, "Backend ready");
   assert.equal(app.sessionStorage.getItem("agentic-harness-gui-session-token"), "correct-token");
   assert.equal(app.websocketUrls.length, 0);
@@ -285,7 +292,7 @@ async function testConcurrentStartup401sShareOnePromptAndAllRetry() {
 async function testStaleTokenIsClearedPromptedOnceAndReplaced() {
   const app = await runApp({ initialToken: "stale-token" });
   assert.equal(app.document.openDialogs.length, 1);
-  assert.equal(app.fetchCalls.length, 4);
+  assert.equal(app.fetchCalls.length, 5);
   assert.equal(app.fetchCalls.every((call) => call.auth === "Bearer stale-token"), true);
   assert.equal(app.sessionStorage.getItem("agentic-harness-gui-session-token"), null);
 
@@ -295,8 +302,8 @@ async function testStaleTokenIsClearedPromptedOnceAndReplaced() {
   await tick();
 
   assert.equal(app.document.removedDialogs, 1);
-  assert.equal(app.fetchCalls.length, 8);
-  assert.equal(app.fetchCalls.slice(4).every((call) => call.auth === "Bearer correct-token"), true);
+  assert.equal(app.fetchCalls.length, 10);
+  assert.equal(app.fetchCalls.slice(5).every((call) => call.auth === "Bearer correct-token"), true);
   assert.equal(app.elements.get("summary").textContent, "Backend ready");
 }
 
@@ -311,7 +318,7 @@ async function testCancelResolvesAllWaitersWithoutSecondDialogOrLeakingToken() {
 
   assert.equal(app.document.removedDialogs, 1);
   assert.equal(app.document.openDialogs.length, 0);
-  assert.equal(app.fetchCalls.length, 4);
+  assert.equal(app.fetchCalls.length, 5);
   assert.equal(app.sessionStorage.getItem("agentic-harness-gui-session-token"), null);
   assert.equal(app.elements.get("statusLabel").textContent, "Needs attention");
   assert.equal(app.elements.get("summary").textContent, "Authorization required.");
@@ -436,8 +443,68 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
   assert.equal(app.localStorage.getItem("agentic-harness-gui-form"), null);
   assert.deepEqual(
     JSON.parse(app.sessionStorage.getItem("agentic-harness-gui-form")),
-    { objective: "Fix the regression", safeAreas: "", checks: "python -m pytest -q" },
+    { objective: "Fix the regression", safeAreas: "", checks: "python -m pytest -q", mode: "guided" },
   );
+}
+
+async function testLegacyHumanCanChooseEveryModeWithoutWritingACommand() {
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: true,
+      editable: false,
+      workspace: "/tmp/legacy-workspace",
+      worker: { type: "local_goal", label: "Existing local-goal runtime" },
+    },
+  });
+  const objective = app.elements.get("objective");
+  const checks = app.elements.get("checks");
+  const start = app.elements.get("startButton");
+  const modeSection = app.elements.get("modeSection");
+  const modes = app.elements.get("modes");
+
+  assert.equal(modeSection.hidden, false);
+  assert.equal(modes.children.length, 4);
+  assert.equal(checks.required, false);
+  objective.value = "Please audit my system and give me a simple report.";
+  objective.listeners.input();
+  assert.equal(start.disabled, false);
+  assert.match(app.elements.get("startHelp").textContent, /assistant will choose checks/i);
+
+  for (const card of modes.children) {
+    card.listeners.click();
+    await app.context.startWork();
+  }
+  const submissions = app.fetchCalls.filter((call) => call.url === "/api/tasks");
+  assert.deepEqual(
+    submissions.map((call) => JSON.parse(call.options.body).mode),
+    ["local", "guided", "cloud", "experimental"],
+  );
+  assert.equal(submissions.every((call) => JSON.parse(call.options.body).checks.length === 0), true);
+}
+
+async function testPausedBackgroundAssistantIsNotCalledAnActiveTask() {
+  const app = await runApp({
+    publicAccess: true,
+    healthPayload: {
+      ok: true,
+      readiness: {
+        state: "blocked",
+        can_start: false,
+        summary: "The background assistant is paused.",
+        next_action: "Ask the workspace owner to restart it, then refresh this page.",
+      },
+    },
+  });
+
+  assert.equal(app.elements.get("healthText").textContent, "Needs attention");
+  assert.equal(app.elements.get("health").className, "health blocked");
+  assert.equal(
+    app.elements.get("startHelp").textContent,
+    "Ask the workspace owner to restart it, then refresh this page.",
+  );
+  assert.notEqual(app.elements.get("healthText").textContent, "Task active");
 }
 
 async function testTerminalReceiptOverridesRawDoneAndRendersTrustedEvidence() {
@@ -566,6 +633,8 @@ async function testRawDoneWithoutTrustedReceiptRemainsUnverified() {
   await testFreshSetupOpensOnceAndSelectsTheRecommendedDetectedAgent();
   await testConfiguredVerificationReplacesOnlyThePreviousSuggestion();
   await testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDraft();
+  await testLegacyHumanCanChooseEveryModeWithoutWritingACommand();
+  await testPausedBackgroundAssistantIsNotCalledAnActiveTask();
   await testTerminalReceiptOverridesRawDoneAndRendersTrustedEvidence();
   await testRawDoneWithoutTrustedReceiptRemainsUnverified();
 })();

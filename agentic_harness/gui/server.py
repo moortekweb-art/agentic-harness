@@ -37,6 +37,7 @@ from agentic_harness.gui.api import (
 
 
 MAX_REQUEST_BYTES = 1_048_576
+STREAM_MONITOR_INTERVAL_SECONDS = 8.0
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     "X-Content-Type-Options": "nosniff",
@@ -529,9 +530,16 @@ def make_handler(
             self.send_header("Connection", "Upgrade")
             self.send_header("Sec-WebSocket-Accept", accept)
             self.end_headers()
+            next_monitor_at = time.monotonic() + STREAM_MONITOR_INTERVAL_SECONDS
             while True:
                 try:
-                    task = service.status() if embedded else status_task(bridge)
+                    if embedded:
+                        task = service.status()
+                    elif time.monotonic() >= next_monitor_at:
+                        task = watch_task(bridge)
+                        next_monitor_at = time.monotonic() + STREAM_MONITOR_INTERVAL_SECONDS
+                    else:
+                        task = status_task(bridge)
                     if not embedded:
                         session.record(task)
                     message = redact_secrets(json.dumps(task, sort_keys=True))
