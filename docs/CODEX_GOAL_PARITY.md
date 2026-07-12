@@ -24,8 +24,8 @@ goal contract.
 The operator supplies one plain-English objective through either interface:
 
 ```bash
-agentic-harness do "implement the requested change and verify it end to end"
-agentic-harness-gui --project-dir .
+agentic-harness do "fix the failing tests" --check "python -m pytest tests/ -q"
+agentic-harness gui
 ```
 
 The runner then owns routine execution decisions. It must:
@@ -43,6 +43,16 @@ The runner then owns routine execution decisions. It must:
 
 Elapsed time, token use, attempt count, worker exit code, or confident prose can
 never establish completion by themselves.
+
+The interfaces present the same trusted result categories:
+
+- `Verified done` means the independent completion gate passed.
+- `Blocked with reason` names the operator decision, authority, credential, or
+  resource required before useful progress can continue.
+- `Failed with evidence` preserves the failed execution or verification result
+  and its durable evidence.
+
+Worker-authored prose cannot select any of these categories.
 
 ## Perceive, plan, act, evaluate, iterate
 
@@ -96,7 +106,8 @@ Installed coding agents end a strict cycle with a machine-readable
 
 `progress` means another cycle is useful. `blocked` records the condition and
 its repeated signature. `complete` is a claim to audit, never permission to set
-Done directly. Malformed or incomplete output becomes repair feedback.
+`Verified done` directly. Malformed or incomplete output becomes repair
+feedback.
 
 ## Completion gate
 
@@ -127,9 +138,9 @@ The operator may bound:
 - tool calls.
 
 Usage is accumulated across cycles and shown in task metadata. Reaching a limit
-persists a blocked or failed state with evidence; it never converts unfinished
-work into Done. A completion claim delivered exactly at a permitted limit may
-still pass the independent audit.
+persists `Blocked with reason` or `Failed with evidence`; it never converts
+unfinished work into `Verified done`. A completion claim delivered exactly at a
+permitted limit may still pass the independent audit.
 
 ## Concurrency, cancellation, and recovery
 
@@ -140,8 +151,9 @@ project roots are required for independent concurrent goals.
 
 Stop is cooperative. The cancellation token is checked at safe boundaries and
 again before acceptance. Evidence remains, the terminal state is recorded, and
-a late worker result cannot turn a stopped task into Done. Continue preserves
-the original objective and accepts an optional operator note as new context.
+a late worker result cannot turn a stopped task into `Verified done`. Continue
+preserves the original objective and accepts an optional operator note as new
+context.
 
 ## Safety boundary
 

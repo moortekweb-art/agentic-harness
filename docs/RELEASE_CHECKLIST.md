@@ -4,11 +4,11 @@ Use this version-generic checklist for every release. The candidate version is
 always read from `pyproject.toml`; never copy a previous tag or reuse a version
 that has already reached PyPI.
 
-The current source candidate is v0.7.2, with canonical notes at
-`docs/RELEASE_NOTES_0.7.2.md`. The historical v0.7.1 and historical v0.7.0
-references remain release receipts, not claims about the latest public version
-and not versions to copy
-into a future candidate.
+Versioned notes and workflow links are historical receipts, not a source for
+the next version. For example, the historical v0.7.2 notes at
+`docs/RELEASE_NOTES_0.7.2.md` and the historical v0.7.0 records remain useful
+evidence, but neither identifies the current candidate. Resolve every candidate
+from package metadata and live registry readback.
 
 ## Local candidate
 
@@ -70,7 +70,7 @@ into a future candidate.
   - reject a blank goal;
   - start a file-changing goal and observe ordered activity;
   - inspect plan, current subgoal, checkpoint, checks, changed file, artifact,
-    final accepted result, and durable history;
+    exact trusted result category, and durable history;
   - refresh during or after work;
   - stop a slow goal and confirm late completion is rejected;
   - verify desktop and narrow layouts have no overflow or page errors; and
@@ -156,6 +156,13 @@ after the run reaches a terminal state.
 
 ## Post-release readback
 
+- Resolve the released version and tag from the immutable checkout:
+
+  ```bash
+  VERSION="$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+  TAG="v${VERSION}"
+  ```
+
 - Confirm the GitHub Release is public and contains the wheel, sdist, and
   `SHA256SUMS` matching the workflow artifact.
 - Confirm PyPI metadata, Python requirement, project links, and both console
@@ -163,6 +170,11 @@ after the run reaches a terminal state.
 - Install from PyPI in a clean environment and repeat version, CLI, GUI-help,
   packaged-asset, and harmless loopback HTTP probes.
 - Record the release workflow URL and readback evidence.
+
+  ```bash
+  gh release view "$TAG" --repo moortekweb-art/agentic-harness
+  python -m pip index versions local-agentic-harness
+  ```
 
 If a product or artifact gate fails before PyPI publication, keep or remove the
 draft and correct a new commit/version deliberately. If only the workflow
