@@ -1,0 +1,65 @@
+{
+  "schema": "agentic_harness.hard_real_agent_tasks.v1",
+  "tasks": [
+    {
+      "id": "coupled-port-docs",
+      "objective": "Move the API from port 8080 to 8081. Update both config/app.ini and the README command example, preserving all other text.",
+      "files": {"config/app.ini":"host=127.0.0.1\nport=8080\nmode=safe\n","README.md":"Start with `serve --port 8080`.\nDo not expose the service publicly.\n"},
+      "expected_files": {"config/app.ini":"host=127.0.0.1\nport=8081\nmode=safe\n","README.md":"Start with `serve --port 8081`.\nDo not expose the service publicly.\n"}
+    },
+    {
+      "id": "compat-alias",
+      "objective": "Rename the primary setting to request_timeout while preserving timeout as a backward-compatible alias with the same value. Update config.py and its example.env consistently.",
+      "files": {"config.py":"REQUEST_TIMEOUT = 10\n\ndef timeout():\n    return REQUEST_TIMEOUT\n","example.env":"TIMEOUT=10\nMODE=safe\n"},
+      "expected_files": {"config.py":"REQUEST_TIMEOUT = 10\n\ndef request_timeout():\n    return REQUEST_TIMEOUT\n\ndef timeout():\n    return request_timeout()\n","example.env":"REQUEST_TIMEOUT=10\nTIMEOUT=10\nMODE=safe\n"}
+    },
+    {
+      "id": "malformed-lines",
+      "objective": "Fix parse_pairs so it ignores blank lines, trims surrounding whitespace, and skips malformed lines without '='. Preserve the public function name.",
+      "files": {"parser.py":"def parse_pairs(text):\n    return dict(line.split('=') for line in text.splitlines())\n"},
+      "expected_files": {"parser.py":"def parse_pairs(text):\n    pairs = {}\n    for line in text.splitlines():\n        line = line.strip()\n        if not line or '=' not in line:\n            continue\n        key, value = line.split('=', 1)\n        pairs[key.strip()] = value.strip()\n    return pairs\n"}
+    },
+    {
+      "id": "boundary-window",
+      "objective": "Fix in_window so both start and end are inclusive. Keep the function signature and do not special-case any literal values.",
+      "files": {"window.py":"def in_window(value, start, end):\n    return start < value < end\n"},
+      "expected_files": {"window.py":"def in_window(value, start, end):\n    return start <= value <= end\n"}
+    },
+    {
+      "id": "preserve-unknown-json",
+      "objective": "Update set_enabled so it changes only the enabled field while preserving every unknown key and nested value. Keep two-space JSON indentation and a trailing newline.",
+      "files": {"settings.py":"import json\n\ndef set_enabled(text, enabled):\n    return json.dumps({'enabled': enabled}, indent=2) + '\\n'\n"},
+      "expected_files": {"settings.py":"import json\n\ndef set_enabled(text, enabled):\n    data = json.loads(text)\n    data['enabled'] = enabled\n    return json.dumps(data, indent=2) + '\\n'\n"}
+    },
+    {
+      "id": "ordered-dedupe",
+      "objective": "Fix unique_routes to remove exact duplicates while preserving first-seen order and case. Do not sort or lowercase values.",
+      "files": {"routes.py":"def unique_routes(routes):\n    return sorted(set(route.lower() for route in routes))\n"},
+      "expected_files": {"routes.py":"def unique_routes(routes):\n    return list(dict.fromkeys(routes))\n"}
+    },
+    {
+      "id": "safe-relative-path",
+      "objective": "Fix is_safe_relative so it rejects absolute paths and any '..' path component, but accepts ordinary dotted filenames such as '.env.example'. Use pathlib semantics.",
+      "files": {"paths.py":"from pathlib import Path\n\ndef is_safe_relative(value):\n    return '..' not in value and not value.startswith('/')\n"},
+      "expected_files": {"paths.py":"from pathlib import Path\n\ndef is_safe_relative(value):\n    path = Path(value)\n    return not path.is_absolute() and '..' not in path.parts\n"}
+    },
+    {
+      "id": "two-file-version",
+      "objective": "Bump the package version from 2.4.0 to 2.4.1 in both pyproject.toml and package/__init__.py. Do not change the dependency constraint.",
+      "files": {"pyproject.toml":"[project]\nversion = \"2.4.0\"\ndependencies = [\"widget>=2.4.0\"]\n","package/__init__.py":"__version__ = \"2.4.0\"\n"},
+      "expected_files": {"pyproject.toml":"[project]\nversion = \"2.4.1\"\ndependencies = [\"widget>=2.4.0\"]\n","package/__init__.py":"__version__ = \"2.4.1\"\n"}
+    },
+    {
+      "id": "none-and-zero",
+      "objective": "Fix effective_limit so None uses the default, but an explicit zero remains zero. Preserve negative explicit values unchanged.",
+      "files": {"limits.py":"def effective_limit(value, default):\n    return value or default\n"},
+      "expected_files": {"limits.py":"def effective_limit(value, default):\n    return default if value is None else value\n"}
+    },
+    {
+      "id": "status-and-doc",
+      "objective": "Add 'cancelled' as a terminal status in status.py and document it in docs/statuses.md. Preserve the existing status order and descriptions.",
+      "files": {"status.py":"TERMINAL = ('done', 'failed', 'stopped')\n","docs/statuses.md":"- done: verified completion\n- failed: work ended with evidence\n- stopped: operator stopped work\n"},
+      "expected_files": {"status.py":"TERMINAL = ('done', 'failed', 'stopped', 'cancelled')\n","docs/statuses.md":"- done: verified completion\n- failed: work ended with evidence\n- stopped: operator stopped work\n- cancelled: work was cancelled\n"}
+    }
+  ]
+}

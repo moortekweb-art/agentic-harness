@@ -35,9 +35,12 @@ def _timeout_text(value: str | bytes | None) -> str:
     return value or ""
 
 
-def load_tasks(path: Path) -> list[dict[str, str]]:
+def load_tasks(path: Path) -> list[dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("schema") != "agentic_harness.real_agent_tasks.v1":
+    if payload.get("schema") not in {
+        "agentic_harness.real_agent_tasks.v1",
+        "agentic_harness.hard_real_agent_tasks.v1",
+    }:
         raise ValueError("unsupported real-agent task schema")
     tasks = payload.get("tasks")
     if not isinstance(tasks, list) or len(tasks) != 10:
@@ -45,8 +48,15 @@ def load_tasks(path: Path) -> list[dict[str, str]]:
     return tasks
 
 
-def materialize(workspace: Path, task: dict[str, str]) -> None:
+def materialize(workspace: Path, task: dict[str, Any]) -> None:
     workspace.mkdir(parents=True)
+    files = task.get("files")
+    if isinstance(files, dict):
+        for raw_path, content in files.items():
+            target = workspace / str(raw_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(str(content), encoding="utf-8")
+        return
     target = workspace / task["path"]
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(task["initial"], encoding="utf-8")
@@ -60,19 +70,22 @@ def verify(workspace: Path, command: list[str]) -> bool:
     return subprocess.run(command, cwd=workspace, check=False).returncode == 0
 
 
-def changed_paths(workspace: Path, task: dict[str, str]) -> list[str]:
-    expected = {task["path"]}
+def changed_paths(workspace: Path, task: dict[str, Any]) -> list[str]:
+    initial_paths = (
+        {str(path) for path in task["files"]}
+        if isinstance(task.get("files"), dict)
+        else {task["path"]}
+    )
     actual = {
         path.relative_to(workspace).as_posix()
         for path in workspace.rglob("*")
         if path.is_file() and ".agentic-harness" not in path.parts
     }
-    initial_paths = {task["path"]}
-    return sorted((actual - initial_paths) | ({task["path"]} if actual & expected else set()))
+    return sorted(actual | initial_paths)
 
 
 def run_direct(
-    workspace: Path, task: dict[str, str], transcript: Path, model: str
+    workspace: Path, task: dict[str, Any], transcript: Path, model: str
 ) -> dict[str, Any]:
     env = os.environ.copy()
     env.update(
@@ -108,7 +121,7 @@ def run_direct(
 
 
 def run_harness(
-    workspace: Path, task: dict[str, str], transcript: Path, review: list[str], model: str
+    workspace: Path, task: dict[str, Any], transcript: Path, review: list[str], model: str
 ) -> dict[str, Any]:
     previous = os.environ.get("REAL_AGENT_TRANSCRIPT")
     os.environ["REAL_AGENT_TRANSCRIPT"] = str(transcript)
@@ -168,7 +181,13 @@ def run(output: Path, task_file: Path, seed: int, model: str) -> dict[str, Any]:
                     **measured, "verifier_pass": passed,
                     "false_accept": bool(measured["accepted"]) and not passed,
                     "unintended_paths": [
-                        path for path in changed_paths(workspace, task) if path != task["path"]
+                        path
+                        for path in changed_paths(workspace, task)
+                        if path not in (
+                            set(task["files"])
+                            if isinstance(task.get("files"), dict)
+                            else {task["path"]}
+                        )
                     ],
                 }
             )

@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from evaluation.run_real_agent_comparison import load_tasks, materialize
+from evaluation.run_real_agent_comparison import load_tasks, materialize, verifier_command, verify
 from evaluation import real_agent_worker
 
 
@@ -11,6 +11,38 @@ def test_preregistered_real_agent_manifest_has_ten_tasks() -> None:
     tasks = load_tasks(Path("evaluation/real_agent_tasks.json"))
     assert len(tasks) == 10
     assert len({task["id"] for task in tasks}) == 10
+
+
+def test_harder_manifest_materializes_multiple_files_without_expected_answers(
+    tmp_path: Path,
+) -> None:
+    tasks = load_tasks(Path("evaluation/hard_real_agent_tasks.json"))
+    task = tasks[0]
+    workspace = tmp_path / "workspace"
+    materialize(workspace, task)
+    assert sorted(
+        path.relative_to(workspace).as_posix()
+        for path in workspace.rglob("*")
+        if path.is_file()
+    ) == sorted(task["files"])
+    contents = {path.read_text(encoding="utf-8") for path in workspace.rglob("*") if path.is_file()}
+    assert not any(expected in contents for expected in task["expected_files"].values())
+
+
+def test_harder_verifier_accepts_behaviorally_equivalent_implementation(tmp_path: Path) -> None:
+    task_file = Path("evaluation/hard_real_agent_tasks.json").resolve()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "routes.py").write_text(
+        "def unique_routes(routes):\n"
+        "    answer = []\n"
+        "    for route in routes:\n"
+        "        if route not in answer:\n"
+        "            answer.append(route)\n"
+        "    return answer\n",
+        encoding="utf-8",
+    )
+    assert verify(workspace, verifier_command(task_file, "ordered-dedupe"))
 
 
 def test_materialize_exposes_initial_but_not_expected_answer(tmp_path: Path) -> None:
