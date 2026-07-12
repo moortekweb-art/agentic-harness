@@ -80,12 +80,6 @@ class Supervisor:
     def status(self) -> Goal | None:
         return self.store.read_current_goal()
 
-    def review_is_current(self, goal: Goal) -> bool:
-        """Return whether durable review evidence matches this worker run and checks."""
-        return isinstance(goal.review, dict) and goal.review.get(
-            "context"
-        ) == _review_context(goal)
-
     def status_summary(self) -> str | None:
         """Return a one-line status summary for logging/monitoring, or None if no active goal."""
         goal = self.status()
