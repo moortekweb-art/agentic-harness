@@ -16,6 +16,7 @@ import subprocess
 
 DOC_ROOT_ENV = "AGENTIC_HARNESS_DOC_ROOT"
 LOCAL_GOAL_ENV = "AGENTIC_HARNESS_LOCAL_GOAL"
+EXTERNAL_CANDIDATE_CONTRACT = "agentic_harness.external_candidate.v1"
 
 
 def resolve_doc_root(doc_root: str | Path | None = None) -> Path:
@@ -139,11 +140,23 @@ class LocalGoalBridge:
         )
 
     def enqueue_mode3a(self, options: Mode3AGoalOptions) -> CommandResult:
+        capabilities = self.run(["capabilities", "--json"])
+        if not _supports_candidate_contract(capabilities, EXTERNAL_CANDIDATE_CONTRACT):
+            return CommandResult(
+                args=capabilities.args,
+                returncode=2,
+                stdout=capabilities.stdout,
+                stderr=(
+                    "The external backend does not advertise the required candidate "
+                    f"contract: {EXTERNAL_CANDIDATE_CONTRACT}"
+                ),
+            )
         goal = build_mode3a_goal(options)
         return self.enqueue_cloud_goal(
             goal,
             worker=_external_setting("AGENTIC_HARNESS_EXTERNAL_LONG_WORKER", "long-horizon"),
             planner=_external_setting("AGENTIC_HARNESS_EXTERNAL_PLANNER", "planner"),
+            contract=EXTERNAL_CANDIDATE_CONTRACT,
         )
 
     def start_human_goal(
@@ -209,10 +222,13 @@ class LocalGoalBridge:
         *,
         worker: str,
         planner: str = "planner",
+        contract: str = "",
     ) -> CommandResult:
-        return self.run(
+        args = ["enqueue"]
+        if contract:
+            args.extend(["--harness-contract", contract])
+        args.extend(
             [
-                "enqueue",
                 "--planner",
                 planner,
                 "--executor",
@@ -223,6 +239,7 @@ class LocalGoalBridge:
                 goal,
             ]
         )
+        return self.run(args)
 
     def status(self, *, json_output: bool = False) -> CommandResult:
         return self.run(["status", "--json"] if json_output else ["status"])
@@ -233,7 +250,6 @@ class LocalGoalBridge:
     def monitor(self, *, json_output: bool = False) -> CommandResult:
         args = [
             "monitor",
-            "--auto-accept",
             "--auto-continue",
             "--auto-dispatch",
             "--auto-commit-owned",
@@ -404,6 +420,26 @@ def format_human_modes() -> str:
 
 def _external_setting(name: str, default: str) -> str:
     return os.environ.get(name, "").strip() or default
+
+
+def _supports_candidate_contract(result: CommandResult, contract: str) -> bool:
+    if result.returncode != 0:
+        return False
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    containers = [payload]
+    capabilities = payload.get("capabilities")
+    if isinstance(capabilities, dict):
+        containers.append(capabilities)
+    return any(
+        isinstance(container.get("external_candidate_contracts"), list)
+        and contract in container["external_candidate_contracts"]
+        for container in containers
+    )
 
 
 def format_command_result(result: CommandResult) -> str:

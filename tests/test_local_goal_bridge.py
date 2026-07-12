@@ -112,6 +112,13 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
     def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
         command = args[0]
         calls.append(command)
+        if command[-2:] == ["capabilities", "--json"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                '{"external_candidate_contracts":["agentic_harness.external_candidate.v1"]}',
+                "",
+            )
         return subprocess.CompletedProcess(command, 0, "queued_id=abc123\n", "")
 
     doc_root = tmp_path / "docs"
@@ -122,10 +129,12 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
 
     assert result.returncode == 0
     assert calls
-    command = calls[0]
-    assert command[:8] == [
+    command = calls[-1]
+    assert command[:10] == [
         str(local_goal),
         "enqueue",
+        "--harness-contract",
+        "agentic_harness.external_candidate.v1",
         "--planner",
         "planner",
         "--executor",
@@ -135,6 +144,47 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
     ]
     assert "--goal" in command
     assert "fix one thing" in command[-1]
+
+
+def test_local_goal_bridge_monitor_never_requests_auto_accept(tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+
+    bridge.monitor(json_output=True)
+
+    assert calls
+    assert "--auto-accept" not in calls[0]
+
+
+def test_local_goal_bridge_refuses_unadvertised_candidate_contract(tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+
+    result = bridge.enqueue_mode3a(Mode3AGoalOptions(objective="fix one thing"))
+
+    assert result.returncode == 2
+    assert "does not advertise" in result.stderr
+    assert calls == [[str(tmp_path / "local-goal"), "capabilities", "--json"]]
 
 
 def test_friendly_queue_summary_prefers_ticket_id() -> None:

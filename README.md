@@ -13,14 +13,11 @@ did, and refuses to accept completion until an independent command passes.
 
 ## Quick Start
 
-Install the current source build that contains this first-run flow:
+Install the released CLI and browser interface:
 
 ```bash
-pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git
+pipx install local-agentic-harness
 ```
-
-The latest published build is 0.7.2. Until a later release includes this flow,
-use the current-source command above for the exact receipt names shown below.
 
 ### Run a verified task in the browser
 
@@ -57,8 +54,9 @@ replace it. The durable report is written to
 agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
 ```
 
-The packaged example starts with a failing test and ends only after the test
-passes. It is a controlled mechanics demo with a mock coding agent, not evidence
+The packaged example starts with a failing test. Its mock coding agent claims
+completion too early, the independent check rejects that claim, and a second
+attempt repairs the project. It is a controlled mechanics demo, not evidence
 about model quality. See the complete [terminal demo script](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/demo-script.md).
 
 ## Product Boundary
@@ -305,6 +303,11 @@ part of this release. See
 [Turnstone integration](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/TURNSTONE_INTEGRATION.md) for the exact boundary,
 capability preflight, and lifecycle expectations.
 
+The optional long-running route uses a versioned, fail-closed candidate
+contract. External completion text is never enough for `Verified done`; a
+matching Harness acceptance receipt and independent passing command are
+required.
+
 ## Other Adapters
 
 The shared engine also supports shell, tmux, GitHub Actions, the legacy
@@ -319,7 +322,7 @@ from agentic_harness import Goal, Supervisor, Worker
 
 ## Installation
 
-Install the latest released distribution from PyPI (currently 0.7.2):
+Install the latest released distribution from PyPI (currently 0.7.3):
 
 ```bash
 pipx install local-agentic-harness

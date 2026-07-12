@@ -50,9 +50,12 @@ Shell workers still need a structured strict-completion claim or a registered
 adapter that supplies one. Merely exiting zero is not requirement evidence.
 
 The optional `local-goal` GUI backend is an explicitly external, operator-
-managed compatibility boundary. It displays the external runtime's accepted
-state; it does not relabel that state as evidence verified by the embedded
-engine.
+managed compatibility boundary. An external `accepted` or `done` state is
+displayed as `Needs review`, not trusted completion. `Done` requires a matching
+`agentic_harness.acceptance_receipt.v1` issued by a Harness-owned acceptance
+controller for the same run and reviewed candidate digest, with at least one
+passed deterministic command. The embedded engine does not mint that external
+receipt or silently inherit the external executor's authority.
 
 ## Trust Limit
 

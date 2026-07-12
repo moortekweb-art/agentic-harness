@@ -102,21 +102,23 @@ exists only for the optional backend; it is not used by the embedded default.
 
 The executable must support the command shapes the bridge invokes:
 
-- `capabilities --json` for readiness and active background-supervision truth;
+- `capabilities --json` for readiness, active background-supervision truth, and
+  the supported external-candidate contract list;
 - `status --json` for current durable state;
 - `quick-start`, `premium-start`, or `enqueue` for an operator-selected external
   execution lane;
 - `continue [--feedback ...]`, `accept`, and `stop` for explicit lifecycle
   decisions; and
-- `monitor` with `--auto-accept`, `--auto-continue`, `--auto-dispatch`,
+- `monitor` with `--auto-continue`, `--auto-dispatch`,
   `--auto-commit-owned`, and `--json` for the legacy diagnostic/supervisor
-  contract.
+  contract. The bridge never requests automatic acceptance.
 
 `capabilities --json` must expose a `supervision.watcher` object, either at the
 top level or below `capabilities`, with at least:
 
 ```json
 {
+  "external_candidate_contracts": ["agentic_harness.external_candidate.v1"],
   "supervision": {
     "watcher": {
       "timer_active": true,
@@ -129,18 +131,23 @@ top level or below `capabilities`, with at least:
 
 Agentic Harness treats supervision as active only when `timer_active` is true
 and `state` is `active`. An executable merely existing on disk is not readiness
-proof.
+proof. The long-running route also fails closed unless the capabilities payload
+advertises `agentic_harness.external_candidate.v1`; the bridge then includes
+that exact version in `--harness-contract` instead of relying on a worker name
+or prompt heading.
 
 The external backend's status JSON should preserve stable task identity and
-distinguish at least queued, running, checking/review, accepted/done, blocked,
+distinguish at least queued, running, checking/review, candidate, blocked,
 failed, and stopped states. It should return changed files and verification
 evidence when available. Unknown or sparse fields are normalized conservatively;
 the GUI must not invent progress or acceptance.
 
-The bridge necessarily trusts the state returned by the compatibility wrapper.
-It cannot prove that Turnstone ran an independent judge or deterministic check
-behind that wrapper. Verify this deployment-owned trust boundary before treating
-an external `accepted` state as completion evidence.
+An external `accepted` or `done` string is still an untrusted claim. The GUI
+shows it as `Needs review` unless the payload contains a matching
+`agentic_harness.acceptance_receipt.v1` with a harness-verified validation
+level, the same run ID, a full candidate digest, and at least one passed
+deterministic command. This is a local integrity contract, not a cryptographic
+attestation; operators must still verify the deployment-owned wrapper.
 
 ## Security and Ownership
 
@@ -181,7 +188,8 @@ Before calling a Turnstone-backed deployment usable:
 
 1. Confirm the wrapper is executable and its location is explicit.
 2. Verify `capabilities --json` reports the actual active supervisor, not a
-   static configured flag.
+   static configured flag, and advertises
+   `agentic_harness.external_candidate.v1`.
 3. Start one harmless sandbox task with a stable external task ID.
 4. Observe queued, running, evidence/review, and terminal state transitions.
 5. Confirm repeat reads and commands do not duplicate the task.
@@ -189,7 +197,10 @@ Before calling a Turnstone-backed deployment usable:
 7. Confirm changed files and verification evidence are normalized without raw
    secrets or private provider payloads.
 8. Restart the wrapper or GUI and prove durable status can be reconstructed.
-9. Run an independent verification criterion before accepting completion.
+9. Run an independent verification criterion, preserve the exact reviewed
+   candidate digest, and reject any post-review mutation before acceptance.
+10. Confirm `Done` appears only with a matching
+    `agentic_harness.acceptance_receipt.v1`.
 
 Passing that checklist verifies the deployment-specific adapter. It does not
 turn Turnstone into a dependency of the public Agentic Harness distribution.

@@ -393,6 +393,8 @@ def _status_from_payload(payload: dict[str, Any] | None, *, fallback_status: str
         if fallback_status in {"starting", "checking", "ready"}:
             return fallback_status
         return "working"
+    if _payload_reports_completion(payload):
+        return "done" if _payload_is_accepted(payload) else "needs_review"
     if payload.get("active") is False or payload.get("active_goal") is None and "active_goal" in payload:
         return "ready"
 
@@ -426,7 +428,7 @@ def _status_from_payload(payload: dict[str, Any] | None, *, fallback_status: str
     if any(marker in text for marker in ("stopped", "cancelled", "canceled")):
         return "stopped"
     if any(marker in text for marker in ('"done"', '"complete"', '"completed"')):
-        return "done"
+        return "needs_review"
     return "working"
 
 
@@ -489,6 +491,11 @@ def _summary_from_payload(
     if payload:
         if _payload_is_accepted(payload):
             return "Previous work is accepted. Ready for the next task."
+        if _payload_reports_completion(payload):
+            return (
+                "The external runtime reported completion without a valid harness-issued "
+                "acceptance receipt. Review and verify the candidate before accepting it."
+            )
         recovery_status = _recovery_status(payload)
         if recovery_status == "checking":
             return (
@@ -525,16 +532,62 @@ def _summary_from_payload(
 
 
 def _payload_is_accepted(payload: dict[str, Any]) -> bool:
-    if payload.get("classification") == "accepted":
+    return _payload_reports_completion(payload) and _acceptance_receipt_is_valid(payload)
+
+
+def _payload_reports_completion(payload: dict[str, Any]) -> bool:
+    if _normalize_status(payload.get("classification")) == "done":
+        return True
+    if _normalize_status(payload.get("status")) == "done":
         return True
     active_goal = payload.get("active_goal")
-    if isinstance(active_goal, dict) and active_goal.get("accepted") is True:
-        return True
+    if isinstance(active_goal, dict):
+        if active_goal.get("accepted") is True:
+            return True
+        if _normalize_status(active_goal.get("status")) == "done":
+            return True
     current_state = payload.get("capabilities")
     if isinstance(current_state, dict):
         state = current_state.get("current_state")
-        return isinstance(state, dict) and state.get("classification") == "accepted"
+        return isinstance(state, dict) and _normalize_status(state.get("classification")) == "done"
     return False
+
+
+def _acceptance_receipt_is_valid(payload: dict[str, Any]) -> bool:
+    receipt = payload.get("acceptance")
+    if not isinstance(receipt, dict):
+        return False
+    active_goal = payload.get("active_goal")
+    active_run_id = active_goal.get("id") if isinstance(active_goal, dict) else None
+    run_id = receipt.get("run_id")
+    digest = receipt.get("candidate_digest")
+    validation = receipt.get("validation")
+    verification = receipt.get("verification")
+    if (
+        receipt.get("schema") != "agentic_harness.acceptance_receipt.v1"
+        or receipt.get("accepted") is not True
+        or receipt.get("issuer") != "harness.acceptance"
+        or not isinstance(active_run_id, str)
+        or not active_run_id
+        or run_id != active_run_id
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+        or not isinstance(validation, dict)
+        or validation.get("level") != "harness_verified"
+        or not isinstance(verification, list)
+        or not verification
+    ):
+        return False
+    return all(
+        isinstance(row, dict)
+        and isinstance(row.get("command"), str)
+        and bool(row["command"].strip())
+        and row.get("passed") is True
+        and type(row.get("returncode")) is int
+        and row.get("returncode") == 0
+        for row in verification
+    )
 
 
 def _nested_string(payload: dict[str, Any], keys: tuple[str, ...]) -> str:
