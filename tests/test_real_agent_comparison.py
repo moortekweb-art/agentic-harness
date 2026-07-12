@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import subprocess
 
 import pytest
@@ -69,6 +70,56 @@ def test_harder_verifier_rejects_invariant_violations(
 def test_materialize_rejects_paths_outside_workspace(tmp_path: Path, raw_path: str) -> None:
     with pytest.raises(ValueError, match="escapes workspace"):
         materialize(tmp_path / "workspace", {"files": {raw_path: "bad"}})
+
+
+@pytest.mark.parametrize("bad_id", ["..", "../escape", "/absolute", "x-direct"])
+def test_load_tasks_rejects_unsafe_or_ambiguous_ids(tmp_path: Path, bad_id: str) -> None:
+    payload = json.loads(Path("evaluation/hard_real_agent_tasks.json").read_text())
+    payload["tasks"][0]["id"] = bad_id
+    manifest = tmp_path / "tasks.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="safe unambiguous"):
+        load_tasks(manifest)
+
+
+def test_load_tasks_rejects_duplicate_ids(tmp_path: Path) -> None:
+    payload = json.loads(Path("evaluation/hard_real_agent_tasks.json").read_text())
+    payload["tasks"][1]["id"] = payload["tasks"][0]["id"]
+    manifest = tmp_path / "tasks.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="unique"):
+        load_tasks(manifest)
+
+
+def test_verify_records_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+        ),
+    )
+    status: dict[str, bool] = {}
+    assert not verify(tmp_path, ["verifier"], status=status, timeout=1)
+    assert status == {"timed_out": True}
+
+
+def test_boundary_verifier_rejects_literal_special_case(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "window.py").write_text(
+        "def in_window(value, start, end):\n"
+        "    if (start, end) == (1, 2):\n"
+        "        return True\n"
+        "    return start <= value <= end\n",
+        encoding="utf-8",
+    )
+    assert not verify(
+        workspace,
+        verifier_command(
+            Path("evaluation/hard_real_agent_tasks.json").resolve(), "boundary-window"
+        ),
+    )
 
 
 def test_materialize_exposes_initial_but_not_expected_answer(tmp_path: Path) -> None:

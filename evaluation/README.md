@@ -44,10 +44,11 @@ python evaluation/run_real_agent_comparison.py \
 The first [harder pilot](results/hard-real-agent-20260712/README.md) was
 invalidated after adversarial review showed that three verifiers missed stated
 invariants. It is retained but must not be used for primary claims. A separately
-frozen [revision-2 comparison](results/hard-real-agent-v2-20260712/README.md)
-strengthened those checks. Direct passed 10/10; Harness passed 9/10 and added
-latency and token use. Raw records, all attempt transcripts, hashes, token
-observations, and limitations are published for both runs.
+frozen [revision-2 pilot](results/hard-real-agent-v2-20260712/README.md) was also
+invalidated when a prohibited literal special-case passed its boundary verifier.
+Both invalid runs remain published for audit and are excluded from primary
+claims. Revision 3 uses exact source-state verification for that exact-source
+requirement, safe unique task IDs, and a bounded scoring verifier.
 
 ## Checked-in Release Snapshot
 

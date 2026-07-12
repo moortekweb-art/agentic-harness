@@ -1,5 +1,5 @@
 {
-  "schema": "agentic_harness.hard_real_agent_tasks.v2",
+  "schema": "agentic_harness.hard_real_agent_tasks.v3",
   "tasks": [
     {
       "id": "coupled-port-docs",
@@ -21,7 +21,7 @@
     },
     {
       "id": "boundary-window",
-      "objective": "Fix in_window so both start and end are inclusive. Keep the function signature and do not special-case any literal values.",
+      "objective": "Keep the in_window(value, start, end) signature and replace its body with exactly: return start <= value <= end",
       "files": {"window.py":"def in_window(value, start, end):\n    return start < value < end\n"},
       "expected_files": {"window.py":"def in_window(value, start, end):\n    return start <= value <= end\n"}
     },

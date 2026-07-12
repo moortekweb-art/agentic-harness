@@ -92,7 +92,12 @@ def _verify_hard(task: dict[str, object]) -> bool:
     expected = task["expected_files"]
     if not isinstance(expected, dict):
         return False
-    if task_id in {"coupled-port-docs", "two-file-version", "status-and-doc"}:
+    if task_id in {
+        "coupled-port-docs",
+        "boundary-window",
+        "two-file-version",
+        "status-and-doc",
+    }:
         return _exact({str(path): str(content) for path, content in expected.items()})
     try:
         completed = subprocess.run(
@@ -123,6 +128,7 @@ def main() -> int:
     if payload.get("schema") in {
         "agentic_harness.hard_real_agent_tasks.v1",
         "agentic_harness.hard_real_agent_tasks.v2",
+        "agentic_harness.hard_real_agent_tasks.v3",
     }:
         try:
             return 0 if _verify_hard(task) else 1

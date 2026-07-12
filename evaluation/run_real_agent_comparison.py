@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import random
+import re
 import subprocess
 import sys
 import time
@@ -27,6 +28,7 @@ from agentic_harness.core.supervisor import Supervisor  # noqa: E402
 TASKS = ROOT / "evaluation" / "real_agent_tasks.json"
 WORKER = ROOT / "evaluation" / "real_agent_worker.py"
 VERIFIER = ROOT / "evaluation" / "verify_real_agent_task.py"
+TASK_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 
 
 def _timeout_text(value: str | bytes | None) -> str:
@@ -41,11 +43,22 @@ def load_tasks(path: Path) -> list[dict[str, Any]]:
         "agentic_harness.real_agent_tasks.v1",
         "agentic_harness.hard_real_agent_tasks.v1",
         "agentic_harness.hard_real_agent_tasks.v2",
+        "agentic_harness.hard_real_agent_tasks.v3",
     }:
         raise ValueError("unsupported real-agent task schema")
     tasks = payload.get("tasks")
     if not isinstance(tasks, list) or len(tasks) != 10:
         raise ValueError("the preregistered comparison requires exactly ten tasks")
+    identifiers = [task.get("id") for task in tasks if isinstance(task, dict)]
+    if len(identifiers) != 10 or any(
+        not isinstance(value, str)
+        or TASK_ID_PATTERN.fullmatch(value) is None
+        or value.endswith(("-direct", "-harness"))
+        for value in identifiers
+    ):
+        raise ValueError("task IDs must be safe unambiguous path components")
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError("task IDs must be unique")
     return tasks
 
 
@@ -75,8 +88,24 @@ def verifier_command(task_file: Path, task_id: str) -> list[str]:
     return [sys.executable, str(VERIFIER), str(task_file), task_id]
 
 
-def verify(workspace: Path, command: list[str]) -> bool:
-    return subprocess.run(command, cwd=workspace, check=False).returncode == 0
+def verify(
+    workspace: Path,
+    command: list[str],
+    *,
+    status: dict[str, bool] | None = None,
+    timeout: int = 30,
+) -> bool:
+    try:
+        passed = subprocess.run(
+            command, cwd=workspace, check=False, timeout=timeout
+        ).returncode == 0
+    except subprocess.TimeoutExpired:
+        if status is not None:
+            status["timed_out"] = True
+        return False
+    if status is not None:
+        status["timed_out"] = False
+    return passed
 
 
 def changed_paths(workspace: Path, task: dict[str, Any]) -> list[str]:
@@ -183,11 +212,13 @@ def run(output: Path, task_file: Path, seed: int, model: str) -> dict[str, Any]:
                 if arm == "direct"
                 else run_harness(workspace, task, transcript, review, model)
             )
-            passed = verify(workspace, review)
+            verification_status: dict[str, bool] = {}
+            passed = verify(workspace, review, status=verification_status)
             rows.append(
                 {
                     "task_id": task["id"], "arm": arm, "arm_position": position,
                     **measured, "verifier_pass": passed,
+                    "verifier_timed_out": verification_status["timed_out"],
                     "false_accept": bool(measured["accepted"]) and not passed,
                     "unintended_paths": [
                         path

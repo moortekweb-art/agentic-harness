@@ -1,4 +1,9 @@
-# Corrected harder Codex comparison — 2026-07-12
+# Invalid revision-2 harder Codex pilot — 2026-07-12
+
+**Invalid for primary outcome claims.** Post-run adversarial review found that
+the boundary-window verifier could accept a prohibited literal special-case.
+These artifacts remain available for audit, but the 10/10 and 9/10 figures below
+must not be used as outcome evidence. A separately frozen revision 3 replaces it.
 
 This revision-2 study was frozen after adversarial review invalidated the first
 harder pilot and before any revision-2 result was observed. It compares Codex
