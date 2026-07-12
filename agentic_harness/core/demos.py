@@ -24,7 +24,7 @@ This generated demo shows the core Agentic Harness pitch:
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest tests/ -q   # expected to fail
-agentic-harness fix-tests     # auto-creates demo config
+agentic-harness fix-tests --until-done  # auto-creates demo config
 agentic-harness status
 agentic-harness report
 python -m pytest tests/ -q   # should pass
@@ -33,8 +33,9 @@ python -m pytest tests/ -q   # should pass
 The project starts with a deliberately broken calculator function. The
 `fix-tests` command detects the generated demo and creates a shell worker config
 that runs `mock_coding_agent.py`, which stands in for a non-interactive coding
-agent CLI during local demos. The review gate runs pytest and only marks the
-goal `done` after the tests pass.
+agent CLI during local demos. Its first attempt claims completion without fixing
+the bug. The review gate rejects that claim, the second attempt repairs the
+calculator, and the goal becomes `done` only after pytest passes.
 
 To reset the demo:
 
@@ -67,7 +68,15 @@ from pathlib import Path
 
 
 def main() -> int:
+    goal_id = os.environ.get("AGENTIC_HARNESS_GOAL_ID", "unknown-goal").strip()
     objective = os.environ.get("AGENTIC_HARNESS_OBJECTIVE", "").partition("\\n")[0].strip()
+    attempt_path = Path(".agentic-harness") / "runs" / goal_id / "demo-worker-attempt"
+    attempt_path.parent.mkdir(parents=True, exist_ok=True)
+    attempt = int(attempt_path.read_text(encoding="utf-8") or "0") if attempt_path.exists() else 0
+    attempt_path.write_text(str(attempt + 1), encoding="utf-8")
+    if attempt == 0:
+        print(f"claimed completion before repairing objective: {objective}")
+        return 0
     path = Path("calculator.py")
     content = path.read_text(encoding="utf-8")
     if "return left + right + 1" not in content:

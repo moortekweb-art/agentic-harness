@@ -1695,7 +1695,7 @@ def run_demo(name: str, path: Path, *, force: bool = False, install: bool = True
         return 1
     if not _run_demo_step(
         "Run fix-tests recipe",
-        [str(python), "-m", "agentic_harness.cli", "fix-tests"],
+        [str(python), "-m", "agentic_harness.cli", "fix-tests", "--until-done"],
         cwd=demo_path,
         env=env,
         echo_output=True,

@@ -308,6 +308,118 @@ def test_task_from_command_result_does_not_treat_accepted_false_as_done() -> Non
     assert task["agent_loop"]["stage"] == "Review"
 
 
+def test_external_accepted_state_without_harness_receipt_needs_review() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "accepted",
+                "active_goal": {
+                    "id": "run-1",
+                    "accepted": True,
+                    "status": "done",
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="working")
+
+    assert task["status"] == "needs_review"
+    assert task["needs_human"] is True
+    assert "harness-issued acceptance receipt" in task["summary"].lower()
+
+
+def test_external_acceptance_receipt_must_match_active_run() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "accepted",
+                "active_goal": {"id": "run-1", "accepted": True, "status": "done"},
+                "acceptance": {
+                    "schema": "agentic_harness.acceptance_receipt.v1",
+                    "accepted": True,
+                    "issuer": "harness.acceptance",
+                    "run_id": "different-run",
+                    "candidate_digest": "a" * 64,
+                    "validation": {"level": "harness_verified"},
+                    "verification": [
+                        {"command": "pytest -q", "returncode": 0, "passed": True}
+                    ],
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="working")
+
+    assert task["status"] == "needs_review"
+
+
+def test_matching_harness_acceptance_receipt_is_done() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "accepted",
+                "active_goal": {"id": "run-1", "accepted": True, "status": "done"},
+                "acceptance": {
+                    "schema": "agentic_harness.acceptance_receipt.v1",
+                    "accepted": True,
+                    "issuer": "harness.acceptance",
+                    "run_id": "run-1",
+                    "candidate_digest": "a" * 64,
+                    "validation": {"level": "harness_verified"},
+                    "verification": [
+                        {"command": "pytest -q", "returncode": 0, "passed": True}
+                    ],
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="working")
+
+    assert task["status"] == "done"
+    assert task["needs_human"] is False
+
+
+def test_acceptance_receipt_rejects_boolean_returncode() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "accepted",
+                "active_goal": {"id": "run-1", "accepted": True},
+                "acceptance": {
+                    "schema": "agentic_harness.acceptance_receipt.v1",
+                    "accepted": True,
+                    "issuer": "harness.acceptance",
+                    "run_id": "run-1",
+                    "candidate_digest": "a" * 64,
+                    "validation": {"level": "harness_verified"},
+                    "verification": [
+                        {"command": "pytest -q", "returncode": False, "passed": True}
+                    ],
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="working")
+
+    assert task["status"] == "needs_review"
+
+
 def test_task_from_command_result_treats_retryable_failure_as_recoverable() -> None:
     result = CommandResult(
         args=("local-goal", "status"),
@@ -417,7 +529,11 @@ def test_start_task_uses_bridge_human_goal() -> None:
             return subprocess.CompletedProcess(
                 command,
                 0,
-                '{"supervision":{"watcher":{"timer_active":true,"state":"active"}}}',
+                (
+                    '{"external_candidate_contracts":'
+                    '["agentic_harness.external_candidate.v1"],'
+                    '"supervision":{"watcher":{"timer_active":true,"state":"active"}}}'
+                ),
                 "",
             )
         return subprocess.CompletedProcess(command, 0, "queued_id=abc123\n", "")
@@ -936,8 +1052,8 @@ def test_gui_server_post_task_workflow_routes() -> None:
     assert accepted["status"] == "done"
     assert stopped["status"] == "stopped"
     assert bridge.commands == [
-        ["enqueue", "--planner", "planner", "--executor", "executor", "--executor-worker", "long-horizon", "--goal", "GOAL_CONTENT"],
-        ["monitor", "--auto-accept", "--auto-continue", "--auto-dispatch", "--auto-commit-owned", "--json"],
+        ["enqueue", "--harness-contract", "agentic_harness.external_candidate.v1", "--planner", "planner", "--executor", "executor", "--executor-worker", "long-horizon", "--goal", "GOAL_CONTENT"],
+        ["monitor", "--auto-continue", "--auto-dispatch", "--auto-commit-owned", "--json"],
         ["continue", "--feedback", "keep going"],
         ["accept"],
         ["stop"],
@@ -1186,7 +1302,17 @@ class FakeBridge:
         result = LocalGoalBridge(
             doc_root=Path("/tmp/docs"),
             local_goal=Path("/bin/sh"),
-            runner=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "queued\n", ""),
+            runner=lambda *args, **kwargs: subprocess.CompletedProcess(
+                args[0],
+                0,
+                (
+                    '{"external_candidate_contracts":'
+                    '["agentic_harness.external_candidate.v1"]}'
+                    if args[0][-2:] == ["capabilities", "--json"]
+                    else "queued\n"
+                ),
+                "",
+            ),
         ).start_human_goal(
             mode_key=mode_key,
             objective=objective,
@@ -1203,7 +1329,7 @@ class FakeBridge:
         return CommandResult(("local-goal", "status"), 0, '{"active_goal": {"status": "running", "objective": "test task"}}', "")
 
     def monitor(self, *, json_output: bool = False) -> CommandResult:
-        command = ["monitor", "--auto-accept", "--auto-continue", "--auto-dispatch", "--auto-commit-owned"]
+        command = ["monitor", "--auto-continue", "--auto-dispatch", "--auto-commit-owned"]
         if json_output:
             command.append("--json")
         self.commands.append(command)
@@ -1212,7 +1338,28 @@ class FakeBridge:
     def run(self, args: list[str]) -> CommandResult:
         self.commands.append(args)
         if args == ["accept"]:
-            return CommandResult(tuple(args), 0, '{"classification": "accepted"}', "")
+            return CommandResult(
+                tuple(args),
+                0,
+                json.dumps(
+                    {
+                        "classification": "accepted",
+                        "active_goal": {"id": "run-1", "accepted": True},
+                        "acceptance": {
+                            "schema": "agentic_harness.acceptance_receipt.v1",
+                            "accepted": True,
+                            "issuer": "harness.acceptance",
+                            "run_id": "run-1",
+                            "candidate_digest": "a" * 64,
+                            "validation": {"level": "harness_verified"},
+                            "verification": [
+                                {"command": "pytest -q", "returncode": 0, "passed": True}
+                            ],
+                        },
+                    }
+                ),
+                "",
+            )
         if args == ["stop"]:
             return CommandResult(tuple(args), 0, '{"status": "stopped"}', "")
         return CommandResult(tuple(args), 0, '{"active_goal": {"status": "running", "objective": "test task"}}', "")

@@ -6,21 +6,20 @@ Record the actual elapsed time with the review or release evidence. A timing
 from one development machine is not a published-release performance guarantee.
 
 This deterministic mechanics demo uses the packaged mock coding-agent worker.
-It shows a real failing check, a repair, preserved evidence, and independent
-verification without requiring a model account or API key. It is not a
-model-quality benchmark.
+The worker claims completion without fixing the bug on attempt one. The
+independent command rejects that claim, attempt two repairs it, and the receipt
+preserves both verification attempts. It requires no model account or API key
+and is not a model-quality benchmark.
 
 ## Setup
 
-This recording path describes current source behavior. Install it with:
+Install the released package with:
 
 ```bash
-pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git
+pipx install local-agentic-harness
 ```
 
 The same installation provides `agentic-harness` and `agentic-harness-gui`.
-The latest PyPI release remains 0.7.2 and can use earlier receipt wording until
-a later release includes these changes.
 
 ## Canonical recording path
 
@@ -40,7 +39,7 @@ The final trusted receipt should show:
 - `Result: Verified done`
 - the independent check and its passing result;
 - the changed file;
-- the number of attempts and retries; and
+- `Attempts: 2` and `Retries: 1`; and
 - the durable report path below `.agentic-harness/runs/<goal-id>/report.md`.
 
 Agentic Harness uses three explicit terminal result categories:

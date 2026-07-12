@@ -433,6 +433,8 @@ def test_run_demo_fix_tests_executes_end_to_end(tmp_path, monkeypatch, capsys) -
     assert "Result: Verified done" in output
     assert "Changed: 1 file" in output
     assert "- modified calculator.py" in output
+    assert "Attempts: 2" in output
+    assert "Retries: 1" in output
     assert "Report: .agentic-harness/runs/" in output
     assert "Demo complete:" in output
     assert list((demo / ".agentic-harness" / "runs").glob("*/shell-worker.log"))
@@ -441,6 +443,8 @@ def test_run_demo_fix_tests_executes_end_to_end(tmp_path, monkeypatch, capsys) -
     report_text = report.read_text(encoding="utf-8")
     assert "Changed: 1 file" in report_text
     assert "- modified calculator.py" in report_text
+    assert "Attempts: 2" in report_text
+    assert "Retries: 1" in report_text
     transcript = next((demo / ".agentic-harness" / "runs").glob("*/shell-worker.log"))
     assert f"$ {sys.executable} mock_coding_agent.py" in transcript.read_text(encoding="utf-8")
 
@@ -543,13 +547,15 @@ def test_direct_recipe_auto_initializes_packaged_demo(tmp_path, capsys) -> None:
     assert main(["create-demo", "fix-tests", str(demo)]) == 0
     capsys.readouterr()
 
-    rc = main(["--project-dir", str(demo), "fix-tests"])
+    rc = main(["--project-dir", str(demo), "fix-tests", "--until-done"])
 
     output = capsys.readouterr().out
     assert rc == 0
     assert "Configured shell tool." in output
     assert "Recipe: fix-tests" in output
     assert "Result: Verified done" in output
+    assert "Attempts: 2" in output
+    assert "Retries: 1" in output
     assert (demo / ".agentic-harness" / "config.yml").exists()
     assert list((demo / ".agentic-harness" / "runs").glob("*/shell-worker.log"))
     assert list((demo / ".agentic-harness" / "runs").glob("*/report.md"))

@@ -74,11 +74,9 @@ def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
     quick_start = readme.split("## Quick Start", 1)[1].split("## Product Boundary", 1)[0]
 
     assert len(quick_start.split()) <= 300
-    assert (
-        "pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git"
-        in quick_start
-    )
-    assert "latest published build is 0.7.2" in quick_start
+    assert "pipx install local-agentic-harness" in quick_start
+    assert "latest published build is 0.7.2" not in quick_start
+    assert "git+https://github.com" not in quick_start
     assert "agentic-harness gui" in quick_start
     assert (
         'agentic-harness do "fix the failing tests" '
@@ -389,7 +387,7 @@ def test_killer_demo_runs_failure_fix_review_cycle(tmp_path) -> None:
     assert "assert 6 == 5" in before.stdout
 
     run = subprocess.run(
-        [sys.executable, "-m", "agentic_harness.cli", "fix-tests"],
+        [sys.executable, "-m", "agentic_harness.cli", "fix-tests", "--until-done"],
         cwd=demo,
         text=True,
         capture_output=True,
@@ -482,7 +480,13 @@ def test_packaged_demo_generator_runs_failure_fix_review_cycle(tmp_path) -> None
     assert "assert 6 == 5" in before.stdout
 
     run = subprocess.run(
-        [sys.executable, "-m", "agentic_harness.cli", "fix-tests"],
+        [
+            sys.executable,
+            "-m",
+            "agentic_harness.cli",
+            "fix-tests",
+            "--until-done",
+        ],
         cwd=demo,
         text=True,
         capture_output=True,
@@ -493,6 +497,8 @@ def test_packaged_demo_generator_runs_failure_fix_review_cycle(tmp_path) -> None
     assert run.returncode == 0, run.stderr
     assert "Result: Verified done" in run.stdout
     assert "Review: passed" in run.stdout
+    assert "Attempts: 2" in run.stdout
+    assert "Retries: 1" in run.stdout
     config = (demo / ".agentic-harness" / "config.yml").read_text(encoding="utf-8")
     assert "mock_coding_agent.py" in config
     assert sys.executable in config
