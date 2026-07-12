@@ -1,0 +1,16 @@
+{
+  "schema": "agentic_harness.real_agent_tasks.v1",
+  "tasks": [
+    {"id":"retry-limit","objective":"In config/service.ini, change retries from 2 to 3 and change nothing else.","path":"config/service.ini","initial":"retries=2\ntimeout=30\n","expected":"retries=3\ntimeout=30\n"},
+    {"id":"dependency-pin","objective":"In requirements.txt, update widget from 1.4.1 to 1.4.2 and change nothing else.","path":"requirements.txt","initial":"widget==1.4.1\nhelper==2.0.0\n","expected":"widget==1.4.2\nhelper==2.0.0\n"},
+    {"id":"sort-flags","objective":"Sort the lines in config/features.txt alphabetically, preserving one trailing newline.","path":"config/features.txt","initial":"zebra\nalpha\nmiddle\n","expected":"alpha\nmiddle\nzebra\n"},
+    {"id":"dedupe-route","objective":"Remove only the second duplicate /health line from config/routes.txt; preserve order.","path":"config/routes.txt","initial":"/health\n/api\n/health\n","expected":"/health\n/api\n"},
+    {"id":"command-flag","objective":"Correct examples/status.txt so the command uses --json instead of --yaml.","path":"examples/status.txt","initial":"agentic-harness status --yaml\n","expected":"agentic-harness status --json\n"},
+    {"id":"label-typo","objective":"Correct the typo in labels/operator.txt to maintenance-window.","path":"labels/operator.txt","initial":"maintenence-window\n","expected":"maintenance-window\n"},
+    {"id":"boolean-default","objective":"In settings.env, change FEATURE_ENABLED from false to true without changing MODE.","path":"settings.env","initial":"FEATURE_ENABLED=false\nMODE=safe\n","expected":"FEATURE_ENABLED=true\nMODE=safe\n"},
+    {"id":"json-timeout","objective":"In config.json, change timeout_seconds from 10 to 15 while preserving valid JSON and the name field.","path":"config.json","initial":"{\n  \"name\": \"worker\",\n  \"timeout_seconds\": 10\n}\n","expected":"{\n  \"name\": \"worker\",\n  \"timeout_seconds\": 15\n}\n"},
+    {"id":"markdown-link","objective":"In README.md, correct the documentation link target from docs/starts.md to docs/start.md.","path":"README.md","initial":"See [start](docs/starts.md) for setup.\n","expected":"See [start](docs/start.md) for setup.\n"},
+    {"id":"csv-port","objective":"In services.csv, change only the api service port from 8080 to 8081.","path":"services.csv","initial":"name,port\napi,8080\nmetrics,9090\n","expected":"name,port\napi,8081\nmetrics,9090\n"}
+  ]
+}
+
