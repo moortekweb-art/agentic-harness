@@ -1,8 +1,8 @@
 # Invalid real-agent pilot — excluded
 
-This directory preserves the complete first 20-run pilot from protocol commit
-`102787b`. It is published for auditability and must not be combined with the
-valid comparison.
+This directory preserves the available evidence from the first 20-run pilot at
+protocol commit `102787b`. It is published for auditability and must not be
+combined with the valid comparison.
 
 The evaluation wrapper emitted only a minimal completion object. It omitted the
 plan, current subgoal, checkpoint, requirements, and blockers fields required
@@ -17,9 +17,10 @@ This is evidence that Harness rejected an incomplete evidence envelope, not a
 valid measurement of Harness versus direct Codex. Both arms were rerun from
 scratch after protocol revision 2; no pilot result was reused.
 
-`raw.jsonl` contains all 20 pilot task-arm rows. `transcripts/` contains all 20
+`raw.jsonl` contains all 20 pilot task-arm rows. `transcripts/` contains 20
 redacted final-attempt transcript files, and `transcript_manifest.json` binds
-their published bytes and transcript-reported token counts. Harness transcript
-files are overwritten per attempt by the adapter, so they preserve the final
-attempt rather than three separate per-attempt model transcripts; the durable
-attempt count remains in each raw row.
+their published bytes and transcript-reported token counts. The pilot runner
+overwrote the Harness transcript on each retry, so the first two model
+transcripts for each Harness task are unavailable. The raw rows retain the
+three-attempt count but not per-attempt output, timing, or tokens. Revision 3
+fixes future runs by assigning every attempt a distinct transcript file.

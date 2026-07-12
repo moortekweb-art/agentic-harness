@@ -35,12 +35,10 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
     redacted_dir = destination / "transcripts"
     redacted_dir.mkdir()
     transcript_files = set((source / "transcripts").glob("*.log"))
-    expected_files = {
-        source / "transcripts" / f"{task_id}-{arm}.log" for task_id, arm in keys
-    }
-    if transcript_files != expected_files:
+    transcript_keys = {_transcript_key(path, keys) for path in transcript_files}
+    if None in transcript_keys or transcript_keys - keys or keys - transcript_keys:
         raise ValueError("transcript set does not match raw task-arm records")
-    token_by_arm: dict[str, list[int]] = {"direct": [], "harness": []}
+    tokens_by_run: dict[tuple[str, str], int] = {key: 0 for key in keys}
     manifest: list[dict[str, Any]] = []
     for transcript in sorted(transcript_files):
         text = transcript.read_text(encoding="utf-8")
@@ -49,9 +47,12 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
         match = TOKEN_PATTERN.search(text)
         if match is None:
             raise ValueError(f"missing token count in {transcript.name}")
-        arm = "harness" if transcript.stem.endswith("-harness") else "direct"
+        key = _transcript_key(transcript, keys)
+        if key is None:
+            raise ValueError(f"unmatched transcript: {transcript.name}")
+        arm = key[1]
         tokens = int(match.group(1).replace(",", ""))
-        token_by_arm[arm].append(tokens)
+        tokens_by_run[key] += tokens
         target = redacted_dir / transcript.name
         target.write_text(redact(text), encoding="utf-8")
         manifest.append(
@@ -62,7 +63,9 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
                 "sha256": sha256(target),
             }
         )
-    summary = json.loads((source / "summary.json").read_text(encoding="utf-8"))
+    source_summary = json.loads((source / "summary.json").read_text(encoding="utf-8"))
+    summary = {key: value for key, value in source_summary.items() if key != "arms"}
+    summary["arms"] = {arm: _summarize_rows(rows, arm) for arm in ("direct", "harness")}
     summary["token_metrics_available"] = True
     summary["data_quality"] = {
         "records": len(rows), "unique_task_arm_pairs": len(keys),
@@ -70,7 +73,8 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
         "full_prompt_identity": False,
         "comparison_scope": "end_to_end_systems",
     }
-    for arm, values in token_by_arm.items():
+    for arm in ("direct", "harness"):
+        values = [value for (task_id, key_arm), value in tokens_by_run.items() if key_arm == arm]
         summary["arms"][arm]["total_tokens"] = sum(values)
         summary["arms"][arm]["mean_tokens"] = round(sum(values) / len(values), 1)
     (destination / "raw.jsonl").write_text(
@@ -83,6 +87,35 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return summary
+
+
+def _transcript_key(
+    path: Path, keys: set[tuple[str, str]]
+) -> tuple[str, str] | None:
+    stem = re.sub(r"\.attempt-[1-9][0-9]*$", "", path.stem)
+    matches = [key for key in keys if stem == f"{key[0]}-{key[1]}"]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _summarize_rows(rows: list[dict[str, Any]], arm: str) -> dict[str, Any]:
+    selected = [row for row in rows if row["arm"] == arm]
+    if not selected:
+        raise ValueError(f"missing raw rows for arm: {arm}")
+    return {
+        "runs": len(selected),
+        "accepted": sum(bool(row["accepted"]) for row in selected),
+        "verifier_passes": sum(bool(row["verifier_pass"]) for row in selected),
+        "false_accepts": sum(bool(row["false_accept"]) for row in selected),
+        "mean_attempts": round(
+            sum(int(row["attempts"]) for row in selected) / len(selected), 3
+        ),
+        "mean_elapsed_seconds": round(
+            sum(float(row["elapsed_seconds"]) for row in selected) / len(selected), 3
+        ),
+        "runs_with_unintended_paths": sum(
+            bool(row["unintended_paths"]) for row in selected
+        ),
+    }
 
 
 def main() -> int:

@@ -37,3 +37,37 @@ def test_package_rejects_missing_transcript(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="transcript set does not match"):
         package(source, tmp_path / "published")
+
+
+def test_package_recomputes_aggregates_from_raw_rows(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    rows = []
+    for index in range(10):
+        for arm in ("direct", "harness"):
+            rows.append(
+                {
+                    "task_id": f"task-{index}", "arm": arm,
+                    "accepted": True, "verifier_pass": True,
+                    "false_accept": False, "attempts": 1,
+                    "elapsed_seconds": 2.0, "unintended_paths": [],
+                }
+            )
+    (source / "raw.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+    (source / "summary.json").write_text(
+        json.dumps({"arms": {"direct": {"accepted": 0}, "harness": {"accepted": 0}}}),
+        encoding="utf-8",
+    )
+    transcripts = source / "transcripts"
+    transcripts.mkdir()
+    for row in rows:
+        (transcripts / f"{row['task_id']}-{row['arm']}.log").write_text(
+            "tokens used\n1\n", encoding="utf-8"
+        )
+
+    summary = package(source, tmp_path / "published")
+
+    assert summary["arms"]["direct"]["accepted"] == 10
+    assert summary["arms"]["harness"]["verifier_passes"] == 10

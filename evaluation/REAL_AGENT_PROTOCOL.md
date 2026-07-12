@@ -42,7 +42,10 @@ is not an adoption study or a general coding benchmark.
   the prompt, but this is not OS-enforced blindness: the same-user Codex
   process may be able to read other host paths. Transcripts must be checked for
   evidence of manifest access.
-- Every attempted run is retained, including failures and timeouts.
+- Protocol revision 3 retains one transcript per worker attempt, including
+  failures and timeouts. The historical invalid pilot predates that fix and
+  retains every task-arm row and final-attempt transcript, but not the first
+  two Harness attempt transcripts.
 
 ## Metrics
 

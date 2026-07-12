@@ -14,7 +14,8 @@ def main() -> int:
     objective = os.environ.get("AGENTIC_HARNESS_INSTRUCTION") or os.environ.get(
         "AGENTIC_HARNESS_OBJECTIVE", ""
     )
-    transcript = Path(os.environ.get("REAL_AGENT_TRANSCRIPT", "/tmp/real-agent.log"))
+    transcript_base = Path(os.environ.get("REAL_AGENT_TRANSCRIPT", "/tmp/real-agent.log"))
+    transcript = _next_transcript(transcript_base)
     model = os.environ.get("REAL_AGENT_MODEL", "").strip()
     if not model:
         print("REAL_AGENT_MODEL is required", file=sys.stderr)
@@ -65,6 +66,16 @@ def _timeout_text(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value or ""
+
+
+def _next_transcript(base: Path) -> Path:
+    base.parent.mkdir(parents=True, exist_ok=True)
+    attempt = 1
+    while True:
+        candidate = base.with_name(f"{base.stem}.attempt-{attempt}{base.suffix}")
+        if not candidate.exists():
+            return candidate
+        attempt += 1
 
 
 if __name__ == "__main__":

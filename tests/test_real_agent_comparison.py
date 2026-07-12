@@ -76,7 +76,9 @@ def test_real_agent_wrapper_records_timeout_and_returns_124(
     )
 
     assert real_agent_worker.main() == 124
-    assert "partial out" in transcript.read_text(encoding="utf-8")
+    assert "partial out" in (tmp_path / "transcript.attempt-1.log").read_text(
+        encoding="utf-8"
+    )
     payload = __import__("json").loads(capsys.readouterr().out.split("=", 1)[1])
     assert payload["status"] == "failed"
     assert payload["blockers"] == ["coding agent timed out"]
@@ -98,3 +100,24 @@ def test_worker_command_pins_requested_model(
     monkeypatch.setattr(real_agent_worker.subprocess, "run", fake_run)
     assert real_agent_worker.main() == 0
     assert commands[0][commands[0].index("--model") + 1] == "fixed-model"
+
+
+def test_real_agent_wrapper_preserves_each_attempt_transcript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "task-harness.log"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AGENTIC_HARNESS_INSTRUCTION", "make the change")
+    monkeypatch.setenv("REAL_AGENT_TRANSCRIPT", str(base))
+    monkeypatch.setenv("REAL_AGENT_MODEL", "fixed-model")
+    monkeypatch.setattr(
+        real_agent_worker.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "done", ""),
+    )
+
+    assert real_agent_worker.main() == 0
+    assert real_agent_worker.main() == 0
+
+    assert (tmp_path / "task-harness.attempt-1.log").is_file()
+    assert (tmp_path / "task-harness.attempt-2.log").is_file()
