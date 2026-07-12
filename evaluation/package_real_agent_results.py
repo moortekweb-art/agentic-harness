@@ -35,30 +35,45 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
     redacted_dir = destination / "transcripts"
     redacted_dir.mkdir()
     transcript_files = set((source / "transcripts").glob("*.log"))
-    transcript_keys = {_transcript_key(path, keys) for path in transcript_files}
-    if None in transcript_keys or transcript_keys - keys or keys - transcript_keys:
+    identities = [_transcript_identity(path, keys) for path in transcript_files]
+    transcript_keys = {identity[0] for identity in identities if identity is not None}
+    if any(identity is None for identity in identities) or transcript_keys != keys:
         raise ValueError("transcript set does not match raw task-arm records")
+    actual_attempts: dict[tuple[str, str], set[int]] = {key: set() for key in keys}
+    for identity in identities:
+        assert identity is not None
+        key, attempt = identity
+        if attempt in actual_attempts[key]:
+            raise ValueError("duplicate attempt transcript")
+        actual_attempts[key].add(attempt)
+    expected_attempts = {
+        (row["task_id"], row["arm"]): set(range(1, int(row["attempts"]) + 1))
+        for row in rows
+    }
+    if actual_attempts != expected_attempts:
+        raise ValueError("attempt transcripts do not match raw attempt counts")
     tokens_by_run: dict[tuple[str, str], int] = {key: 0 for key in keys}
     manifest: list[dict[str, Any]] = []
     for transcript in sorted(transcript_files):
         text = transcript.read_text(encoding="utf-8")
         if SECRET_PATTERN.search(text):
             raise ValueError(f"possible secret in {transcript.name}")
-        match = TOKEN_PATTERN.search(text)
-        if match is None:
-            raise ValueError(f"missing token count in {transcript.name}")
-        key = _transcript_key(transcript, keys)
-        if key is None:
+        identity = _transcript_identity(transcript, keys)
+        if identity is None:
             raise ValueError(f"unmatched transcript: {transcript.name}")
+        key, attempt = identity
         arm = key[1]
-        tokens = int(match.group(1).replace(",", ""))
-        tokens_by_run[key] += tokens
+        match = TOKEN_PATTERN.search(text)
+        tokens = int(match.group(1).replace(",", "")) if match is not None else None
+        if tokens is not None:
+            tokens_by_run[key] += tokens
         target = redacted_dir / transcript.name
         target.write_text(redact(text), encoding="utf-8")
         manifest.append(
             {
                 "file": f"transcripts/{transcript.name}",
                 "arm": arm,
+                "attempt": attempt,
                 "tokens": tokens,
                 "sha256": sha256(target),
             }
@@ -66,7 +81,10 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
     source_summary = json.loads((source / "summary.json").read_text(encoding="utf-8"))
     summary = {key: value for key, value in source_summary.items() if key != "arms"}
     summary["arms"] = {arm: _summarize_rows(rows, arm) for arm in ("direct", "harness")}
-    summary["token_metrics_available"] = True
+    token_observations = sum(row["tokens"] is not None for row in manifest)
+    summary["token_metrics_available"] = token_observations > 0
+    summary["token_metrics_complete"] = token_observations == len(manifest)
+    summary["token_observations"] = token_observations
     summary["data_quality"] = {
         "records": len(rows), "unique_task_arm_pairs": len(keys),
         "transcripts": len(manifest), "secret_scan_passed": True,
@@ -89,12 +107,14 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
     return summary
 
 
-def _transcript_key(
+def _transcript_identity(
     path: Path, keys: set[tuple[str, str]]
-) -> tuple[str, str] | None:
+) -> tuple[tuple[str, str], int] | None:
+    match = re.search(r"\.attempt-([1-9][0-9]*)$", path.stem)
+    attempt = int(match.group(1)) if match else 1
     stem = re.sub(r"\.attempt-[1-9][0-9]*$", "", path.stem)
     matches = [key for key in keys if stem == f"{key[0]}-{key[1]}"]
-    return matches[0] if len(matches) == 1 else None
+    return (matches[0], attempt) if len(matches) == 1 else None
 
 
 def _summarize_rows(rows: list[dict[str, Any]], arm: str) -> dict[str, Any]:
