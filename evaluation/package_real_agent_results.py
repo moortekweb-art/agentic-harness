@@ -34,9 +34,15 @@ def package(source: Path, destination: Path) -> dict[str, Any]:
     destination.mkdir(parents=True, exist_ok=False)
     redacted_dir = destination / "transcripts"
     redacted_dir.mkdir()
+    transcript_files = set((source / "transcripts").glob("*.log"))
+    expected_files = {
+        source / "transcripts" / f"{task_id}-{arm}.log" for task_id, arm in keys
+    }
+    if transcript_files != expected_files:
+        raise ValueError("transcript set does not match raw task-arm records")
     token_by_arm: dict[str, list[int]] = {"direct": [], "harness": []}
     manifest: list[dict[str, Any]] = []
-    for transcript in sorted((source / "transcripts").glob("*.log")):
+    for transcript in sorted(transcript_files):
         text = transcript.read_text(encoding="utf-8")
         if SECRET_PATTERN.search(text):
             raise ValueError(f"possible secret in {transcript.name}")

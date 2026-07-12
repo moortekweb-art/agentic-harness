@@ -10,6 +10,8 @@ unaccepted. The pilot is retained as integration evidence and none of its arm
 results are reused below. Protocol revision 2 changes only the wrapper envelope
 to the already-documented contract; tasks, prompts, agent, seed, limits,
 metrics, and arm order remain fixed. Both arms must be rerun in full.
+The pilot remains local and is not part of the public evidence package, so its
+detailed outcome is not independently auditable from this repository.
 
 ## Decision
 
@@ -20,7 +22,8 @@ is not an adoption study or a general coding benchmark.
 
 ## Fixed design
 
-- Agent: Codex CLI 0.144.1 using its configured default model.
+- Agent: Codex CLI 0.144.1 with model `gpt-5.6-sol`, passed explicitly through
+  `--model`. Reruns must supply `--model gpt-5.6-sol`.
 - Arms: one direct invocation versus the same command through Agentic Harness.
 - Tasks: the ten entries in `real_agent_tasks.json`.
 - Seed: `20260712`; arm order is randomized per task from that seed.
@@ -35,7 +38,10 @@ is not an adoption study or a general coding benchmark.
   checkpoint, an explicit requirement linked to Harness reviewer criterion
   `review:1`, and an empty blockers list. The real agent does not author or see
   that reviewer-issued result.
-- Expected results remain outside the agent workspace.
+- Expected results remain outside the agent workspace and are withheld from
+  the prompt, but this is not OS-enforced blindness: the same-user Codex
+  process may be able to read other host paths. Transcripts must be checked for
+  evidence of manifest access.
 - Every attempted run is retained, including failures and timeouts.
 
 ## Metrics

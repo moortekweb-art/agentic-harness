@@ -34,6 +34,7 @@
   },
   "disclaimer": "One-agent ten-task synthetic comparison; not broad model or adoption proof.",
   "finished_at": "2026-07-12T06:21:59.211035Z",
+  "model": "gpt-5.6-sol",
   "schema": "agentic_harness.real_agent_comparison.v1",
   "seed": 20260712,
   "started_from_commit": "90f5212cd59df0b0419515872a7a1db3ccb743ab",

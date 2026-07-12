@@ -28,6 +28,16 @@ latency and token use, so this easy task set did not demonstrate a correctness
 benefit. Raw records, redacted transcripts, hashes, and the invalid-pilot
 disposition are published with the result.
 
+Future reruns must pin the evaluated model explicitly:
+
+```bash
+python evaluation/run_real_agent_comparison.py \
+  --tasks evaluation/real_agent_tasks.json \
+  --output-dir /tmp/agentic-harness-real-agent \
+  --seed 20260712 \
+  --model gpt-5.6-sol
+```
+
 ## Checked-in Release Snapshot
 
 [`results/representative/`](results/representative/README.md) is an immutable

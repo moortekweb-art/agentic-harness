@@ -1,6 +1,7 @@
 # Codex real-agent comparison — 2026-07-12
 
-This is a preregistered end-to-end comparison of Codex CLI 0.144.1 on ten
+This is a preregistered end-to-end comparison of Codex CLI 0.144.1 using
+`gpt-5.6-sol` on ten
 small synthetic maintenance tasks. It is not broad model-quality, adoption, or
 statistical evidence.
 
@@ -25,7 +26,9 @@ SHA-256 digest and exact transcript-reported token count. The packaging check
 found 20 unique task-arm pairs, no missing transcript, and no recognized secret
 pattern.
 
-An earlier pilot is excluded because its evaluation wrapper omitted mandatory
+An earlier local pilot is excluded because its evaluation wrapper omitted mandatory
 fields from the existing external-worker completion contract. All ten pilot
-Harness workspaces passed their hidden verifier but were correctly rejected as
-unproven. No pilot result was reused.
+Harness workspaces passed their verifier but were correctly rejected as
+unproven. No pilot result was reused. Detailed pilot artifacts are not included
+in this public package, so that pilot disposition is not independently auditable
+from the repository.

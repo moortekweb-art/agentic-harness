@@ -29,6 +29,12 @@ WORKER = ROOT / "evaluation" / "real_agent_worker.py"
 VERIFIER = ROOT / "evaluation" / "verify_real_agent_task.py"
 
 
+def _timeout_text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+
 def load_tasks(path: Path) -> list[dict[str, str]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema") != "agentic_harness.real_agent_tasks.v1":
@@ -65,33 +71,49 @@ def changed_paths(workspace: Path, task: dict[str, str]) -> list[str]:
     return sorted((actual - initial_paths) | ({task["path"]} if actual & expected else set()))
 
 
-def run_direct(workspace: Path, task: dict[str, str], transcript: Path) -> dict[str, Any]:
+def run_direct(
+    workspace: Path, task: dict[str, str], transcript: Path, model: str
+) -> dict[str, Any]:
     env = os.environ.copy()
     env.update(
         {
             "AGENTIC_HARNESS_OBJECTIVE": task["objective"],
             "AGENTIC_HARNESS_INSTRUCTION": task["objective"],
             "REAL_AGENT_TRANSCRIPT": str(transcript),
+            "REAL_AGENT_MODEL": model,
         }
     )
     started = time.perf_counter()
-    completed = subprocess.run(
-        [sys.executable, str(WORKER)], cwd=workspace, env=env, text=True,
-        capture_output=True, check=False, timeout=210,
-    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(WORKER)], cwd=workspace, env=env, text=True,
+            capture_output=True, check=False, timeout=210,
+        )
+        returncode = completed.returncode
+        timed_out = False
+    except subprocess.TimeoutExpired as exc:
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(
+            _timeout_text(exc.stdout) + _timeout_text(exc.stderr), encoding="utf-8"
+        )
+        returncode = 124
+        timed_out = True
     return {
-        "accepted": completed.returncode == 0,
+        "accepted": returncode == 0,
         "attempts": 1,
         "elapsed_seconds": round(time.perf_counter() - started, 3),
-        "returncode": completed.returncode,
+        "returncode": returncode,
+        "timed_out": timed_out,
     }
 
 
 def run_harness(
-    workspace: Path, task: dict[str, str], transcript: Path, review: list[str]
+    workspace: Path, task: dict[str, str], transcript: Path, review: list[str], model: str
 ) -> dict[str, Any]:
     previous = os.environ.get("REAL_AGENT_TRANSCRIPT")
     os.environ["REAL_AGENT_TRANSCRIPT"] = str(transcript)
+    previous_model = os.environ.get("REAL_AGENT_MODEL")
+    os.environ["REAL_AGENT_MODEL"] = model
     try:
         worker = CodingAgentWorker([sys.executable, str(WORKER)], cwd=workspace, timeout=210)
         reviewer = DeterministicReviewer([command_passes(review, cwd=workspace, timeout=30)])
@@ -106,6 +128,10 @@ def run_harness(
             os.environ.pop("REAL_AGENT_TRANSCRIPT", None)
         else:
             os.environ["REAL_AGENT_TRANSCRIPT"] = previous
+        if previous_model is None:
+            os.environ.pop("REAL_AGENT_MODEL", None)
+        else:
+            os.environ["REAL_AGENT_MODEL"] = previous_model
     autonomy = goal.metadata.get("autonomy")
     autonomy = autonomy if isinstance(autonomy, dict) else {}
     return {
@@ -117,7 +143,7 @@ def run_harness(
     }
 
 
-def run(output: Path, task_file: Path, seed: int) -> dict[str, Any]:
+def run(output: Path, task_file: Path, seed: int, model: str) -> dict[str, Any]:
     tasks = load_tasks(task_file)
     output.mkdir(parents=True, exist_ok=False)
     rows: list[dict[str, Any]] = []
@@ -131,9 +157,9 @@ def run(output: Path, task_file: Path, seed: int) -> dict[str, Any]:
             transcript.parent.mkdir(parents=True, exist_ok=True)
             review = verifier_command(task_file, task["id"])
             measured = (
-                run_direct(workspace, task, transcript)
+                run_direct(workspace, task, transcript, model)
                 if arm == "direct"
-                else run_harness(workspace, task, transcript, review)
+                else run_harness(workspace, task, transcript, review, model)
             )
             passed = verify(workspace, review)
             rows.append(
@@ -151,6 +177,7 @@ def run(output: Path, task_file: Path, seed: int) -> dict[str, Any]:
         "disclaimer": "One-agent ten-task synthetic comparison; not broad model or adoption proof.",
         "seed": seed,
         "agent": subprocess.run(["codex", "--version"], text=True, capture_output=True).stdout.strip(),
+        "model": model,
         "started_from_commit": subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, capture_output=True
         ).stdout.strip(),
@@ -185,8 +212,14 @@ def main() -> int:
     parser.add_argument("--tasks", type=Path, default=TASKS)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=20260712)
+    parser.add_argument("--model", required=True)
     args = parser.parse_args()
-    print(json.dumps(run(args.output_dir.resolve(), args.tasks.resolve(), args.seed), indent=2))
+    print(
+        json.dumps(
+            run(args.output_dir.resolve(), args.tasks.resolve(), args.seed, args.model),
+            indent=2,
+        )
+    )
     return 0
 
 

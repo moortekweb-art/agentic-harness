@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -40,6 +41,7 @@ def test_real_agent_wrapper_emits_complete_external_contract(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AGENTIC_HARNESS_INSTRUCTION", "make the change")
     monkeypatch.setenv("REAL_AGENT_TRANSCRIPT", str(tmp_path / "transcript.log"))
+    monkeypatch.setenv("REAL_AGENT_MODEL", "fixed-model")
     monkeypatch.setattr(
         real_agent_worker.subprocess,
         "run",
@@ -55,3 +57,44 @@ def test_real_agent_wrapper_emits_complete_external_contract(
     assert payload["plan"]
     assert payload["requirements"][0]["evidence"] == ["review:1"]
     assert payload["blockers"] == []
+
+
+def test_real_agent_wrapper_records_timeout_and_returns_124(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    transcript = tmp_path / "transcript.log"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AGENTIC_HARNESS_INSTRUCTION", "make the change")
+    monkeypatch.setenv("REAL_AGENT_TRANSCRIPT", str(transcript))
+    monkeypatch.setenv("REAL_AGENT_MODEL", "fixed-model")
+    monkeypatch.setattr(
+        real_agent_worker.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(args[0], 180, output="partial out", stderr="partial err")
+        ),
+    )
+
+    assert real_agent_worker.main() == 124
+    assert "partial out" in transcript.read_text(encoding="utf-8")
+    payload = __import__("json").loads(capsys.readouterr().out.split("=", 1)[1])
+    assert payload["status"] == "failed"
+    assert payload["blockers"] == ["coding agent timed out"]
+
+
+def test_worker_command_pins_requested_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AGENTIC_HARNESS_INSTRUCTION", "make the change")
+    monkeypatch.setenv("REAL_AGENT_TRANSCRIPT", str(tmp_path / "transcript.log"))
+    monkeypatch.setenv("REAL_AGENT_MODEL", "fixed-model")
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "done", "")
+
+    monkeypatch.setattr(real_agent_worker.subprocess, "run", fake_run)
+    assert real_agent_worker.main() == 0
+    assert commands[0][commands[0].index("--model") + 1] == "fixed-model"
