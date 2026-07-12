@@ -174,9 +174,10 @@ def test_active_publish_workflow_gates_oidc_on_exact_verified_release_commit() -
     assert f"{validation_script} ci" in text
     assert f"{validation_script} receipt" in text
     regenerate = text.index("Regenerate representative benchmark receipt")
+    install = text.index("Install benchmark and release dependencies")
     validate_receipt = text.index("Verify representative benchmark release provenance")
     build = text.index("Build and smoke-test distributions")
-    assert regenerate < validate_receipt < build
+    assert install < regenerate < validate_receipt < build
     assert "python -m agentic_harness.core.release_validation" not in text
     validate_steps = workflow["jobs"]["validate"]["steps"]
     first_install = next(
