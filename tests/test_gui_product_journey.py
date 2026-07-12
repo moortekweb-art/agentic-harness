@@ -95,9 +95,29 @@ def test_gui_primary_form_puts_required_verification_before_optional_scope() -> 
     safe_areas = html.index('id="safeAreas"')
 
     assert "Objective" in html[:optional_scope]
-    assert "Independent verification command" in html[:optional_scope]
+    assert "Verification command for this goal" in html[:optional_scope]
+    assert "Pre-filled from Setup. Edit it here to override the default for this run." in html
+    assert "Default verification command for this workspace" in html
     assert objective < verification < optional_scope < safe_areas
     assert "Add scope and checks" not in html
+
+
+def test_gui_primary_actions_and_disabled_cursor_match_interaction_state() -> None:
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    javascript = (STATIC / "app.js").read_text(encoding="utf-8")
+    styles = (STATIC / "styles.css").read_text(encoding="utf-8")
+
+    assert "Coding-agent work, independently verified" in html
+    assert 'id="startButton"' in html
+    assert 'id="checkButton"' in html
+    assert 'id="undoButton"' not in html
+    assert 'id="redoButton"' not in html
+    assert "Ctrl Z</dt><dd>Undo form edit" in html
+    assert "Ctrl Shift Z</dt><dd>Redo form edit" in html
+    assert 'button.setAttribute("aria-busy", String(busy))' in javascript
+    assert "cursor: not-allowed" in styles
+    assert 'button[aria-busy="true"]:disabled' in styles
+    assert "cursor: progress" in styles
 
 
 def test_gui_receipt_card_uses_attempts_and_trusted_terminal_fields() -> None:

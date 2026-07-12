@@ -7,12 +7,15 @@ use a clean branch or disposable clone and review every diff.
 ## Ten-minute path
 
 ```bash
-pipx install local-agentic-harness==0.7.3
+pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git
 cd /path/to/your/project
 agentic-harness init-agent codex
 agentic-harness do "make one small, reviewable change" --check "YOUR EXISTING CHECK"
 agentic-harness report
 ```
+
+This guide exercises the current source. For the latest published release from
+PyPI, use `pipx install local-agentic-harness` without a hard-coded version.
 
 Use a deterministic command the project already trusts, such as a focused test,
 lint command, or build. Do not weaken the command merely to obtain a pass.

@@ -49,8 +49,6 @@ const els = {
   checks: byId("checks"),
   startButton: byId("startButton"),
   checkButton: byId("checkButton"),
-  undoButton: byId("undoButton"),
-  redoButton: byId("redoButton"),
   statusLabel: byId("statusLabel"),
   statusIndicator: byId("statusIndicator"),
   statusIcon: byId("statusIcon"),
@@ -261,6 +259,9 @@ function restoreForm() {
 function setBusy(busy) {
   state.busy = busy;
   updateStartButton();
+  [els.startButton, els.checkButton, els.continueButton, els.acceptButton, els.stopButton].forEach((button) => {
+    button.setAttribute("aria-busy", String(busy));
+  });
   [els.checkButton, els.continueButton, els.acceptButton, els.stopButton].forEach((button) => {
     button.disabled = busy;
   });
@@ -911,8 +912,6 @@ els.stopButton.addEventListener("click", () => {
     postAction("/api/tasks/current/stop");
   }
 });
-els.undoButton.addEventListener("click", undoForm);
-els.redoButton.addEventListener("click", redoForm);
 els.themeButton.addEventListener("click", toggleTheme);
 els.shortcutsButton.addEventListener("click", () => els.shortcutsDialog.showModal());
 els.historySearch.addEventListener("input", () => refreshHistory().catch(() => {}));

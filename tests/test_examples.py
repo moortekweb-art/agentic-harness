@@ -82,7 +82,10 @@ def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
         'agentic-harness do "fix the failing tests" '
         '--check "python -m pytest tests/ -q"'
     ) in quick_start
-    assert ".agentic-harness/runs/<goal-id>/report.md" in quick_start
+    assert ".agentic-harness/runs/{goal-id}/report.md" in quick_start
+    assert "agentic-harness-gui.png" in quick_start
+    assert "docs/EXTERNAL_BETA.md" in quick_start
+    assert "docs/EXTERNAL_BETA_FEEDBACK.md" in quick_start
     assert "agentic-harness run-demo fix-tests" in quick_start
     assert "controlled mechanics demo" in quick_start
     assert "agentic-harness create-demo" not in quick_start
@@ -99,7 +102,8 @@ def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
     assert "agentic-harness changelog" in readme
     assert "agentic-harness verify-tests" in readme
     assert "python -m agentic_harness.cli release-smoke" in readme
-    assert ".agentic-harness/runs/<goal-id>/report.md" in readme
+    assert ".agentic-harness/runs/{goal-id}/report.md" in readme
+    assert ".agentic-harness/runs/<goal-id>/report.md" not in readme
     assert "cat > .agentic-harness/config.yml" not in quick_start
 
 
@@ -110,6 +114,17 @@ def test_readme_documents_released_distribution_install() -> None:
     assert "pipx install local-agentic-harness" in installation
     assert "The installed CLI command remains `agentic-harness`." in installation
     assert "After the first PyPI publish" not in installation
+    assert "Install the latest published release from PyPI" in installation
+    assert "currently 0.7.3" not in installation
+
+
+def test_external_beta_uses_current_source_without_a_false_pypi_pin() -> None:
+    beta = (REPO_ROOT / "docs/EXTERNAL_BETA.md").read_text(encoding="utf-8")
+    normalized = " ".join(beta.split())
+
+    assert "pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git" in beta
+    assert "pipx install local-agentic-harness==0.7.3" not in beta
+    assert "latest published release from PyPI" in normalized
 
 
 def test_public_getting_started_docs_use_one_verified_task_story() -> None:
@@ -187,6 +202,10 @@ def test_readme_links_reproducible_gate_evaluation_without_model_quality_claims(
     assert "validate it against the v0.7.2 tag, not current main" in normalized
     assert "evaluation/results/representative/README.md" in readme
     assert "evaluation/results/representative/raw.jsonl" in readme
+    assert "both arms passed 9/10 verifiers" in normalized
+    assert "direct execution falsely accepted the miss" in normalized
+    assert "harness refused it but did not repair it" in normalized
+    assert "hard-real-agent-v5-20260712/README.md" in readme
 
 
 def test_active_product_docs_are_provider_neutral() -> None:
