@@ -1,0 +1,137 @@
+Updated:
+
+- `pyproject.toml`: version `2.4.1`
+- `package/__init__.py`: version `2.4.1`
+
+Verified dependency remains `widget>=2.4.0`.
+OpenAI Codex v0.144.1
+--------
+workdir: [local-path]
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: low
+reasoning summaries: none
+session id: [redacted]
+--------
+user
+Bump the package version from 2.4.0 to 2.4.1 in both pyproject.toml and package/__init__.py. Do not change the dependency constraint.
+Work only inside the current directory. Inspect the relevant file, make the smallest correct edit, and verify it if practical. Do not create reports or notes.
+warning: Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.
+codex
+I’ll inspect the two version declarations and the dependency constraint, then apply only the release-version edits.
+exec
+/bin/bash -lc "rg -n \"2\\.4\\.0|version|dependency|dependencies\" pyproject.toml package/__init__.py" in [local-path]
+ succeeded in 0ms:
+package/__init__.py:1:__version__ = "2.4.0"
+pyproject.toml:2:version = "2.4.0"
+pyproject.toml:3:dependencies = ["widget>=2.4.0"]
+
+apply patch
+patch: completed
+[local-path]
+[local-path]
+diff --git a/package/__init__.py b/package/__init__.py
+index 3d67cd6bb497cf0c862b60ff30e8b273aae5d851..54499df347963349cfb542a31e2ae2b19e63337c
+--- a/package/__init__.py
++++ b/package/__init__.py
+@@ -1 +1 @@
+-__version__ = "2.4.0"
++__version__ = "2.4.1"
+diff --git a/pyproject.toml b/pyproject.toml
+index 3a0ed577f26f1ee4f9cead471e2312b3a9134b98..e23913206da04500994fd4f5805eed6e5ce6206d
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,3 +1,3 @@
+ [project]
+-version = "2.4.0"
++version = "2.4.1"
+ dependencies = ["widget>=2.4.0"]
+
+diff --git a/package/__init__.py b/package/__init__.py
+index 3d67cd6bb497cf0c862b60ff30e8b273aae5d851..54499df347963349cfb542a31e2ae2b19e63337c
+--- a/package/__init__.py
++++ b/package/__init__.py
+@@ -1 +1 @@
+-__version__ = "2.4.0"
++__version__ = "2.4.1"
+diff --git a/pyproject.toml b/pyproject.toml
+index 3a0ed577f26f1ee4f9cead471e2312b3a9134b98..e23913206da04500994fd4f5805eed6e5ce6206d
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,3 +1,3 @@
+ [project]
+-version = "2.4.0"
++version = "2.4.1"
+ dependencies = ["widget>=2.4.0"]
+
+codex
+The two declarations are updated. I’m using the verification-before-completion checklist now to confirm both values and ensure the dependency constraint stayed untouched.
+exec
+/bin/bash -lc "sed -n '1,8p' [local-path] && rg -n \"2\\.4\\.[01]|version|dependencies\" pyproject.toml package/__init__.py && git diff -- pyproject.toml package/__init__.py" in [local-path]
+ exited 1 in 0ms:
+---
+name: verification-before-completion
+description: Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always
+trigger: when about to mark work complete, claim a task is done, or say something is working
+---
+
+# Verification Before Completion
+
+package/__init__.py:1:__version__ = "2.4.1"
+pyproject.toml:2:version = "2.4.1"
+pyproject.toml:3:dependencies = ["widget>=2.4.0"]
+diff --git a/pyproject.toml b/package/__init__.py
+index e239132..54499df 100644
+--- a/pyproject.toml
++++ b/package/__init__.py
+@@ -1,3 +1 @@
+-[project]
+-version = "2.4.1"
+-dependencies = ["widget>=2.4.0"]
++__version__ = "2.4.1"
+
+diff --git a/package/__init__.py b/package/__init__.py
+index 3d67cd6bb497cf0c862b60ff30e8b273aae5d851..54499df347963349cfb542a31e2ae2b19e63337c
+--- a/package/__init__.py
++++ b/package/__init__.py
+@@ -1 +1 @@
+-__version__ = "2.4.0"
++__version__ = "2.4.1"
+diff --git a/pyproject.toml b/pyproject.toml
+index 3a0ed577f26f1ee4f9cead471e2312b3a9134b98..e23913206da04500994fd4f5805eed6e5ce6206d
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,3 +1,3 @@
+ [project]
+-version = "2.4.0"
++version = "2.4.1"
+ dependencies = ["widget>=2.4.0"]
+
+codex
+Updated:
+
+- `pyproject.toml`: version `2.4.1`
+- `package/__init__.py`: version `2.4.1`
+
+Verified dependency remains `widget>=2.4.0`.
+diff --git a/package/__init__.py b/package/__init__.py
+index 3d67cd6bb497cf0c862b60ff30e8b273aae5d851..54499df347963349cfb542a31e2ae2b19e63337c
+--- a/package/__init__.py
++++ b/package/__init__.py
+@@ -1 +1 @@
+-__version__ = "2.4.0"
++__version__ = "2.4.1"
+diff --git a/pyproject.toml b/pyproject.toml
+index 3a0ed577f26f1ee4f9cead471e2312b3a9134b98..e23913206da04500994fd4f5805eed6e5ce6206d
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,3 +1,3 @@
+ [project]
+-version = "2.4.0"
++version = "2.4.1"
+ dependencies = ["widget>=2.4.0"]
+
+tokens used
+12,607

@@ -39,6 +39,16 @@ python evaluation/run_real_agent_comparison.py \
   --model gpt-5.6-sol
 ```
 
+## Harder Real-Agent Follow-up
+
+The separately preregistered [harder comparison](results/hard-real-agent-20260712/README.md)
+used ten multi-file and edge-preservation tasks. Both arms passed 9/10 hidden
+verifiers. Direct execution accepted the failed result; Harness refused it
+after three unsuccessful repair attempts. The result demonstrates one
+fail-closed acceptance decision, not a higher final task-success rate. Raw
+records, all 22 attempt transcripts, hashes, token observations, and limitations
+are published with the result.
+
 ## Checked-in Release Snapshot
 
 [`results/representative/`](results/representative/README.md) is an immutable
