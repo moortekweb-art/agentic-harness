@@ -13,7 +13,7 @@ evidence, broad model evaluation, or an adoption claim.
 
 Both arms failed the compatibility-alias outcome check. Direct execution still
 returned success and was therefore counted as one false accept. Harness failed
-the same check across three attempts and refused acceptance. Harness did not
+the same check across four attempts and refused acceptance. Harness did not
 repair the task, did not improve final verifier-pass rate, and used materially
 more time and transcript-reported tokens.
 
@@ -25,9 +25,14 @@ policy operated on this miss.
 
 The user objective and starting workspace were identical across arms, but the
 full prompts and budgets were not. Harness supplied lifecycle/evidence
-instructions and allowed up to three attempts, so this is an end-to-end system
+instructions and actually allowed up to four attempts, so this is an end-to-end system
 comparison. The remote model/provider is mutable. Verifiers were omitted from
 task prompts but were not protected by OS-level secrecy or workload isolation.
+
+The preregistration called `AutonomyPolicy(max_cycles=3)` a three-attempt limit;
+the implementation permits an initial attempt plus three cycles. This budget
+description was wrong. The raw four-attempt sequence is retained, and no result
+was recomputed to conceal the discrepancy.
 
 `raw.jsonl` contains 20 task-arm records and an explicit scoring-verifier timeout
 field. `transcripts/` contains all 23 redacted attempt transcripts;

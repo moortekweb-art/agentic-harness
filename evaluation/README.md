@@ -52,7 +52,7 @@ requirement, safe unique task IDs, and a bounded scoring verifier.
 
 The [revision-3 result](results/hard-real-agent-v3-20260712/README.md) produced
 9/10 verifier passes in each arm. Direct trusted exit-zero and accepted the one
-failed result; Harness refused it after three attempts. Harness did not repair
+failed result; Harness refused it after four attempts. Harness did not repair
 the task or improve final success and used more time and tokens. This supports
 only a narrow fail-closed policy-integrity claim. All 20 rows, 23 attempts,
 hashes, tokens, and limitations are published.

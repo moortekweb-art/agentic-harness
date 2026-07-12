@@ -8,8 +8,8 @@ This follow-up uses Codex CLI 0.144.1 with explicit model `gpt-5.6-sol` on ten
 synthetic multi-file or edge-preservation maintenance tasks. Code tasks use
 behavioral verification so equivalent correct implementations pass; exact-file checks are
 reserved for tasks whose requirements specify exact config, version, or documentation state. It reuses the
-revision-3 evidence pipeline from the first study: randomized arm order, three
-maximum Harness attempts, hidden-from-prompt deterministic verification,
+revision-3 evidence pipeline from the first study: randomized arm order,
+`AutonomyPolicy(max_cycles=3)`, hidden-from-prompt deterministic verification,
 incremental raw rows, per-attempt transcripts, raw-derived aggregates, and
 optional telemetry.
 
@@ -29,3 +29,8 @@ defined to require the outcome verifier, while the direct arm trusts exit-zero.
 They test whether that policy boundary was enforced, not whether Harness makes
 the underlying model more capable. This remote-model artifact is auditable but
 not exactly reproducible because provider and model internals are not immutable.
+
+Post-run budget erratum: the preregistration described `max_cycles=3` as three
+maximum attempts. The runner's cycle semantics allowed one initial attempt plus
+three cycles, and the failed Harness task therefore has four recorded attempts.
+No row or aggregate was altered. Treat four as the actual maximum for this run.
