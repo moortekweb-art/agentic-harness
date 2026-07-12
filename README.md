@@ -35,6 +35,8 @@ verification command passes.
 See the loaded [desktop result](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/assets/agentic-harness-gui.png) and
 [mobile result](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/assets/agentic-harness-gui-mobile.png) from the packaged demo.
 
+![Agentic Harness showing a verified completed task](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui.png)
+
 ### Run the same verified task from the terminal
 
 ```bash
@@ -46,7 +48,7 @@ agentic-harness report
 
 `--check` is the independent completion gate. A worker saying “done” cannot
 replace it. The durable report is written to
-`.agentic-harness/runs/<goal-id>/report.md`.
+`.agentic-harness/runs/{goal-id}/report.md`.
 
 ### Try the gate without an agent account
 
@@ -58,6 +60,9 @@ The packaged example starts with a failing test. Its mock coding agent claims
 completion too early, the independent check rejects that claim, and a second
 attempt repairs the project. It is a controlled mechanics demo, not evidence
 about model quality. See the complete [terminal demo script](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/demo-script.md).
+
+Testing on a real repository? Read the [external beta guide](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EXTERNAL_BETA.md)
+and submit [sanitized feedback](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EXTERNAL_BETA_FEEDBACK.md).
 
 ## Product Boundary
 
@@ -90,7 +95,7 @@ agentic-harness run-recipe fix-tests --explain
 
 Recipes auto-create config when a supported installed coding agent is available.
 Each run writes an operator-readable report at
-`.agentic-harness/runs/<goal-id>/report.md`.
+`.agentic-harness/runs/{goal-id}/report.md`.
 
 ## How Completion Works
 
@@ -153,6 +158,11 @@ also publishes all records and redacted transcripts. Both arms passed all ten
 easy tasks, so it found no correctness advantage; Harness cost more time and
 tokens. That negative result is a starting point for harder evaluation, not a
 marketing claim.
+
+On a harder preregistered set, both arms passed 9/10 verifiers. Direct
+execution falsely accepted the miss; Harness refused it but did not repair it
+and cost more time and tokens. See the current
+[revision-five result](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/results/hard-real-agent-v5-20260712/README.md).
 
 ## Execution Methods
 
@@ -328,7 +338,7 @@ from agentic_harness import Goal, Supervisor, Worker
 
 ## Installation
 
-Install the latest released distribution from PyPI (currently 0.7.3):
+Install the latest published release from PyPI:
 
 ```bash
 pipx install local-agentic-harness
@@ -388,6 +398,8 @@ goal/report smoke test, and writes `SHA256SUMS` beside the artifacts.
 - [PyPI trusted publishing](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/PYPI_TRUSTED_PUBLISHING.md)
 - [Security policy](https://github.com/moortekweb-art/agentic-harness/blob/main/SECURITY.md)
 - [Contributor guide](https://github.com/moortekweb-art/agentic-harness/blob/main/CONTRIBUTING.md)
+- [External beta guide](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EXTERNAL_BETA.md)
+- [External beta feedback template](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EXTERNAL_BETA_FEEDBACK.md)
 - [Examples](https://github.com/moortekweb-art/agentic-harness/tree/main/examples)
 
 ## Contributing

@@ -240,7 +240,7 @@
             <svg class="icon"><use href="#icon-workflow"></use></svg>
           </span>
           <div>
-            <p class="eyebrow">Plain-language goals, visible work</p>
+            <p class="eyebrow">Coding-agent work, independently verified</p>
             <h1>Agentic Harness</h1>
           </div>
         </div>
@@ -285,9 +285,9 @@
             placeholder="Example: add a CSV export, update its tests, and explain the changed files"
           ></textarea>
 
-          <label class="field-label" for="checks">Independent verification command</label>
+          <label class="field-label" for="checks">Verification command for this goal</label>
           <textarea id="checks" rows="2" required placeholder="Example: python -m pytest -q"></textarea>
-          <p class="help-text">This check runs independently. The task is never verified done unless it passes.</p>
+          <p class="help-text">Pre-filled from Setup. Edit it here to override the default for this run. This check runs independently, and the task is never verified done unless it passes.</p>
 
           <details class="boundaries">
             <summary>Optional scope</summary>
@@ -304,14 +304,6 @@
             <button id="checkButton" title="Refresh the visible task status">
               <svg class="icon" aria-hidden="true"><use href="#icon-refresh-cw"></use></svg>
               <span>Refresh</span>
-            </button>
-            <button id="undoButton" title="Undo the last form edit">
-              <svg class="icon" aria-hidden="true"><use href="#icon-undo-2"></use></svg>
-              <span>Undo</span>
-            </button>
-            <button id="redoButton" title="Redo the last undone form edit">
-              <svg class="icon" aria-hidden="true"><use href="#icon-redo-2"></use></svg>
-              <span>Redo</span>
             </button>
           </div>
         </div>
@@ -481,7 +473,7 @@
           </div>
           <label class="confirm-row" id="remoteDataRow" hidden><input id="confirmRemoteData" type="checkbox" /><span>I understand selected file excerpts and tool results will be sent to this remote model endpoint.</span></label>
         </div>
-        <label class="field-label" for="verificationCommand">Independent verification command</label>
+        <label class="field-label" for="verificationCommand">Default verification command for this workspace</label>
         <input id="verificationCommand" type="text" placeholder="python -m pytest -q" required />
         <details>
           <summary>Goal limits</summary>
