@@ -1,0 +1,142 @@
+[
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/boolean-default-direct.log",
+    "sha256": "228f65dcfcc7941bf21ce6dc506f2c869d43c93ff7c4eb9cd0a953fbd1880648",
+    "tokens": 17644
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/boolean-default-harness.log",
+    "sha256": "647f5eb1e06cfe84e59a939156445dc324945f84a29929d0cb2e1019c218e2b9",
+    "tokens": 14525
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/command-flag-direct.log",
+    "sha256": "cd7cb9c2b5c4fe5fd29b94c799ea283074bfa80da76fdfa333dbba3b9c3ccc1b",
+    "tokens": 13635
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/command-flag-harness.log",
+    "sha256": "4cdf2424eb88c6e910775d7d471664f2469df0e7bc7e675a2a9eaeeb2c631a6e",
+    "tokens": 14785
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/csv-port-direct.log",
+    "sha256": "34d749f2b4edcd4d8c0f1b40e63774965262339ead8ceddded6c33da689d6b82",
+    "tokens": 15403
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/csv-port-harness.log",
+    "sha256": "a98b93630cf1f199bf07f2682a67ed0f663de6b77b933b0905a6d2e8ccfe3f0e",
+    "tokens": 20373
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/dedupe-route-direct.log",
+    "sha256": "d7e142aed27dbbefcca4b6fad9baa969580e8696cd63ab0d49f1cc7fadd3c6f9",
+    "tokens": 14300
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/dedupe-route-harness.log",
+    "sha256": "a526e74997b8570d5c47a7095d5f5487fe3d7ba3cf0b321cbd2b6d8cdf74c319",
+    "tokens": 11974
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/dependency-pin-direct.log",
+    "sha256": "fb225bb5ceb34f4c1722549d7e052e4f7e02efdd5923305d2d60d48a26ffc115",
+    "tokens": 21101
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/dependency-pin-harness.log",
+    "sha256": "986485062379dba483ec24a8e9df3989c6758b767670e3b870e552ec2f52f0a3",
+    "tokens": 12805
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/json-timeout-direct.log",
+    "sha256": "2e907dae4991d809fb5c523c72247cb1ed20004d93d0ca20ab7322721364b1f3",
+    "tokens": 12767
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/json-timeout-harness.log",
+    "sha256": "b9a5ddabe1d4cd3ce3ba1d9702df738cd9c910e0c5eb4665693a51f5df481bda",
+    "tokens": 20520
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/label-typo-direct.log",
+    "sha256": "9f321bad3feea02ea3d758aac28cd9de898a9818742253e6ac617337d21e4fde",
+    "tokens": 13520
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/label-typo-harness.log",
+    "sha256": "9a6554aca1e5e36dda9b750cfa5f696b1a23d96f03244ea550824c8afece0f5d",
+    "tokens": 12613
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/markdown-link-direct.log",
+    "sha256": "cff00e897dee54c3710406c7f479088547479ec201e4afb0ec99b7f25159c7d1",
+    "tokens": 12936
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/markdown-link-harness.log",
+    "sha256": "233a6aa3c5e8db9486fd779cb4195e06ee4024ef11e654791f99d2a5b2679f10",
+    "tokens": 30287
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/retry-limit-direct.log",
+    "sha256": "cdf1bff6e76be33a308d25434c4ad07c9371d4937b1bf86b037c6c0a4019f4bc",
+    "tokens": 13647
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/retry-limit-harness.log",
+    "sha256": "19bf71274a7746161b12c5cb659737042b45cb0780042bb13719ff45c8ebd0ae",
+    "tokens": 13227
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/sort-flags-direct.log",
+    "sha256": "12cd75b7a0e60283a9b0572a282595596aa7e7467460fef4fcdef283007b699c",
+    "tokens": 14954
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/sort-flags-harness.log",
+    "sha256": "dcce8fe089a90e54dbdabdf96ba2dc831a77a3a56c26daf0afab16a3a307db8a",
+    "tokens": 16002
+  }
+]

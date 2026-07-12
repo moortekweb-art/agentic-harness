@@ -1,0 +1,60 @@
+Script started on 2026-07-11 23:23:34-07:00 [COMMAND="bash -lc 'python3 -m venv /tmp/agentic-harness-two-minute-demo/venv && /tmp/agentic-harness-two-minute-demo/venv/bin/pip -q install --disable-pip-version-check local-agentic-harness==0.7.3 && /tmp/agentic-harness-two-minute-demo/venv/bin/agentic-harness run-demo fix-tests /tmp/agentic-harness-two-minute-demo/project --force'" <not executed on terminal>]
+Demo path: /tmp/agentic-harness-two-minute-demo/project
+Create demo virtual environment: /tmp/agentic-harness-two-minute-demo/venv/bin/python3 -m venv --system-site-packages /tmp/agentic-harness-two-minute-demo/project/.venv
+Install demo dependencies: /tmp/agentic-harness-two-minute-demo/project/.venv/bin/python -m pip install -r requirements-dev.txt
+Reset demo: /tmp/agentic-harness-two-minute-demo/project/.venv/bin/python reset_demo.py
+Confirm starting tests fail: /tmp/agentic-harness-two-minute-demo/project/.venv/bin/python -m pytest tests/ -q
+Expected failure observed.
+Run fix-tests recipe: /tmp/agentic-harness-two-minute-demo/project/.venv/bin/python -m agentic_harness.cli fix-tests --until-done
+Configured shell tool.
+Config: .agentic-harness/config.yml
+Next: agentic-harness fix-tests
+Recipe: fix-tests
+Result: Verified done
+Goal: 35a5ef26d6404c28803941385cbad9c7
+Status: verified done
+Worker claim (untrusted): fixed calculator for objective: Fix the failing tests in this project.
+Reason: Independent verification passed.
+Attempts: 2
+Retries: 1
+Report: .agentic-harness/runs/35a5ef26d6404c28803941385cbad9c7/report.md
+Changed: 1 file
+- modified calculator.py
+Review: passed
+Verification commands:
+- /tmp/agentic-harness-two-minute-demo/project/.venv/bin/python -m pytest tests/ -q
+Verification attempts:
+- Attempt 1: failed — independent command failed with exit code 1
+  - independent: failed — independent command failed with exit code 1
+- Attempt 2: passed — independent command passed
+  - independent: passed — independent command passed
+Artifacts:
+- .agentic-harness/runs/35a5ef26d6404c28803941385cbad9c7/shell-worker.log
+- .agentic-harness/runs/35a5ef26d6404c28803941385cbad9c7/report.md
+Show status: /tmp/agentic-harness-two-minute-demo/project/.venv/bin/python -m agentic_harness.cli status
+Result: Verified done
+Goal: 35a5ef26d6404c28803941385cbad9c7
+Objective: Fix the failing tests in this project.\n\nRules:\n- Make the smallest necessary code change.\n- Do not rewrite unrelated files.\n- Do not change tests unless the tests are clearly wrong.\n- After editing, summarize the files changed and why the fix works.
+Status: verified done
+Worker claim (untrusted): fixed calculator for objective: Fix the failing tests in this project.
+Reason: Independent verification passed.
+Attempts: 2
+Retries: 1
+Checkpoint: accepted
+Duration: 1s
+Worker: passed
+Review: passed
+Verification commands:
+- /tmp/agentic-harness-two-minute-demo/project/.venv/bin/python -m pytest tests/ -q
+Verification attempts:
+- Attempt 1: failed — independent command failed with exit code 1
+  - independent: failed — independent command failed with exit code 1
+- Attempt 2: passed — independent command passed
+  - independent: passed — independent command passed
+Artifacts:
+- .agentic-harness/runs/35a5ef26d6404c28803941385cbad9c7/shell-worker.log
+- .agentic-harness/runs/35a5ef26d6404c28803941385cbad9c7/report.md
+Confirm final tests pass: /tmp/agentic-harness-two-minute-demo/project/.venv/bin/python -m pytest tests/ -q
+Demo complete: /tmp/agentic-harness-two-minute-demo/project
+
+Script done on 2026-07-11 23:23:43-07:00 [COMMAND_EXIT_CODE="0"]

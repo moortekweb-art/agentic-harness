@@ -1,0 +1,18 @@
+# External beta feedback
+
+- Date:
+- Harness version:
+- Agent and version:
+- Repository type/language (no private name required):
+- Fresh install, upgrade, or existing install:
+- Attempt completed, failed, blocked, or abandoned:
+- Minutes to first terminal result:
+- Final category: Verified done / Blocked with reason / Failed with evidence
+- Independent command used:
+- Attempts and retries:
+- Human assistance required:
+- Unexpected file changes:
+- Most confusing step:
+- What failed or nearly failed:
+- Would you use it again? Why or why not?
+- Redacted report or reproduction steps, if shareable:

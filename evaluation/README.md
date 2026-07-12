@@ -19,6 +19,26 @@ The 24 maintenance-style fixtures cross six payloads with four scripted behavior
 Arm order is randomized from the recorded seed. The matrix measures gate rejection and
 recovery behavior without making statistical or model-quality claims.
 
+## First Real-Agent Study
+
+The [2026-07-12 Codex comparison](results/real-agent-20260712/README.md)
+preregistered ten small tasks and reran both direct and Harness arms in full.
+Both passed 10/10 hidden verifiers with zero false accepts. Harness added
+latency and token use, so this easy task set did not demonstrate a correctness
+benefit. Raw records, redacted transcripts, hashes, and the complete excluded
+[invalid pilot](results/real-agent-pilot-invalid-20260712/README.md) are
+published with the result.
+
+Future reruns must pin the evaluated model explicitly:
+
+```bash
+python evaluation/run_real_agent_comparison.py \
+  --tasks evaluation/real_agent_tasks.json \
+  --output-dir /tmp/agentic-harness-real-agent \
+  --seed 20260712 \
+  --model gpt-5.6-sol
+```
+
 ## Checked-in Release Snapshot
 
 [`results/representative/`](results/representative/README.md) is an immutable
