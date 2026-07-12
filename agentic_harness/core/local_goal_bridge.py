@@ -7,11 +7,13 @@ to the existing local-goal runtime when it is installed on the machine.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
 import subprocess
+from threading import Lock
+import time
 
 
 DOC_ROOT_ENV = "AGENTIC_HARNESS_DOC_ROOT"
@@ -91,6 +93,10 @@ class LocalGoalBridge:
     local_goal: str | Path | None = None
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
     timeout_seconds: int = 120
+    status_cache_seconds: float = 1.5
+    _status_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _status_cache: CommandResult | None = field(default=None, init=False, repr=False)
+    _status_cache_at: float = field(default=0.0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         resolved_doc_root = resolve_doc_root(self.doc_root)
@@ -242,7 +248,24 @@ class LocalGoalBridge:
         return self.run(args)
 
     def status(self, *, json_output: bool = False) -> CommandResult:
-        return self.run(["status", "--json"] if json_output else ["status"])
+        # The browser can ask for health, current work, and stream updates at
+        # nearly the same time.  The external controller status command is
+        # comparatively expensive, so serialize it and share one very short
+        # cache window across those requests.  This prevents multiple tabs
+        # from spawning overlapping controller/GPU status process trees.
+        if not json_output:
+            return self.run(["status"])
+        with self._status_lock:
+            now = time.monotonic()
+            if (
+                self._status_cache is not None
+                and now - self._status_cache_at < self.status_cache_seconds
+            ):
+                return self._status_cache
+            result = self.run(["status", "--json"])
+            self._status_cache = result
+            self._status_cache_at = time.monotonic()
+            return result
 
     def mode3a_status(self, *, json_output: bool = False) -> CommandResult:
         return self.run(["mode3a-status", "--json"] if json_output else ["mode3a-status"])
