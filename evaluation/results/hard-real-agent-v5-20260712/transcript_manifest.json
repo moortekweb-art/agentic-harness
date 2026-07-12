@@ -1,0 +1,163 @@
+[
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/boundary-window-direct.attempt-1.log",
+    "sha256": "a3349d2a7c1c99efd3607bfe67f32b209f38bc0bf69fcd4ef36fdaece0c6b98a",
+    "tokens": 15320
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/boundary-window-harness.attempt-1.log",
+    "sha256": "8fcdc34ced94581b7ac72a41ed818a2d3cd3980ea6554db383a76993edaa5443",
+    "tokens": 17718
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/compat-alias-direct.attempt-1.log",
+    "sha256": "6db1c83e6feb0e387d2aedf8950f9dff3a21e80e7ea5af1394fbbac3c1e26656",
+    "tokens": 14321
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/compat-alias-harness.attempt-1.log",
+    "sha256": "59742447a280555b4d923496f9634570a7d2b9e4f3dd97bc4d6eaf7f30f50a4e",
+    "tokens": 37879
+  },
+  {
+    "arm": "harness",
+    "attempt": 2,
+    "file": "transcripts/compat-alias-harness.attempt-2.log",
+    "sha256": "dd80625f031adb3f72b7e0068bb41d64fb500b8a454aeffe750393d4f834df55",
+    "tokens": 17573
+  },
+  {
+    "arm": "harness",
+    "attempt": 3,
+    "file": "transcripts/compat-alias-harness.attempt-3.log",
+    "sha256": "bc03d66c2adb40c51f530b552b2fe5ac9a30c9d826c1e849bfc2e65928c9d01d",
+    "tokens": 11991
+  },
+  {
+    "arm": "harness",
+    "attempt": 4,
+    "file": "transcripts/compat-alias-harness.attempt-4.log",
+    "sha256": "b0a0b06dfcadecbd03b31d5fb97bcd3b4a10e87363d50dbdab8349f90e3770d0",
+    "tokens": 6509
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/coupled-port-docs-direct.attempt-1.log",
+    "sha256": "4979de0e3a03968e0fe0cd9d87f8a38695b720ae7520807bf988022e5fb1b7fd",
+    "tokens": 15047
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/coupled-port-docs-harness.attempt-1.log",
+    "sha256": "e367fc6d5896d6d420f63631550b1fa7fa7d2534e0896a8d9b61a56af3c2d143",
+    "tokens": 21247
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/malformed-lines-direct.attempt-1.log",
+    "sha256": "e7444b1d5e8cfa687d97f1418a26a0b6ac86ea9dc2dc7d80b48941bbe08f4a40",
+    "tokens": 20677
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/malformed-lines-harness.attempt-1.log",
+    "sha256": "3a6744604905cebb2121316b46e4dc9c6a2b85bc61ab75d9b8c9427d11488555",
+    "tokens": 20095
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/none-and-zero-direct.attempt-1.log",
+    "sha256": "23786d570d6bab3a6995b8170cbecc55dade200e1e05d370b8d53c05d17d1634",
+    "tokens": 23683
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/none-and-zero-harness.attempt-1.log",
+    "sha256": "2aa0b8e44f4f89cfbd1c0670e9b1aa75e7037387c0ffd4efa2b1016b5182fc85",
+    "tokens": 18298
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/ordered-dedupe-direct.attempt-1.log",
+    "sha256": "1a70821a51ed25b921bd08c770f2c06e039b7a8f342048804e2b5591ace7ad2d",
+    "tokens": 25312
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/ordered-dedupe-harness.attempt-1.log",
+    "sha256": "e2130751fe09f89356f991dbe07d0cdeb6444c348505c61d78d442fd1a9c7dd2",
+    "tokens": 24730
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/preserve-unknown-json-direct.attempt-1.log",
+    "sha256": "95342ea002f4f3460eabe0dbc389b5a71201f440b57bb3c04b3b5f27648be46c",
+    "tokens": 32482
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/preserve-unknown-json-harness.attempt-1.log",
+    "sha256": "ded7df451ca9060560b356c12071556e54a3df4779cdf89c490acacba0cb4aed",
+    "tokens": 33905
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/safe-relative-path-direct.attempt-1.log",
+    "sha256": "0fac9533b5ecea698fcdb4bb2c7978946497a24953fadc278bdf1f5a103d7dd9",
+    "tokens": 20746
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/safe-relative-path-harness.attempt-1.log",
+    "sha256": "6d3ab2304786664c24b2123c61b8294ef14ab8508e0fd271b77ce506c147ee86",
+    "tokens": 21550
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/status-and-doc-direct.attempt-1.log",
+    "sha256": "55fe6a878dd9ef2fa9d24b97399b60f607840d77089514a88ef27005c2c2d197",
+    "tokens": 14884
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/status-and-doc-harness.attempt-1.log",
+    "sha256": "a81084d04d277d87596547b33374339b5e702dd05c21e13d4cd301bc6ab66e72",
+    "tokens": 22442
+  },
+  {
+    "arm": "direct",
+    "attempt": 1,
+    "file": "transcripts/two-file-version-direct.attempt-1.log",
+    "sha256": "74d049e70c2de87500e409b0687ccc6bed9b40b2a46b79892fdeb3537ef66495",
+    "tokens": 11831
+  },
+  {
+    "arm": "harness",
+    "attempt": 1,
+    "file": "transcripts/two-file-version-harness.attempt-1.log",
+    "sha256": "ee50de4e122f74cc6a57917dd0b22a8e0f94bdeb44380ce3e6d54a9abb361d15",
+    "tokens": 18902
+  }
+]

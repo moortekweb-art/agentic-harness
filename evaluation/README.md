@@ -69,6 +69,13 @@ generator before challenges were drawn, and behavioral module paths did not use
 the symlink guard. Revision 5 draws challenges before candidate import and
 validates every manifest and behavioral path through one containment helper.
 
+The [revision-5 result](results/hard-real-agent-v5-20260712/README.md) is the
+current harder study. Both arms passed 9/10 verifiers. Direct accepted its one
+failed result; Harness refused it after four attempts but did not repair it and
+used more time and tokens. The result supports only a narrow fail-closed
+policy-integrity claim. All rows, attempts, hashes, tokens, and limitations are
+published.
+
 ## Checked-in Release Snapshot
 
 [`results/representative/`](results/representative/README.md) is an immutable
