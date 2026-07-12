@@ -1,0 +1,148 @@
+Updated:
+
+- `config.py`: `request_timeout` is primary; `timeout` aliases the same value.
+- `example.env`: renamed `TIMEOUT` to `REQUEST_TIMEOUT`.
+
+Verified syntax and alias equality successfully.
+OpenAI Codex v0.144.1
+--------
+workdir: [local-path]
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: low
+reasoning summaries: none
+session id: [redacted]
+--------
+user
+Rename the primary setting to request_timeout while preserving timeout as a backward-compatible alias with the same value. Update config.py and its example.env consistently.
+Work only inside the current directory. Inspect the relevant file, make the smallest correct edit, and verify it if practical. Do not create reports or notes.
+warning: Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.
+codex
+I’ll inspect the two requested files and any local instructions, then make the minimal compatibility-preserving change and run the narrowest practical verification.
+exec
+/bin/bash -lc "pwd && rg --files -g 'AGENTS.md' -g 'config.py' -g 'example.env' -g '"'!**/.git/**'"' && git status --short" in [local-path]
+ exited 128 in 0ms:
+[local-path]
+config.py
+example.env
+fatal: not a git repository (or any of the parent directories): .git
+
+exec
+/bin/bash -lc "sed -n '1,240p' config.py && sed -n '1,240p' example.env" in [local-path]
+ succeeded in 0ms:
+REQUEST_TIMEOUT = 10
+
+def timeout():
+    return REQUEST_TIMEOUT
+TIMEOUT=10
+MODE=safe
+
+apply patch
+patch: completed
+[local-path]
+[local-path]
+diff --git a/config.py b/config.py
+index fb2d77df91abf5452a05d996e10d5b80db495850..1127503e618a4b287c39135cf616e11b59f8611a
+--- a/config.py
++++ b/config.py
+@@ -1,4 +1,2 @@
+-REQUEST_TIMEOUT = 10
+-
+-def timeout():
+-    return REQUEST_TIMEOUT
++request_timeout = 10
++timeout = request_timeout
+diff --git a/example.env b/example.env
+index b52d2d52b31f21f75d76188a61f04814ed25db33..97b526603aff7d059652ae110e5e0e5e99ca0f1b
+--- a/example.env
++++ b/example.env
+@@ -1,2 +1,2 @@
+-TIMEOUT=10
++REQUEST_TIMEOUT=10
+ MODE=safe
+
+diff --git a/config.py b/config.py
+index fb2d77df91abf5452a05d996e10d5b80db495850..1127503e618a4b287c39135cf616e11b59f8611a
+--- a/config.py
++++ b/config.py
+@@ -1,4 +1,2 @@
+-REQUEST_TIMEOUT = 10
+-
+-def timeout():
+-    return REQUEST_TIMEOUT
++request_timeout = 10
++timeout = request_timeout
+diff --git a/example.env b/example.env
+index b52d2d52b31f21f75d76188a61f04814ed25db33..97b526603aff7d059652ae110e5e0e5e99ca0f1b
+--- a/example.env
++++ b/example.env
+@@ -1,2 +1,2 @@
+-TIMEOUT=10
++REQUEST_TIMEOUT=10
+ MODE=safe
+
+exec
+/bin/bash -lc "python -m py_compile config.py && python - <<'PY'
+import config
+assert config.request_timeout == 10
+assert config.timeout == config.request_timeout
+PY
+sed -n '1,80p' config.py
+sed -n '1,80p' example.env" in [local-path]
+ succeeded in 0ms:
+request_timeout = 10
+timeout = request_timeout
+REQUEST_TIMEOUT=10
+MODE=safe
+
+diff --git a/config.py b/config.py
+index fb2d77df91abf5452a05d996e10d5b80db495850..1127503e618a4b287c39135cf616e11b59f8611a
+--- a/config.py
++++ b/config.py
+@@ -1,4 +1,2 @@
+-REQUEST_TIMEOUT = 10
+-
+-def timeout():
+-    return REQUEST_TIMEOUT
++request_timeout = 10
++timeout = request_timeout
+diff --git a/example.env b/example.env
+index b52d2d52b31f21f75d76188a61f04814ed25db33..97b526603aff7d059652ae110e5e0e5e99ca0f1b
+--- a/example.env
++++ b/example.env
+@@ -1,2 +1,2 @@
+-TIMEOUT=10
++REQUEST_TIMEOUT=10
+ MODE=safe
+
+codex
+Updated:
+
+- `config.py`: `request_timeout` is primary; `timeout` aliases the same value.
+- `example.env`: renamed `TIMEOUT` to `REQUEST_TIMEOUT`.
+
+Verified syntax and alias equality successfully.
+diff --git a/config.py b/config.py
+index fb2d77df91abf5452a05d996e10d5b80db495850..1127503e618a4b287c39135cf616e11b59f8611a
+--- a/config.py
++++ b/config.py
+@@ -1,4 +1,2 @@
+-REQUEST_TIMEOUT = 10
+-
+-def timeout():
+-    return REQUEST_TIMEOUT
++request_timeout = 10
++timeout = request_timeout
+diff --git a/example.env b/example.env
+index b52d2d52b31f21f75d76188a61f04814ed25db33..97b526603aff7d059652ae110e5e0e5e99ca0f1b
+--- a/example.env
++++ b/example.env
+@@ -1,2 +1,2 @@
+-TIMEOUT=10
++REQUEST_TIMEOUT=10
+ MODE=safe
+
+tokens used
+12,922
