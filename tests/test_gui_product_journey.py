@@ -20,14 +20,22 @@ def test_gui_exposes_setup_goal_progress_and_result_without_machine_specific_cop
         'id="testConnectionButton"',
         'id="connectionResult"',
         'id="workspacePath"',
+        'id="starterCreate"',
+        'id="starterFix"',
+        'id="starterAudit"',
+        'id="starterDocument"',
         'id="modeSection"',
+        'id="modeSelect"',
         'id="modes"',
+        'id="verificationDetails"',
+        'id="verificationSummary"',
         'id="currentSubgoal"',
         'id="checkpoint"',
         'id="planList"',
         'id="requirementsList"',
         'id="eventTimeline"',
         'id="finalResult"',
+        'id="completedDetails"',
         'id="continueDialog"',
         'id="continueFeedback"',
         'id="previewDialog"',
@@ -112,6 +120,7 @@ def test_gui_status_stream_advances_managed_work_without_babysitting() -> None:
 
 def test_gui_primary_form_puts_mode_and_verification_before_optional_scope() -> None:
     html = (STATIC / "index.html").read_text(encoding="utf-8")
+    javascript = (STATIC / "app.js").read_text(encoding="utf-8")
 
     objective = html.index('id="objective"')
     modes = html.index('id="modes"')
@@ -119,11 +128,13 @@ def test_gui_primary_form_puts_mode_and_verification_before_optional_scope() -> 
     optional_scope = html.index('class="boundaries"')
     safe_areas = html.index('id="safeAreas"')
 
-    assert "Objective" in html[:optional_scope]
+    assert "Describe the result you want" in html[:optional_scope]
     assert "Verification command for this goal" in html[:optional_scope]
     assert "Pre-filled from Setup. Edit it here to override the default for this run." in html
     assert "Default verification command for this workspace" in html
-    assert "create, repair, check, or deliver something" in html
+    assert "No special prompt format is required" in html
+    assert "What kind of help do you need?" in html
+    assert "Optional: add your own success check" in javascript
     assert "question that only needs an answer" in html
     assert objective < modes < verification < optional_scope < safe_areas
     assert "Add scope and checks" not in html
@@ -139,6 +150,23 @@ def test_gui_explains_why_start_is_disabled() -> None:
     assert "Ready to start this verified goal." in javascript
     assert "The assistant will choose checks and show the evidence" in javascript
     assert "mode: state.mode" in javascript
+    assert "resetNewGoalForm()" in javascript
+    assert 'state.mode = "guided"' in javascript
+
+
+def test_gui_compacts_mobile_intake_and_collapses_previous_evidence() -> None:
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    javascript = (STATIC / "app.js").read_text(encoding="utf-8")
+    styles = (STATIC / "styles.css").read_text(encoding="utf-8")
+
+    assert '<select id="modeSelect" class="mode-select"' in html
+    assert "View evidence from the previous goal" in html
+    assert "Assistant report" in html
+    assert "els.completedDetails.hidden = !terminal" in javascript
+    assert "els.artifactsEvidence.hidden = receipt.terminal" in javascript
+    assert ".mode-grid {\n    display: none;" in styles
+    assert ".mode-select {\n    display: block;" in styles
+    assert ".goal-starter-grid" in styles
 
 
 def test_gui_primary_actions_and_disabled_cursor_match_interaction_state() -> None:

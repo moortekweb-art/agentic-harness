@@ -163,6 +163,7 @@ async function tick() {
 
 async function runApp({
   initialToken = "",
+  initialDraft = null,
   publicAccess = false,
   setupPayload = null,
   taskPayload = null,
@@ -185,7 +186,10 @@ async function runApp({
     },
     addEventListener() {},
   };
-  const sessionStorage = storage(initialToken ? { "agentic-harness-gui-session-token": initialToken } : {});
+  const initialSession = {};
+  if (initialToken) initialSession["agentic-harness-gui-session-token"] = initialToken;
+  if (initialDraft) initialSession["agentic-harness-gui-form"] = JSON.stringify(initialDraft);
+  const sessionStorage = storage(initialSession);
   const localStorage = storage();
   const fetchCalls = [];
   const websocketUrls = [];
@@ -337,8 +341,9 @@ async function testLegacySetupContractCompletesBootstrapAndAttachesStatusStream(
     },
   });
 
-  assert.equal(app.elements.get("workspacePath").textContent, "/tmp/legacy-workspace");
-  assert.equal(app.elements.get("executionSummary").textContent, "Existing local-goal runtime");
+  assert.equal(app.elements.get("workspacePath").textContent, "legacy workspace");
+  assert.equal(app.elements.get("workspacePath").title, "/tmp/legacy-workspace");
+  assert.equal(app.elements.get("executionSummary").textContent, "Verified agent ready");
   assert.equal(app.elements.get("setupButton").hidden, true);
   assert.deepEqual(app.websocketUrls, ["ws://127.0.0.1:41111/api/tasks/stream"]);
   assert.equal(app.fetchCalls.some((call) => call.url === "/api/setup"), true);
@@ -433,6 +438,9 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
   const checks = app.elements.get("checks");
   const start = app.elements.get("startButton");
 
+  assert.equal(app.elements.get("verificationDetails").open, true);
+  assert.equal(app.elements.get("verificationSummary").textContent, "Required: add a success check");
+
   objective.value = "Fix the regression";
   objective.listeners.input();
   assert.equal(start.disabled, true);
@@ -443,7 +451,14 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
   assert.equal(app.localStorage.getItem("agentic-harness-gui-form"), null);
   assert.deepEqual(
     JSON.parse(app.sessionStorage.getItem("agentic-harness-gui-form")),
-    { objective: "Fix the regression", safeAreas: "", checks: "python -m pytest -q", mode: "guided" },
+    {
+      objective: "Fix the regression",
+      safeAreas: "",
+      checks: "python -m pytest -q",
+      mode: "guided",
+      goalKind: "",
+      draftVersion: 2,
+    },
   );
 }
 
@@ -467,12 +482,19 @@ async function testLegacyHumanCanChooseEveryModeWithoutWritingACommand() {
   assert.equal(modeSection.hidden, false);
   assert.equal(modes.children.length, 4);
   assert.equal(checks.required, false);
+  assert.equal(app.elements.get("verificationDetails").open, false);
+  assert.equal(
+    app.elements.get("verificationSummary").textContent,
+    "Optional: add your own success check",
+  );
   objective.value = "Please audit my system and give me a simple report.";
   objective.listeners.input();
   assert.equal(start.disabled, false);
   assert.match(app.elements.get("startHelp").textContent, /assistant will choose checks/i);
 
-  for (const card of modes.children) {
+  for (const card of [...modes.children]) {
+    objective.value = "Please audit my system and give me a simple report.";
+    objective.listeners.input();
     card.listeners.click();
     await app.context.startWork();
   }
@@ -482,6 +504,116 @@ async function testLegacyHumanCanChooseEveryModeWithoutWritingACommand() {
     ["local", "guided", "cloud", "experimental"],
   );
   assert.equal(submissions.every((call) => JSON.parse(call.options.body).checks.length === 0), true);
+  assert.equal(objective.value, "");
+  assert.equal(app.elements.get("modeSelect").value, "guided");
+  assert.equal(app.sessionStorage.getItem("agentic-harness-gui-form"), null);
+}
+
+async function testGoalStartersAndCompactModeSelectorKeepPlainLanguageDraftState() {
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: true,
+      editable: false,
+      workspace: "/tmp/legacy-workspace",
+      worker: { type: "local_goal", label: "Existing local-goal runtime" },
+    },
+  });
+
+  const fixStarter = app.elements.get("starterFix");
+  fixStarter.listeners.click();
+  assert.equal(fixStarter["aria-pressed"], "true");
+  assert.match(app.elements.get("objective").placeholder, /Save button does nothing on iPhone/);
+  assert.match(app.elements.get("objectiveHint").textContent, /what should happen instead/i);
+
+  const modeSelect = app.elements.get("modeSelect");
+  assert.equal(modeSelect.children.length, 4);
+  assert.equal(modeSelect.value, "guided");
+  modeSelect.value = "cloud";
+  modeSelect.listeners.change();
+  assert.equal(modeSelect.value, "cloud");
+  assert.deepEqual(
+    JSON.parse(app.sessionStorage.getItem("agentic-harness-gui-form")),
+    {
+      objective: "",
+      safeAreas: "",
+      checks: "",
+      mode: "cloud",
+      goalKind: "fix",
+      draftVersion: 2,
+    },
+  );
+}
+
+async function testCompletedGoalClearsOnlyItsMatchingStaleDraft() {
+  const completedObjective = "Audit this project and explain the findings.";
+  const app = await runApp({
+    publicAccess: true,
+    initialDraft: {
+      objective: completedObjective,
+      safeAreas: "reports",
+      checks: "",
+      mode: "experimental",
+      goalKind: "audit",
+    },
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: true,
+      editable: false,
+      workspace: "/tmp/legacy-workspace",
+      worker: { type: "local_goal", label: "Existing local-goal runtime" },
+    },
+    taskPayload: {
+      id: "completed-goal",
+      objective: completedObjective,
+      status: "done",
+      result_category: "verified_done",
+      final_result: {
+        label: "Verified complete",
+        reason: "The audit passed independent review.",
+        worker_claim: { summary: "Audit complete." },
+      },
+    },
+  });
+
+  assert.equal(app.elements.get("objective").value, "");
+  assert.equal(app.elements.get("safeAreas").value, "");
+  assert.equal(app.elements.get("modeSelect").value, "guided");
+  assert.equal(app.elements.get("starterAudit")["aria-pressed"], "false");
+  assert.equal(app.sessionStorage.getItem("agentic-harness-gui-form"), null);
+}
+
+async function testCompletedGoalPreservesASecondGenerationNewDraft() {
+  const nextObjective = "Create a new onboarding checklist.";
+  const app = await runApp({
+    publicAccess: true,
+    initialDraft: {
+      objective: nextObjective,
+      safeAreas: "docs",
+      checks: "",
+      mode: "guided",
+      goalKind: "create",
+      draftVersion: 2,
+    },
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: true,
+      editable: false,
+      workspace: "/tmp/legacy-workspace",
+      worker: { type: "local_goal", label: "Existing local-goal runtime" },
+    },
+    taskPayload: {
+      id: "completed-goal",
+      status: "done",
+      result_category: "verified_done",
+      final_result: { label: "Verified complete", reason: "Previous task passed." },
+    },
+  });
+
+  assert.equal(app.elements.get("objective").value, nextObjective);
+  assert.equal(app.elements.get("safeAreas").value, "docs");
+  assert.equal(app.elements.get("starterCreate")["aria-pressed"], "true");
 }
 
 async function testPausedBackgroundAssistantIsNotCalledAnActiveTask() {
@@ -577,7 +709,7 @@ async function testTerminalReceiptOverridesRawDoneAndRendersTrustedEvidence() {
     app.elements.get("finalReason").textContent,
     "Done state lacks passed independent verification.",
   );
-  assert.equal(app.elements.get("finalWorkerClaimLabel").textContent, "Worker claim (untrusted)");
+  assert.equal(app.elements.get("finalWorkerClaimLabel").textContent, "Assistant report");
   assert.equal(app.elements.get("finalWorkerClaim").textContent, "Worker says everything is done.");
   assert.equal(app.elements.get("finalAttempts").textContent, "2");
   assert.equal(app.elements.get("finalRetries").textContent, "1");
@@ -587,7 +719,9 @@ async function testTerminalReceiptOverridesRawDoneAndRendersTrustedEvidence() {
   assert.equal(app.elements.get("activitySection").hidden, true);
   assert.equal(app.elements.get("changedFilesEvidence").hidden, true);
   assert.equal(app.elements.get("verificationEvidence").hidden, true);
-  assert.equal(app.elements.get("artifactsEvidence").hidden, false);
+  assert.equal(app.elements.get("artifactsEvidence").hidden, true);
+  assert.equal(app.elements.get("completedDetails").hidden, false);
+  assert.equal(app.elements.get("completedDetails").open, false);
   assert.equal(app.elements.get("finalChangedFiles").children[0].children[0].textContent, "modified: src/app.py");
   assert.match(
     app.elements.get("finalVerification").children[0].textContent,
@@ -634,6 +768,9 @@ async function testRawDoneWithoutTrustedReceiptRemainsUnverified() {
   await testConfiguredVerificationReplacesOnlyThePreviousSuggestion();
   await testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDraft();
   await testLegacyHumanCanChooseEveryModeWithoutWritingACommand();
+  await testGoalStartersAndCompactModeSelectorKeepPlainLanguageDraftState();
+  await testCompletedGoalClearsOnlyItsMatchingStaleDraft();
+  await testCompletedGoalPreservesASecondGenerationNewDraft();
   await testPausedBackgroundAssistantIsNotCalledAnActiveTask();
   await testTerminalReceiptOverridesRawDoneAndRendersTrustedEvidence();
   await testRawDoneWithoutTrustedReceiptRemainsUnverified();

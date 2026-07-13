@@ -259,8 +259,10 @@ def test_gui_keeps_the_desktop_form_compact_and_mobile_form_full_width() -> None
     assert "align-self: start" in css
     assert "align-self: stretch" in css
     assert "#objective" in css
-    assert "flex: 1 1 220px" in css
-    assert "min-height: 220px" in css
+    assert "flex: 1 1 150px" in css
+    assert "min-height: 150px" in css
+    assert 'id="modeSelect"' in html
+    assert ".goal-starter-grid" in css
 
 
 def test_gui_status_encodings_are_labeled_and_idle_progress_is_hidden() -> None:

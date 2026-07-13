@@ -5,6 +5,25 @@ const TOKEN_PARAM = "token";
 const ICON_PREFIX = "#icon-";
 const API_TIMEOUT_MS = 20000;
 
+const GOAL_STARTERS = Object.freeze({
+  create: {
+    placeholder: "Example: Add a CSV download to the reports page and show me what changed.",
+    hint: "Say what you want created or improved and any boundary that matters.",
+  },
+  fix: {
+    placeholder: "Example: The Save button does nothing on iPhone. Find the cause and fix it.",
+    hint: "Describe what is going wrong and what should happen instead.",
+  },
+  audit: {
+    placeholder: "Example: Check this project for broken links and repair the ones you can verify.",
+    hint: "Name what should be checked. The assistant will record findings and evidence.",
+  },
+  document: {
+    placeholder: "Example: Write a setup guide that a new teammate can follow without help.",
+    hint: "Say who the explanation is for and what they should understand or accomplish.",
+  },
+});
+
 const STATUS_ICONS = Object.freeze({
   ready: "circle-check",
   starting: "loader-circle",
@@ -19,6 +38,7 @@ const STATUS_ICONS = Object.freeze({
 
 const state = {
   mode: "guided",
+  goalKind: "",
   modes: [],
   busy: false,
   authToken: "",
@@ -35,6 +55,9 @@ const state = {
   pollTimer: null,
   reconnectDelay: 1000,
   refreshes: {},
+  lastRenderedTaskId: "",
+  formReconciled: false,
+  restoredDraftVersion: 0,
 };
 
 const byId = (id) => document.getElementById(id);
@@ -48,11 +71,20 @@ const els = {
   shortcutsButton: byId("shortcutsButton"),
   workspacePath: byId("workspacePath"),
   executionSummary: byId("executionSummary"),
+  starterCreate: byId("starterCreate"),
+  starterFix: byId("starterFix"),
+  starterAudit: byId("starterAudit"),
+  starterDocument: byId("starterDocument"),
+  objectiveLabel: byId("objectiveLabel"),
+  objectiveHint: byId("objectiveHint"),
   objective: byId("objective"),
   modeSection: byId("modeSection"),
+  modeSelect: byId("modeSelect"),
   modes: byId("modes"),
   safeAreas: byId("safeAreas"),
   checks: byId("checks"),
+  verificationDetails: byId("verificationDetails"),
+  verificationSummary: byId("verificationSummary"),
   verificationLabel: byId("verificationLabel"),
   verificationHelp: byId("verificationHelp"),
   startButton: byId("startButton"),
@@ -77,6 +109,7 @@ const els = {
   requirementsList: byId("requirementsList"),
   eventTimeline: byId("eventTimeline"),
   finalResult: byId("finalResult"),
+  completedDetails: byId("completedDetails"),
   finalLabel: byId("finalLabel"),
   finalReason: byId("finalReason"),
   finalWorkerClaimLabel: byId("finalWorkerClaimLabel"),
@@ -230,12 +263,42 @@ function linesFrom(field) {
   return field.value.split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
+function starterButtons() {
+  return [
+    { button: els.starterCreate, kind: "create" },
+    { button: els.starterFix, kind: "fix" },
+    { button: els.starterAudit, kind: "audit" },
+    { button: els.starterDocument, kind: "document" },
+  ];
+}
+
+function selectGoalStarter(kind, { focus = false, persist = true } = {}) {
+  state.goalKind = GOAL_STARTERS[kind] ? kind : "";
+  starterButtons().forEach(({ button, kind: buttonKind }) => {
+    button.setAttribute("aria-pressed", String(buttonKind === state.goalKind));
+  });
+  const starter = GOAL_STARTERS[state.goalKind];
+  els.objective.placeholder = starter
+    ? starter.placeholder
+    : "Example: Add a CSV download to the reports page and show me what changed.";
+  els.objectiveHint.textContent = starter
+    ? starter.hint
+    : "A normal sentence is enough. Include any limit that matters to you.";
+  if (focus) els.objective.focus();
+  if (persist) {
+    pushUndo();
+    persistForm();
+  }
+}
+
 function formSnapshot() {
   return {
     objective: els.objective.value,
     safeAreas: els.safeAreas.value,
     checks: els.checks.value,
     mode: state.mode,
+    goalKind: state.goalKind,
+    draftVersion: 2,
   };
 }
 
@@ -244,8 +307,37 @@ function applyFormSnapshot(snapshot) {
   els.safeAreas.value = snapshot.safeAreas || "";
   els.checks.value = snapshot.checks || "";
   state.mode = snapshot.mode || "guided";
+  selectGoalStarter(snapshot.goalKind || "", { persist: false });
   renderModes(state.modes);
   updateStartButton();
+}
+
+function resetNewGoalForm() {
+  els.objective.value = "";
+  els.safeAreas.value = "";
+  if (usesHumanModes()) els.checks.value = "";
+  state.mode = "guided";
+  state.goalKind = "";
+  selectGoalStarter("", { persist: false });
+  renderModes(state.modes);
+  sessionStorage.removeItem(STORAGE_KEY);
+  state.restoredDraftVersion = 2;
+  state.undoStack = [];
+  state.redoStack = [];
+  pushUndo();
+  updateStartButton();
+}
+
+function reconcileCompletedDraft(task, receipt) {
+  if (state.formReconciled) return;
+  state.formReconciled = true;
+  if (!receipt.terminal) return;
+  const draft = els.objective.value.trim();
+  const completedObjective = String(task.objective || "").trim();
+  const legacyDraft = state.restoredDraftVersion > 0 && state.restoredDraftVersion < 2;
+  if (draft && (legacyDraft || (completedObjective && draft === completedObjective))) {
+    resetNewGoalForm();
+  }
 }
 
 function usesHumanModes() {
@@ -255,6 +347,7 @@ function usesHumanModes() {
 function renderModes(modes) {
   state.modes = Array.isArray(modes) ? modes : [];
   els.modes.replaceChildren();
+  els.modeSelect.replaceChildren();
   state.modes.forEach((mode) => {
     const card = document.createElement("button");
     card.type = "button";
@@ -277,7 +370,14 @@ function renderModes(modes) {
       updateStartButton();
     });
     els.modes.append(card);
+
+    const option = document.createElement("option");
+    option.value = mode.key;
+    option.textContent = `${mode.label} — ${mode.best_for}`;
+    option.selected = mode.key === state.mode;
+    els.modeSelect.append(option);
   });
+  if (state.modes.some((mode) => mode.key === state.mode)) els.modeSelect.value = state.mode;
 }
 
 function pushUndo() {
@@ -309,7 +409,13 @@ function persistForm() {
 function restoreForm() {
   const raw = sessionStorage.getItem(STORAGE_KEY);
   if (raw) {
-    try { applyFormSnapshot(JSON.parse(raw)); } catch { sessionStorage.removeItem(STORAGE_KEY); }
+    try {
+      const snapshot = JSON.parse(raw);
+      state.restoredDraftVersion = Number(snapshot.draftVersion) || 1;
+      applyFormSnapshot(snapshot);
+    } catch {
+      sessionStorage.removeItem(STORAGE_KEY);
+    }
   }
   pushUndo();
 }
@@ -485,6 +591,7 @@ function independentReviewRows(final) {
 
 function renderFinalReceipt(task, receipt) {
   const { final, terminal, category } = receipt;
+  els.completedDetails.hidden = !terminal;
   els.finalResult.hidden = !terminal;
   els.finalResult.className = `final-result ${category}`;
   els.finalLabel.textContent = terminal ? final.label || "Result" : "Result";
@@ -492,8 +599,8 @@ function renderFinalReceipt(task, receipt) {
   const workerClaim = final.worker_claim && typeof final.worker_claim === "object"
     ? final.worker_claim
     : {};
-  els.finalWorkerClaimLabel.textContent = workerClaim.label || "Worker claim (untrusted)";
-  els.finalWorkerClaim.textContent = workerClaim.summary || "No worker completion claim recorded.";
+  els.finalWorkerClaimLabel.textContent = "Assistant report";
+  els.finalWorkerClaim.textContent = workerClaim.summary || "No assistant completion report was recorded.";
   els.finalAttempts.textContent = String(Number.isFinite(final.attempts) ? final.attempts : 0);
   els.finalRetries.textContent = String(Number.isFinite(final.retries) ? final.retries : 0);
   const changedEvidence = final.what_changed_evidence && typeof final.what_changed_evidence === "object"
@@ -537,6 +644,7 @@ function renderTask(task) {
   state.currentTask = task;
   const status = task.status || "ready";
   const receipt = receiptContext(task);
+  reconcileCompletedDraft(task, receipt);
   const rawDoneUnverified = status === "done" && !receipt.terminal;
   const visualStatus = rawDoneUnverified
     ? "checking"
@@ -550,6 +658,10 @@ function renderTask(task) {
   document.body.dataset.taskActive = String(
     ["starting", "working", "checking", "stopping", "needs_review", "blocked"].includes(status),
   );
+  document.body.dataset.taskComplete = String(receipt.terminal);
+  const taskId = String(task.id || "");
+  if (receipt.terminal && taskId !== state.lastRenderedTaskId) els.completedDetails.open = false;
+  state.lastRenderedTaskId = taskId;
   els.statusLabel.textContent = receipt.terminal && receipt.final.label
     ? receipt.final.label
     : rawDoneUnverified
@@ -625,7 +737,7 @@ function renderTask(task) {
   els.activitySection.hidden = receipt.terminal;
   els.changedFilesEvidence.hidden = receipt.terminal;
   els.verificationEvidence.hidden = receipt.terminal;
-  els.artifactsEvidence.hidden = false;
+  els.artifactsEvidence.hidden = receipt.terminal;
 
   const viewingHistory = Boolean(state.viewingHistoryId);
   els.continueButton.hidden = viewingHistory || !hasAction(task, "continue");
@@ -713,6 +825,13 @@ function renderSetup(setup) {
   const humanModes = setup.editable === false && setup.worker?.type === "local_goal";
   els.modeSection.hidden = !humanModes;
   els.checks.required = !humanModes;
+  els.verificationDetails.className = humanModes
+    ? "verification-details optional"
+    : "verification-details required";
+  els.verificationDetails.open = !humanModes;
+  els.verificationSummary.textContent = humanModes
+    ? "Optional: add your own success check"
+    : "Required: add a success check";
   els.verificationLabel.textContent = humanModes
     ? "How should the result be checked? (optional)"
     : "Verification command for this goal";
@@ -720,13 +839,18 @@ function renderSetup(setup) {
     ? "Leave this blank if you do not know. The assistant must still record its checks and evidence before the result can be accepted."
     : "Pre-filled from Setup. Edit it here to override the default for this run. This check runs independently, and the task is never verified done unless it passes.";
   els.setupButton.hidden = setup.editable === false;
-  els.workspacePath.textContent = setup.workspace || "Unknown workspace";
+  const workspace = setup.workspace || "";
+  const workspaceName = workspace.split(/[\\/]/).filter(Boolean).at(-1) || "Current workspace";
+  els.workspacePath.textContent = workspaceName.replaceAll("-", " ").replaceAll("_", " ");
+  els.workspacePath.title = workspace || "Workspace path unavailable";
   const worker = setup.worker || {};
   renderDetectedAgents(setup, worker);
   els.executionSummary.textContent = setup.configured
     ? worker.type === "model_agent"
       ? `${worker.model || "Model"} · ${worker.credential_source || "no key"}`
-      : worker.label || worker.type || "Configured"
+      : worker.type === "local_goal"
+        ? "Verified agent ready"
+        : worker.label || worker.type || "Configured"
     : "Setup required";
   const previousCheck = previousSetup
     ? previousSetup.verification_command || previousSetup.suggested_check || ""
@@ -835,6 +959,7 @@ async function startWork() {
     state.viewingHistoryId = "";
     state.liveTask = task;
     renderTask(task);
+    resetNewGoalForm();
     await refreshHistory();
   });
 }
@@ -1027,6 +1152,21 @@ els.acceptButton.addEventListener("click", () => postAction("/api/tasks/current/
 els.stopButton.addEventListener("click", () => {
   if (window.confirm("Stop after the current safe step? Progress and evidence will be kept.")) {
     postAction("/api/tasks/current/stop");
+  }
+});
+starterButtons().forEach(({ button, kind }) => {
+  button.addEventListener("click", () => selectGoalStarter(kind, { focus: true }));
+});
+els.modeSelect.addEventListener("change", () => {
+  state.mode = els.modeSelect.value || "guided";
+  renderModes(state.modes);
+  pushUndo();
+  persistForm();
+  updateStartButton();
+});
+els.verificationDetails.addEventListener("toggle", () => {
+  if (!usesHumanModes() && !els.verificationDetails.open) {
+    els.verificationDetails.open = true;
   }
 });
 els.themeButton.addEventListener("click", toggleTheme);
