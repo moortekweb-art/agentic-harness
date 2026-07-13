@@ -265,7 +265,7 @@
       </header>
 
       <div class="workspace-strip">
-        <span>Workspace</span>
+        <span>Project</span>
         <strong id="workspacePath">Loading…</strong>
         <span id="executionSummary">Execution setup not loaded</span>
       </div>
@@ -275,28 +275,56 @@
           <div class="section-heading">
             <p class="eyebrow">New goal</p>
             <h2>What outcome do you want?</h2>
-            <p class="help-text">Describe one result. The assistant will keep the goal, show each checkpoint, run your check, and only mark it done when the evidence passes.</p>
-            <p class="help-text task-fit">Best fit: ask it to create, repair, check, or deliver something in this workspace. For a question that only needs an answer, use your normal assistant chat.</p>
+            <p class="help-text">Choose a starting point, then describe the result in your own words. No special prompt format is required.</p>
+            <p class="help-text task-fit">The assistant will plan the work, show progress, and only call it done when the evidence passes. For a question that only needs an answer, use your normal assistant chat.</p>
           </div>
 
-          <label class="field-label" for="objective">Objective</label>
+          <fieldset class="goal-starters">
+            <legend>What kind of help do you need?</legend>
+            <div class="goal-starter-grid">
+              <button type="button" id="starterCreate" class="goal-starter" data-goal-kind="create" aria-pressed="false">
+                <strong>Create or improve</strong>
+                <small>Build something new or make it better</small>
+              </button>
+              <button type="button" id="starterFix" class="goal-starter" data-goal-kind="fix" aria-pressed="false">
+                <strong>Fix a problem</strong>
+                <small>Find the cause and repair it</small>
+              </button>
+              <button type="button" id="starterAudit" class="goal-starter" data-goal-kind="audit" aria-pressed="false">
+                <strong>Audit or check</strong>
+                <small>Inspect something and report or repair issues</small>
+              </button>
+              <button type="button" id="starterDocument" class="goal-starter" data-goal-kind="document" aria-pressed="false">
+                <strong>Explain or document</strong>
+                <small>Make something easier to understand</small>
+              </button>
+            </div>
+          </fieldset>
+
+          <label class="field-label" id="objectiveLabel" for="objective">Describe the result you want</label>
           <textarea
             id="objective"
-            rows="7"
-            placeholder="Example: add a CSV export, update its tests, and explain the changed files"
+            rows="5"
+            placeholder="Example: Add a CSV download to the reports page and show me what changed."
           ></textarea>
+          <p class="help-text objective-hint" id="objectiveHint">A normal sentence is enough. Include any limit that matters to you.</p>
 
           <section id="modeSection" class="mode-section" hidden>
             <div class="mode-heading">
               <span class="field-label">How should the assistant approach it?</span>
               <span class="mode-recommendation">Plan first is a good default.</span>
             </div>
+            <label class="visually-hidden" for="modeSelect">Work approach</label>
+            <select id="modeSelect" class="mode-select" aria-label="Work approach"></select>
             <div class="mode-grid" id="modes" role="group" aria-label="Work approach"></div>
           </section>
 
-          <label class="field-label" id="verificationLabel" for="checks">Verification command for this goal</label>
-          <textarea id="checks" rows="2" required placeholder="Example: python -m pytest -q"></textarea>
-          <p class="help-text" id="verificationHelp">Pre-filled from Setup. Edit it here to override the default for this run. This check runs independently, and the task is never verified done unless it passes.</p>
+          <details id="verificationDetails" class="verification-details" open>
+            <summary id="verificationSummary">Required: add a success check</summary>
+            <label class="field-label" id="verificationLabel" for="checks">Verification command for this goal</label>
+            <textarea id="checks" rows="2" required placeholder="Example: python -m pytest -q"></textarea>
+            <p class="help-text" id="verificationHelp">Pre-filled from Setup. Edit it here to override the default for this run. This check runs independently, and the task is never verified done unless it passes.</p>
+          </details>
 
           <details class="boundaries">
             <summary>Optional scope</summary>
@@ -377,24 +405,27 @@
             <ol id="eventTimeline" class="timeline"></ol>
           </section>
 
-          <section id="finalResult" class="final-result" hidden>
-            <p class="eyebrow">Evidence-backed result</p>
-            <h3 id="finalLabel">Result</h3>
-            <p id="finalReason"></p>
-            <div class="receipt-metrics">
-              <div><span>Attempts</span><strong id="finalAttempts">0</strong></div>
-              <div><span>Retries</span><strong id="finalRetries">0</strong></div>
-            </div>
-            <div class="worker-claim">
-              <strong id="finalWorkerClaimLabel">Worker claim (untrusted)</strong>
-              <p id="finalWorkerClaim"></p>
-            </div>
-            <h4>Changed files</h4>
-            <ul id="finalChangedFiles"></ul>
-            <h4>Independent verification</h4>
-            <ul id="finalVerification"></ul>
-            <p id="finalRemaining"></p>
-          </section>
+          <details id="completedDetails" class="completed-details" hidden>
+            <summary>View evidence from the previous goal</summary>
+            <section id="finalResult" class="final-result" hidden>
+              <p class="eyebrow">Evidence-backed result</p>
+              <h3 id="finalLabel">Result</h3>
+              <p id="finalReason"></p>
+              <div class="receipt-metrics">
+                <div><span>Attempts</span><strong id="finalAttempts">0</strong></div>
+                <div><span>Retries</span><strong id="finalRetries">0</strong></div>
+              </div>
+              <div class="worker-claim">
+                <strong id="finalWorkerClaimLabel">Assistant report</strong>
+                <p id="finalWorkerClaim"></p>
+              </div>
+              <h4>Changed files</h4>
+              <ul id="finalChangedFiles"></ul>
+              <h4>Independent verification</h4>
+              <ul id="finalVerification"></ul>
+              <p id="finalRemaining"></p>
+            </section>
+          </details>
 
           <div class="evidence">
             <section id="changedFilesEvidence">

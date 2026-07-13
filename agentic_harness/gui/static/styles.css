@@ -36,6 +36,17 @@
   display: none !important;
 }
 
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 .icon-sprite {
   position: absolute;
   width: 0;
@@ -275,9 +286,63 @@ select {
   background: rgba(39, 105, 93, 0.07);
 }
 
+.goal-starters {
+  min-width: 0;
+  margin: 0 0 4px;
+  padding: 0;
+  border: 0;
+}
+
+.goal-starters legend {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.goal-starter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.goal-starter {
+  display: block;
+  min-width: 0;
+  min-height: 74px;
+  padding: 10px;
+  text-align: left;
+}
+
+.goal-starter strong,
+.goal-starter small {
+  display: block;
+}
+
+.goal-starter strong {
+  margin-bottom: 3px;
+  font-size: 0.87rem;
+}
+
+.goal-starter small {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+
+.goal-starter[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: rgba(39, 105, 93, 0.09);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.objective-hint {
+  margin-top: 5px;
+}
+
 #objective {
-  min-height: 220px;
-  flex: 1 1 220px;
+  min-height: 150px;
+  flex: 1 1 150px;
 }
 
 #checks {
@@ -323,6 +388,10 @@ select:focus {
 
 .mode-section {
   margin-top: 4px;
+}
+
+.mode-select {
+  display: none;
 }
 
 .mode-heading {
@@ -442,6 +511,21 @@ details {
   border-top: 1px solid var(--line);
   margin-top: 14px;
   padding-top: 14px;
+}
+
+.completed-details {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(39, 105, 93, 0.05);
+}
+
+.completed-details[open] > summary {
+  margin-bottom: 12px;
+}
+
+.completed-details .final-result {
+  margin-top: 0;
 }
 
 summary {
@@ -1040,7 +1124,7 @@ dialog::backdrop {
   }
 
   #objective {
-    min-height: 180px;
+    min-height: 140px;
   }
 
   .status-panel {
@@ -1060,8 +1144,40 @@ dialog::backdrop {
     padding-top: 16px;
   }
 
+  .goal-starter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .goal-starter {
+    min-height: 62px;
+    padding: 9px;
+  }
+
+  .goal-starter small {
+    display: none;
+  }
+
   .mode-grid {
-    grid-template-columns: 1fr;
+    display: none;
+  }
+
+  .mode-select {
+    display: block;
+    margin: 8px 0 12px;
+  }
+
+  .mode-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .mode-heading .field-label {
+    margin-bottom: 0;
+  }
+
+  .task-fit {
+    padding: 8px 10px;
   }
 
   .workspace-strip {
