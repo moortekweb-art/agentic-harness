@@ -709,7 +709,11 @@ def test_reentering_session_key_resumes_orphaned_goal(
     )
     restarted = EmbeddedExecutionBackend(tmp_path)
     started: list[list[list[str]]] = []
-    monkeypatch.setattr(restarted, "_start_thread", lambda commands: started.append(commands))
+    monkeypatch.setattr(
+        restarted,
+        "_start_thread",
+        lambda commands, policy: started.append(commands),
+    )
 
     result = restarted.set_session_credential("replacement-secret")
 
@@ -741,7 +745,7 @@ def test_start_waits_for_atomic_provider_and_session_key_reconfiguration(
         assert release_write.wait(timeout=3)
 
     monkeypatch.setattr(backend, "_write_config", paused_write)
-    monkeypatch.setattr(backend, "_drive", lambda review_commands: None)
+    monkeypatch.setattr(backend, "_drive", lambda review_commands, policy: None)
     configure_done = threading.Event()
     start_done = threading.Event()
 
@@ -850,3 +854,16 @@ def test_setup_connection_test_proves_structured_model_response_without_echoing_
     }
     assert captured["api_key"] == "connection-test-secret"
     assert "connection-test-secret" not in json.dumps(result)
+def test_setup_exposes_editable_provider_templates_without_secrets(tmp_path: Path) -> None:
+    setup = EmbeddedExecutionBackend(tmp_path).setup()
+    templates = {row["key"]: row for row in setup["provider_templates"]}
+
+    assert setup["deployment"] == {
+        "scope": "local_self_hosted",
+        "multi_user": False,
+        "summary": "One trusted user and one workspace on this computer.",
+    }
+    assert templates["custom"]["endpoint"] == ""
+    assert templates["zai_api"]["endpoint"].endswith("/paas/v4/chat/completions")
+    assert templates["zai_coding_plan"]["model"] == "glm-5.2"
+    assert all("api_key" not in row for row in setup["provider_templates"])

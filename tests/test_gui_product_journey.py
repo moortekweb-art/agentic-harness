@@ -15,6 +15,8 @@ def test_gui_exposes_setup_goal_progress_and_result_without_machine_specific_cop
         'id="executionChoice"',
         'id="providerEndpoint"',
         'id="providerModel"',
+        'id="providerPreset"',
+        'id="providerPresetHelp"',
         'id="providerApiKey" type="password"',
         'id="verificationCommand"',
         'id="testConnectionButton"',
@@ -31,6 +33,7 @@ def test_gui_exposes_setup_goal_progress_and_result_without_machine_specific_cop
         'id="verificationSummary"',
         'id="currentSubgoal"',
         'id="checkpoint"',
+        'id="workApproachValue"',
         'id="planList"',
         'id="requirementsList"',
         'id="eventTimeline"',
@@ -153,9 +156,10 @@ def test_gui_explains_why_start_is_disabled() -> None:
     assert "Describe the outcome you want before starting." in javascript
     assert "Ready to start this verified goal." in javascript
     assert "The assistant will choose checks and show the evidence" in javascript
-    assert "mode: state.mode" in javascript
+    assert "mode: usesHumanModes() ? state.mode : undefined" in javascript
+    assert "strategy: usesHumanModes() ? undefined : state.mode" in javascript
     assert "resetNewGoalForm()" in javascript
-    assert 'state.mode = "guided"' in javascript
+    assert "state.mode = state.modeDefault" in javascript
 
 
 def test_gui_compacts_mobile_intake_and_collapses_previous_evidence() -> None:

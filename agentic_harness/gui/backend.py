@@ -26,7 +26,11 @@ from agentic_harness.core.errors import ConfigError, HarnessError, StateLockErro
 from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.factory import autonomy_policy_from_config, build_supervisor
 from agentic_harness.core.state import Goal, GoalStatus
-from agentic_harness.core.providers import ProviderProfile, resolve_api_key
+from agentic_harness.core.providers import (
+    PROVIDER_TEMPLATES,
+    ProviderProfile,
+    resolve_api_key,
+)
 from agentic_harness.core.presentation import safe_inline_text
 from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.reporting import RunReceipt, build_run_receipt
@@ -37,6 +41,13 @@ from agentic_harness.core.safety import (
     split_command,
 )
 from agentic_harness.core.secure_io import write_private_text
+from agentic_harness.core.strategies import (
+    DEFAULT_PUBLIC_STRATEGY,
+    ExecutionStrategy,
+    policy_for_strategy,
+    strategy_by_key,
+    strategy_from_metadata,
+)
 from agentic_harness.core.workspace import workspace_change_summary
 
 
@@ -105,7 +116,10 @@ class EmbeddedExecutionBackend:
                     )
                 )
                 return
-            self._start_thread(review_commands)
+            self._start_thread(
+                review_commands,
+                self._policy_for_goal(config, goal),
+            )
         except (ConfigError, HarnessError, OSError, ValueError):
             return
 
@@ -210,6 +224,14 @@ class EmbeddedExecutionBackend:
             "configured": config is not None,
             "editable": config is None or _gui_setup_editable(config),
             "suggested_check": suggested,
+            "deployment": {
+                "scope": "local_self_hosted",
+                "multi_user": False,
+                "summary": "One trusted user and one workspace on this computer.",
+            },
+            "provider_templates": [
+                template.to_public_dict() for template in PROVIDER_TEMPLATES
+            ],
             "execution_options": [
                 {
                     "key": "coding_agent",
@@ -515,7 +537,21 @@ class EmbeddedExecutionBackend:
             return self._blocked_task(str(readiness["summary"]), action=action)
         try:
             config = self._config()
+            strategy = strategy_by_key(
+                str(
+                    body.get("strategy")
+                    or body.get("mode")
+                    or DEFAULT_PUBLIC_STRATEGY
+                )
+            )
             safe_areas = _safe_areas(body.get("safe_areas"), self.project_dir)
+            strategy_error = self._strategy_boundary_error(
+                strategy,
+                config=config,
+                safe_areas=safe_areas,
+            )
+            if strategy_error:
+                return self._blocked_task(strategy_error, action="edit_strategy")
             requested_checks = _checks(body.get("checks"))
             review_commands = requested_checks or (
                 [config.review_command] if config.review_command else []
@@ -531,24 +567,27 @@ class EmbeddedExecutionBackend:
                 api_key=self.api_key,
                 cancel_requested=self._cancel.is_set,
             )
+            metadata = goal_safety_metadata(
+                self.project_dir,
+                allowed_paths=safe_areas,
+                review_commands=review_commands,
+                path_enforcement=config.worker == "model_agent",
+                secret_env_names=[config.llm_api_key_env],
+                interface="gui",
+            )
+            metadata["execution_strategy"] = strategy.to_metadata()
             goal = supervisor.start(
                 objective,
-                metadata=goal_safety_metadata(
-                    self.project_dir,
-                    allowed_paths=safe_areas,
-                    review_commands=review_commands,
-                    path_enforcement=config.worker == "model_agent",
-                    secret_env_names=[config.llm_api_key_env],
-                    interface="gui",
-                ),
+                metadata=metadata,
             )
+            policy = self._policy_for_strategy(config, strategy)
         except (ConfigError, HarnessError, OSError, ValueError) as exc:
             return self._blocked_task(str(exc), action="setup")
         self._cancel.clear()
         with self._thread_lock:
             self._thread = Thread(
                 target=self._drive,
-                args=(review_commands,),
+                args=(review_commands, policy),
                 name=f"agentic-harness-{goal.id[:8]}",
                 daemon=True,
             )
@@ -731,7 +770,11 @@ class EmbeddedExecutionBackend:
                     goal.error = None
                     supervisor.store.write_goal(goal)
             self._cancel.clear()
-            self._start_thread(_review_commands_from_goal(goal))
+            config = self._config()
+            self._start_thread(
+                _review_commands_from_goal(goal),
+                self._policy_for_goal(config, goal),
+            )
             return self._current_task(goal)
         except (ConfigError, HarnessError, OSError, ValueError) as exc:
             return self._blocked_task(str(exc), action="setup")
@@ -762,7 +805,11 @@ class EmbeddedExecutionBackend:
         task["allowed_actions"] = []
         return task
 
-    def _drive(self, review_commands: list[list[str]]) -> None:
+    def _drive(
+        self,
+        review_commands: list[list[str]],
+        policy: AutonomyPolicy | None = None,
+    ) -> None:
         try:
             with self._config_lock:
                 supervisor = build_supervisor(
@@ -771,7 +818,7 @@ class EmbeddedExecutionBackend:
                     api_key=self.api_key,
                     cancel_requested=self._cancel.is_set,
                 )
-                policy = self.policy or autonomy_policy_from_config(
+                policy = policy or self.policy or autonomy_policy_from_config(
                     load_config(self.project_dir)
                 )
             runner = AutonomousRunner(
@@ -798,11 +845,15 @@ class EmbeddedExecutionBackend:
             if self._cancel.is_set():
                 self._mark_cancelled()
 
-    def _start_thread(self, review_commands: list[list[str]]) -> None:
+    def _start_thread(
+        self,
+        review_commands: list[list[str]],
+        policy: AutonomyPolicy | None = None,
+    ) -> None:
         with self._thread_lock:
             self._thread = Thread(
                 target=self._drive,
-                args=(review_commands,),
+                args=(review_commands, policy),
                 name="agentic-harness-resume",
                 daemon=True,
             )
@@ -981,9 +1032,42 @@ class EmbeddedExecutionBackend:
                 "updated_at": goal.updated_at,
                 "observed_at": goal.updated_at,
                 "worker": self._public_worker(),
+                "strategy": _public_strategy(goal),
                 "budget": autonomy.get("budget") if isinstance(autonomy.get("budget"), dict) else {},
             },
         }
+
+    def _policy_for_strategy(
+        self,
+        config: HarnessConfig,
+        strategy: ExecutionStrategy,
+    ) -> AutonomyPolicy:
+        base = self.policy or autonomy_policy_from_config(config)
+        return policy_for_strategy(base, strategy)
+
+    def _policy_for_goal(self, config: HarnessConfig, goal: Goal) -> AutonomyPolicy:
+        return self._policy_for_strategy(
+            config,
+            strategy_from_metadata(goal.metadata.get("execution_strategy")),
+        )
+
+    @staticmethod
+    def _strategy_boundary_error(
+        strategy: ExecutionStrategy,
+        *,
+        config: HarnessConfig,
+        safe_areas: list[str],
+    ) -> str:
+        if not strategy.requires_enforced_scope:
+            return ""
+        if config.worker != "model_agent":
+            return (
+                "Bounded experiment requires the built-in model worker because installed "
+                "coding-agent CLIs do not enforce the selected file boundary."
+            )
+        if not safe_areas:
+            return "Bounded experiment requires at least one allowed file or folder."
+        return ""
 
     def _ensure_terminal_report(self, goal: Goal) -> Goal:
         if not _durably_terminal(goal):
@@ -1172,6 +1256,15 @@ class EmbeddedExecutionBackend:
             agent = _coding_agent_selection(config.coding_agent_command)
             return _CODING_AGENT_LABELS.get(agent, "the installed coding agent")
         return config.worker.replace("_", " ")
+
+
+def _public_strategy(goal: Goal) -> dict[str, object]:
+    strategy = strategy_from_metadata(goal.metadata.get("execution_strategy"))
+    return {
+        "key": strategy.key,
+        "label": strategy.label,
+        "budget_profile": strategy.budget_profile,
+    }
 
 
 def _safe_areas(value: Any, project_dir: Path) -> list[str]:

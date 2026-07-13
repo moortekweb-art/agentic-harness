@@ -886,6 +886,21 @@ def test_gui_server_get_api_routes_return_json() -> None:
     assert details["task"]["status"] == "working"
 
 
+def test_embedded_gui_exposes_four_provider_independent_strategies(tmp_path) -> None:
+    with gui_server(EmbeddedExecutionBackend(tmp_path)) as base_url:  # type: ignore[arg-type]
+        modes = get_json(base_url, "/api/modes")
+
+    assert modes["kind"] == "strategy"
+    assert modes["default"] == "plan"
+    assert [row["key"] for row in modes["modes"]] == [
+        "quick",
+        "plan",
+        "persistent",
+        "experiment",
+    ]
+    assert all("provider" not in row for row in modes["modes"])
+
+
 def test_status_compatibility_alias_matches_health_payload() -> None:
     with gui_server(FakeBridge()) as base_url:
         health = get_json(base_url, "/api/health")
@@ -1142,14 +1157,19 @@ def test_gui_frontend_plumbs_token_without_persisting_or_exporting_it() -> None:
     assert "tokenQuery" not in app
 
 
-def test_gui_frontend_keeps_embedded_flow_single_and_legacy_modes_human_named() -> None:
+def test_gui_frontend_separates_public_strategies_from_legacy_managed_modes() -> None:
     app = Path("agentic_harness/gui/static/app.js").read_text(encoding="utf-8")
 
     assert 'worker?.type === "local_goal"' in app
-    assert "renderModes(payload.modes || [])" in app
+    assert 'payload.kind === "managed_route"' in app
+    assert "DEFAULT_MANAGED_MODE" in app
+    assert "DEFAULT_PUBLIC_STRATEGY" in app
+    assert "renderModes(payload.modes || [], payload.default || fallback)" in app
     assert "const objective = els.objective.value.trim()" in app
     assert "objective," in app
-    assert "mode: state.mode" in app
+    assert "mode: usesHumanModes() ? state.mode : undefined" in app
+    assert "strategy: usesHumanModes() ? undefined : state.mode" in app
+    assert "Promise.all([refreshSetup(), refreshHealth(), refreshTask(true)])" in app
     assert "allowed_actions" in app
 
 

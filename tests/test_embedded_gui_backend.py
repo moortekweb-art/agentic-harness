@@ -97,6 +97,11 @@ def test_embedded_backend_runs_public_engine_from_start_to_verified_finish(tmp_p
     finished = _wait_for_terminal(backend)
 
     assert started["id"]
+    assert started["metadata"]["strategy"] == {
+        "key": "plan",
+        "label": "Plan first",
+        "budget_profile": "balanced",
+    }
     assert finished["id"] == started["id"]
     assert finished["contract"] == "agentic_harness.gui_task.v2"
     assert finished["status"] == "done"
@@ -109,7 +114,66 @@ def test_embedded_backend_runs_public_engine_from_start_to_verified_finish(tmp_p
     assert any(row["path"] == "result.txt" for row in finished["changed_files"])
     assert finished["final_result"]["accepted"] is True
     assert finished["allowed_actions"] == [{"action": "new_task", "enabled": True}]
+    assert finished["metadata"]["budget"]["limits"]["max_cycles"] == 20
     assert "stdout" not in json.dumps(finished).lower()
+
+
+def test_embedded_backend_persists_provider_independent_quick_strategy(tmp_path) -> None:
+    _configure_scripted_agent(tmp_path)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    started = backend.start(
+        {
+            "objective": "Create the result in one focused pass",
+            "strategy": "quick",
+        }
+    )
+    finished = _wait_for_terminal(backend)
+
+    assert started["metadata"]["strategy"]["key"] == "quick"
+    assert finished["metadata"]["strategy"]["key"] == "quick"
+    assert finished["metadata"]["budget"]["limits"]["max_cycles"] == 3
+
+
+def test_bounded_experiment_rejects_unenforced_installed_agent_scope(tmp_path) -> None:
+    _configure_scripted_agent(tmp_path)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    task = backend.start(
+        {
+            "objective": "Try one small change",
+            "strategy": "experiment",
+            "safe_areas": ["result.txt"],
+        }
+    )
+
+    assert task["status"] == "blocked"
+    assert task["allowed_actions"] == [
+        {"action": "edit_strategy", "enabled": True}
+    ]
+    assert "built-in model worker" in task["summary"]
+
+
+def test_bounded_experiment_requires_explicit_scope_for_model_worker(tmp_path) -> None:
+    backend = EmbeddedExecutionBackend(tmp_path)
+    backend.configure(
+        {
+            "execution": "local_model",
+            "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+            "model": "local-model",
+            "verification_command": f"{sys.executable} -c \"print('verified')\"",
+        }
+    )
+
+    task = backend.start(
+        {
+            "objective": "Try one small change",
+            "strategy": "experiment",
+        }
+    )
+
+    assert task["status"] == "blocked"
+    assert "requires at least one allowed file or folder" in task["summary"]
 
 
 def test_terminal_state_waits_for_the_driver_to_quiesce(tmp_path) -> None:
@@ -532,7 +596,7 @@ def test_retryable_failed_goal_resumes_without_terminal_evidence_after_restart(
     store.write_goal(goal)
     resumed_with: list[list[list[str]]] = []
 
-    def record_resume(self, review_commands):
+    def record_resume(self, review_commands, policy):
         resumed_with.append(review_commands)
 
     monkeypatch.setattr(EmbeddedExecutionBackend, "_start_thread", record_resume)

@@ -5,6 +5,8 @@ const TOKEN_PARAM = "token";
 const ICON_PREFIX = "#icon-";
 const API_TIMEOUT_MS = 20000;
 const START_TIMEOUT_MS = 90000;
+const DEFAULT_PUBLIC_STRATEGY = "plan";
+const DEFAULT_MANAGED_MODE = "guided";
 
 const GOAL_STARTERS = Object.freeze({
   create: {
@@ -38,7 +40,8 @@ const STATUS_ICONS = Object.freeze({
 });
 
 const state = {
-  mode: "guided",
+  mode: DEFAULT_PUBLIC_STRATEGY,
+  modeDefault: DEFAULT_PUBLIC_STRATEGY,
   goalKind: "",
   modes: [],
   busy: false,
@@ -59,6 +62,7 @@ const state = {
   lastRenderedTaskId: "",
   formReconciled: false,
   restoredDraftVersion: 0,
+  providerTemplates: [],
 };
 
 const byId = (id) => document.getElementById(id);
@@ -101,6 +105,7 @@ const els = {
   progressBar: byId("progressBar"),
   currentSubgoal: byId("currentSubgoal"),
   checkpoint: byId("checkpoint"),
+  workApproachValue: byId("workApproachValue"),
   attemptsValue: byId("attemptsValue"),
   currentCard: byId("currentCard"),
   continueButton: byId("continueButton"),
@@ -142,6 +147,8 @@ const els = {
   codingAgentFields: byId("codingAgentFields"),
   codingAgentChoice: byId("codingAgentChoice"),
   providerFields: byId("providerFields"),
+  providerPreset: byId("providerPreset"),
+  providerPresetHelp: byId("providerPresetHelp"),
   providerEndpoint: byId("providerEndpoint"),
   providerModel: byId("providerModel"),
   providerApiKeyEnv: byId("providerApiKeyEnv"),
@@ -307,7 +314,7 @@ function applyFormSnapshot(snapshot) {
   els.objective.value = snapshot.objective || "";
   els.safeAreas.value = snapshot.safeAreas || "";
   els.checks.value = snapshot.checks || "";
-  state.mode = snapshot.mode || "guided";
+  state.mode = snapshot.mode || state.modeDefault;
   selectGoalStarter(snapshot.goalKind || "", { persist: false });
   renderModes(state.modes);
   updateStartButton();
@@ -317,7 +324,7 @@ function resetNewGoalForm() {
   els.objective.value = "";
   els.safeAreas.value = "";
   if (usesHumanModes()) els.checks.value = "";
-  state.mode = "guided";
+  state.mode = state.modeDefault;
   state.goalKind = "";
   selectGoalStarter("", { persist: false });
   renderModes(state.modes);
@@ -345,8 +352,14 @@ function usesHumanModes() {
   return state.setup?.editable === false && state.setup?.worker?.type === "local_goal";
 }
 
-function renderModes(modes) {
+function renderModes(modes, defaultMode = state.modeDefault) {
   state.modes = Array.isArray(modes) ? modes : [];
+  state.modeDefault = defaultMode || DEFAULT_PUBLIC_STRATEGY;
+  if (!state.modes.some((mode) => mode.key === state.mode)) {
+    state.mode = state.modes.some((mode) => mode.key === state.modeDefault)
+      ? state.modeDefault
+      : state.modes[0]?.key || state.modeDefault;
+  }
   els.modes.replaceChildren();
   els.modeSelect.replaceChildren();
   state.modes.forEach((mode) => {
@@ -437,8 +450,14 @@ function updateStartButton() {
   const hasObjective = Boolean(els.objective.value.trim());
   const hasVerification = Boolean(els.checks.value.trim());
   const verificationRequired = !usesHumanModes();
+  const experimentNeedsModel = state.mode === "experiment"
+    && state.setup?.worker?.type !== "model_agent";
+  const experimentNeedsScope = state.mode === "experiment"
+    && !els.safeAreas.value.trim();
   els.startButton.disabled = state.busy || !canStart || !hasObjective
-    || (verificationRequired && !hasVerification);
+    || (verificationRequired && !hasVerification)
+    || experimentNeedsModel
+    || experimentNeedsScope;
   if (state.busy) {
     els.startHelp.textContent = "Sending the goal. Planning can take up to a minute; this page will reconnect if your phone sleeps.";
   } else if (!canStart) {
@@ -449,6 +468,10 @@ function updateStartButton() {
     els.startHelp.textContent = "Describe the outcome you want before starting.";
   } else if (verificationRequired && !hasVerification) {
     els.startHelp.textContent = "Add the verification command that will prove this goal is complete to enable Start.";
+  } else if (experimentNeedsModel) {
+    els.startHelp.textContent = "Bounded experiment requires a local or cloud model in Setup so the selected file boundary can be enforced.";
+  } else if (experimentNeedsScope) {
+    els.startHelp.textContent = "Add at least one allowed file or folder under Optional scope for a bounded experiment.";
   } else if (!hasVerification) {
     els.startHelp.textContent = "Ready. The assistant will choose checks and show the evidence before calling this done.";
   } else {
@@ -713,6 +736,9 @@ function renderTask(task) {
   els.attemptsValue.textContent = String(
     Number.isFinite(receipt.final.attempts) ? receipt.final.attempts : current.cycle || 0,
   );
+  const strategy = task.metadata?.strategy;
+  els.workApproachValue.textContent = strategy?.label
+    || (usesHumanModes() ? "Managed route" : "Plan first");
 
   textList(els.planList, task.plan, (row) => ({
     text: `${row.status || "pending"}: ${row.step || row.text || "Plan item"}`,
@@ -839,7 +865,7 @@ function renderSetup(setup) {
   const previousSetup = state.setup;
   state.setup = setup;
   const humanModes = setup.editable === false && setup.worker?.type === "local_goal";
-  els.modeSection.hidden = !humanModes;
+  els.modeSection.hidden = false;
   els.checks.required = !humanModes;
   els.verificationDetails.className = humanModes
     ? "verification-details optional"
@@ -861,6 +887,7 @@ function renderSetup(setup) {
   els.workspacePath.title = workspace || "Workspace path unavailable";
   const worker = setup.worker || {};
   renderDetectedAgents(setup, worker);
+  renderProviderTemplates(setup);
   els.executionSummary.textContent = setup.configured
     ? worker.type === "model_agent"
       ? `${worker.model || "Model"} · ${worker.credential_source || "no key"}`
@@ -908,6 +935,32 @@ function renderSetup(setup) {
   }
 }
 
+function renderProviderTemplates(setup) {
+  const templates = Array.isArray(setup.provider_templates)
+    ? setup.provider_templates
+    : [{ key: "custom", label: "Custom OpenAI-compatible provider" }];
+  state.providerTemplates = templates;
+  els.providerPreset.replaceChildren();
+  templates.forEach((template) => {
+    const option = document.createElement("option");
+    option.value = template.key;
+    option.textContent = template.label;
+    els.providerPreset.append(option);
+  });
+  els.providerPreset.value = "custom";
+  els.providerPresetHelp.textContent = "Templates only pre-fill editable values. Your provider account controls model and entitlement availability.";
+}
+
+function applyProviderTemplate() {
+  const template = state.providerTemplates.find((row) => row.key === els.providerPreset.value);
+  if (!template || template.key === "custom") return;
+  els.providerEndpoint.value = template.endpoint || "";
+  els.providerModel.value = template.model || "";
+  els.providerApiKeyEnv.value = template.api_key_env || "";
+  els.connectionResult.textContent = template.entitlement_note || template.description || "";
+  updateSetupFields();
+}
+
 function updateSetupFields() {
   const execution = els.executionChoice.value;
   const model = execution !== "coding_agent";
@@ -928,7 +981,10 @@ async function refreshSetup() {
 
 async function refreshModes() {
   const payload = await api("/api/modes");
-  renderModes(payload.modes || []);
+  const fallback = payload.kind === "managed_route"
+    ? DEFAULT_MANAGED_MODE
+    : DEFAULT_PUBLIC_STRATEGY;
+  renderModes(payload.modes || [], payload.default || fallback);
 }
 
 async function refreshTask(force = false) {
@@ -995,7 +1051,8 @@ async function startWork() {
       task = await api("/api/tasks", {
         method: "POST",
         body: JSON.stringify({
-          mode: state.mode,
+          mode: usesHumanModes() ? state.mode : undefined,
+          strategy: usesHumanModes() ? undefined : state.mode,
           objective,
           safe_areas: linesFrom(els.safeAreas),
           checks: linesFrom(els.checks),
@@ -1055,7 +1112,7 @@ async function saveSetup(event) {
       });
     }
     els.providerApiKey.value = "";
-    await Promise.all([refreshSetup(), refreshHealth()]);
+    await Promise.all([refreshSetup(), refreshHealth(), refreshTask(true)]);
     els.setupDialog.close();
   } catch (error) {
     els.providerApiKey.value = "";
@@ -1200,6 +1257,7 @@ els.setupButton.addEventListener("click", () => els.setupDialog.showModal());
 els.closeSetupButton.addEventListener("click", () => els.setupDialog.close());
 els.setupForm.addEventListener("submit", saveSetup);
 els.executionChoice.addEventListener("change", updateSetupFields);
+els.providerPreset.addEventListener("change", applyProviderTemplate);
 els.testConnectionButton.addEventListener("click", testConnection);
 els.continueButton.addEventListener("click", () => els.continueDialog.showModal());
 els.closeContinueButton.addEventListener("click", () => els.continueDialog.close());
@@ -1219,7 +1277,7 @@ starterButtons().forEach(({ button, kind }) => {
   button.addEventListener("click", () => selectGoalStarter(kind, { focus: true }));
 });
 els.modeSelect.addEventListener("change", () => {
-  state.mode = els.modeSelect.value || "guided";
+  state.mode = els.modeSelect.value || state.modeDefault;
   renderModes(state.modes);
   pushUndo();
   persistForm();

@@ -309,9 +309,9 @@
           ></textarea>
           <p class="help-text objective-hint" id="objectiveHint">A normal sentence is enough. Include any limit that matters to you.</p>
 
-          <section id="modeSection" class="mode-section" hidden>
+          <section id="modeSection" class="mode-section">
             <div class="mode-heading">
-              <span class="field-label">How should the assistant approach it?</span>
+              <span class="field-label">How should the assistant work?</span>
               <span class="mode-recommendation">Plan first is a good default.</span>
             </div>
             <label class="visually-hidden" for="modeSelect">Work approach</label>
@@ -371,6 +371,7 @@
           <section class="current-card" id="currentCard">
             <div><span>Working on now</span><strong id="currentSubgoal">Waiting for a goal</strong></div>
             <div><span>Stage</span><strong id="checkpoint">Not started</strong></div>
+            <div><span>Work approach</span><strong id="workApproachValue">Plan first</strong></div>
             <div><span>Agent passes</span><strong id="attemptsValue">0</strong></div>
           </section>
 
@@ -488,7 +489,7 @@
           <div><p class="eyebrow">Workspace setup</p><h2>Choose how work runs</h2></div>
           <button type="button" id="closeSetupButton" title="Close setup"><svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg><span>Close</span></button>
         </div>
-        <p class="help-text">Settings are saved in this workspace. API key values are never saved; a key entered here lasts only until this app process closes.</p>
+        <p class="help-text">This is a local, self-hosted workspace for one trusted user. Settings are saved in this workspace. API key values are never saved; a key entered here lasts only until this app process closes.</p>
         <label class="field-label" for="executionChoice">Execution method</label>
         <select id="executionChoice" required>
           <option value="coding_agent">Installed coding agent</option>
@@ -500,6 +501,11 @@
           <select id="codingAgentChoice"><option value="codex">Codex</option><option value="opencode">OpenCode</option><option value="aider">Aider</option><option value="codewhale">CodeWhale</option></select>
         </div>
         <div id="providerFields" hidden>
+          <label class="field-label" for="providerPreset">Provider template (optional)</label>
+          <select id="providerPreset">
+            <option value="custom">Custom OpenAI-compatible provider</option>
+          </select>
+          <p class="help-text" id="providerPresetHelp">Templates only pre-fill editable values. Your provider account controls model and entitlement availability.</p>
           <label class="field-label" for="providerEndpoint">Chat completions endpoint</label>
           <input id="providerEndpoint" type="url" placeholder="http://127.0.0.1:8000/v1/chat/completions" />
           <label class="field-label" for="providerModel">Model ID</label>

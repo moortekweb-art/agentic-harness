@@ -17,17 +17,23 @@ script, prompt, or internal agent transcript:
 The browser app is a human layer over the same durable engine used by the CLI.
 It simplifies language; it does not weaken review or invent progress.
 
-## Setup
+## Setup and work approach
 
-The first-run dialog asks for four decisions:
+The first-run dialog asks for three setup decisions:
 
 1. **Execution method** — an installed coding agent, a local
    OpenAI-compatible model, or a cloud OpenAI-compatible model.
-2. **Provider details** — endpoint and arbitrary model ID when a model is used.
-3. **Credential source** — no key, an environment-variable name, or a key held
+2. **Provider and credential** — an editable provider template or custom
+   endpoint and model ID, with no key, an environment-variable name, or a key held
    only for this GUI process.
-4. **Independent check** — a command that can prove the result outside the
+3. **Independent check** — a command that can prove the result outside the
    worker's own claim.
+
+The goal screen separately asks how the assistant should work: Quick task, Plan
+first, Keep working, or Bounded experiment. These are execution strategies, not
+provider modes. The selected strategy remains visible while the task runs.
+Bounded experiment explains and enforces its built-in-worker and explicit-scope
+requirements before Start is enabled.
 
 Remote model setup explicitly states that selected file excerpts and tool
 results may leave the computer. Saving is disabled until the user confirms
@@ -137,6 +143,7 @@ defined by the packaged static assets and browser tests.
 - One distribution and shared engine, with CLI and browser interfaces.
 - One visible goal per workspace.
 - Provider-neutral setup based on capability, not model brand.
+- Provider, execution method, work approach, and verification are independent.
 - Real durable events instead of cosmetic progress.
 - Evidence previews are bounded by workspace and artifact ownership.
 - Session credentials are memory-only; environment references are durable.
