@@ -69,6 +69,66 @@ def test_completion_status_is_case_insensitive(tmp_path: Path) -> None:
     assert worker.calls == 1
 
 
+@pytest.mark.parametrize("status", ["completed", "done", "COMPLETED"])
+def test_completion_status_accepts_common_finished_synonyms(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    outcome = complete_outcome()
+    outcome["status"] = status
+    worker = SequenceWorker(
+        [WorkerResult(success=True, summary="complete", outcome=outcome)]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(supervisor).run("accept a common completion status")
+
+    assert goal.status is GoalStatus.DONE
+    assert worker.calls == 1
+
+
+@pytest.mark.parametrize(
+    ("returncode", "message"),
+    [
+        (127, "codex could not start: executable missing"),
+        (1, "invalid value 'default' for service_tier"),
+        (1, "configured model requires a newer version of Codex"),
+    ],
+)
+def test_permanent_worker_setup_failure_stops_after_one_attempt(
+    tmp_path: Path,
+    returncode: int,
+    message: str,
+) -> None:
+    worker = SequenceWorker(
+        [
+            WorkerResult(
+                success=False,
+                summary=message,
+                stderr=message,
+                returncode=returncode,
+            )
+        ]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(supervisor).run("fail fast on broken execution setup")
+
+    assert goal.status is GoalStatus.FAILED
+    assert worker.calls == 1
+    autonomy = goal.metadata["autonomy"]
+    assert autonomy["operator_intervention_required"] is True
+    assert autonomy["blocker"]["consecutive_count"] == 3
+
+
 def test_coding_agent_instruction_includes_requested_scope_and_checks(
     tmp_path: Path,
 ) -> None:

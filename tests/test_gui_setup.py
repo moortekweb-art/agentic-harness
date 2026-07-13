@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
 import sys
 import threading
 import time
@@ -854,6 +855,80 @@ def test_setup_connection_test_proves_structured_model_response_without_echoing_
     }
     assert captured["api_key"] == "connection-test-secret"
     assert "connection-test-secret" not in json.dumps(result)
+
+
+def test_codex_connection_test_runs_the_configured_model_in_read_only_mode(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "agentic_harness.gui.backend.resolve_executable",
+        lambda name: sys.executable if name == "codex" else None,
+    )
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "AGENTIC_HARNESS_AGENT_READY\n",
+            "",
+        )
+
+    monkeypatch.setattr("agentic_harness.gui.backend.subprocess.run", fake_run)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    result = backend.test_connection(
+        {"execution": "coding_agent", "agent": "codex"}
+    )
+    backend.configure(
+        {
+            "execution": "coding_agent",
+            "agent": "codex",
+            "verification_command": f"{sys.executable} -c \"print('verified')\"",
+        }
+    )
+    setup = backend.setup()
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert command[command.index("-s") + 1] == "read-only"
+    assert "{objective}" not in command
+    assert result["verified"] is True
+    assert result["scope"] == "live_model"
+    assert setup["execution_validation"]["verified"] is True
+    assert "verified in this app session" in setup["execution_validation"]["summary"]
+
+
+def test_codex_connection_test_surfaces_config_error_without_claiming_ready(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "agentic_harness.gui.backend.resolve_executable",
+        lambda name: sys.executable if name == "codex" else None,
+    )
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            "",
+            "invalid value 'default' for service_tier",
+        )
+
+    monkeypatch.setattr("agentic_harness.gui.backend.subprocess.run", fake_run)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with pytest.raises(ValueError, match="service_tier"):
+        backend.test_connection({"execution": "coding_agent", "agent": "codex"})
+
+    assert backend._execution_validation == {}
+
+
 def test_setup_exposes_editable_provider_templates_without_secrets(tmp_path: Path) -> None:
     setup = EmbeddedExecutionBackend(tmp_path).setup()
     templates = {row["key"]: row for row in setup["provider_templates"]}

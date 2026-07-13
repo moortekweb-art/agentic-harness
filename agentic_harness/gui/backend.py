@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 from threading import Event, Lock, RLock, Thread
 from typing import Any
 
@@ -35,8 +36,10 @@ from agentic_harness.core.presentation import safe_inline_text
 from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.reporting import RunReceipt, build_run_receipt
 from agentic_harness.core.safety import (
+    command_uses_windows_shell,
     format_command,
     goal_safety_metadata,
+    resolve_command_executable,
     resolve_executable,
     split_command,
 )
@@ -86,6 +89,7 @@ class EmbeddedExecutionBackend:
         self._cancel = Event()
         self._thread_lock = Lock()
         self._config_lock = RLock()
+        self._execution_validation: dict[str, Any] = {}
         self._resume_orphaned_goal()
 
     def _resume_orphaned_goal(self) -> None:
@@ -197,13 +201,17 @@ class EmbeddedExecutionBackend:
                     "summary": "The durable terminal report is still being finalized.",
                     "next_action": "Wait for the final evidence report before starting another task.",
                 }
+        summary = f"Ready to work with {self._worker_label(config)}."
+        if config.worker == "coding_agent":
+            validation = self._coding_agent_validation(config.coding_agent_command)
+            summary = str(validation["summary"])
         return {
             "state": "ready",
             "label": "Ready",
             "can_start": True,
             "can_queue": True,
             "requires_review": False,
-            "summary": f"Ready to work with {self._worker_label(config)}.",
+            "summary": summary,
             "next_action": "Describe one goal and start the task.",
         }
 
@@ -278,6 +286,10 @@ class EmbeddedExecutionBackend:
                     model=config.llm_model,
                     api_key_env=config.llm_api_key_env,
                 ).to_public_dict()
+            elif config.worker == "coding_agent":
+                result["execution_validation"] = self._coding_agent_validation(
+                    config.coding_agent_command
+                )
         return result
 
     def configure(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -424,11 +436,16 @@ class EmbeddedExecutionBackend:
                 ),
                 "autonomy": _autonomy_settings(body),
             }
+            fingerprint = _command_fingerprint(command)
+            if self._execution_validation.get("fingerprint") != fingerprint:
+                self._execution_validation = {}
             self._commit_configuration(payload, None)
             return self.setup()
         raise ValueError("Choose an installed coding agent, local model, or cloud model.")
 
     def test_connection(self, body: dict[str, Any]) -> dict[str, Any]:
+        if str(body.get("execution") or "").strip() == "coding_agent":
+            return self._test_coding_agent(body)
         profile = ProviderProfile(
             endpoint=str(body.get("endpoint") or ""),
             model=str(body.get("model") or ""),
@@ -465,6 +482,103 @@ class EmbeddedExecutionBackend:
             "structured_actions": True,
             "model": profile.model,
             "data_location": profile.data_location,
+        }
+
+    def _test_coding_agent(self, body: dict[str, Any]) -> dict[str, Any]:
+        agent = str(body.get("agent") or "").strip().lower()
+        command = _existing_coding_agent_command(self.project_dir, agent)
+        resolved = resolve_executable(agent) if agent != "current" else None
+        if command is None and resolved is None:
+            raise ValueError(f"{agent or 'The selected coding agent'} is not available on PATH.")
+        if command is None:
+            command = _coding_agent_command(agent, executable=resolved)
+
+        label = _CODING_AGENT_LABELS.get(agent, "The configured coding agent")
+        if agent != "codex":
+            executable = resolve_command_executable([command[0], "--version"])
+            try:
+                proc = subprocess.run(
+                    executable,
+                    cwd=str(self.project_dir),
+                    text=True,
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                    shell=command_uses_windows_shell(executable),
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ValueError(f"{label} executable test timed out after 30 seconds.") from exc
+            if proc.returncode != 0:
+                raise ValueError(_coding_agent_probe_error(label, proc))
+            return {
+                "reachable": True,
+                "verified": False,
+                "scope": "executable_only",
+                "agent": agent,
+                "summary": (
+                    f"{label} is installed. This agent does not yet support a safe live "
+                    "model probe, so connection compatibility will be checked on the first run."
+                ),
+            }
+
+        probe_command = resolve_command_executable(
+            _coding_agent_probe_command(command, agent=agent)
+        )
+        env = os.environ.copy()
+        env["AGENTIC_HARNESS_OBJECTIVE"] = "Connection test only"
+        env["AGENTIC_HARNESS_INSTRUCTION"] = "Connection test only"
+        try:
+            proc = subprocess.run(
+                probe_command,
+                cwd=str(self.project_dir),
+                text=True,
+                capture_output=True,
+                timeout=120,
+                check=False,
+                env=env,
+                shell=command_uses_windows_shell(probe_command),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError(f"{label} connection test timed out after 120 seconds.") from exc
+        if proc.returncode != 0:
+            raise ValueError(_coding_agent_probe_error(label, proc))
+        if "AGENTIC_HARNESS_AGENT_READY" not in proc.stdout:
+            raise ValueError(
+                f"{label} started, but its model did not return the expected connection-test reply."
+            )
+        fingerprint = _command_fingerprint(command)
+        self._execution_validation = {
+            "fingerprint": fingerprint,
+            "verified": True,
+            "agent": agent,
+        }
+        return {
+            "reachable": True,
+            "verified": True,
+            "scope": "live_model",
+            "agent": agent,
+            "summary": f"{label} connection and configured model are working.",
+        }
+
+    def _coding_agent_validation(self, command: list[str]) -> dict[str, Any]:
+        agent = _coding_agent_selection(command)
+        label = _CODING_AGENT_LABELS.get(agent, "Coding agent")
+        verified = (
+            self._execution_validation.get("verified") is True
+            and self._execution_validation.get("fingerprint")
+            == _command_fingerprint(command)
+        )
+        return {
+            "verified": verified,
+            "scope": "live_model" if verified else "executable_only",
+            "summary": (
+                f"{label} connection and configured model were verified in this app session."
+                if verified
+                else (
+                    f"{label} is installed, but its connection and configured model have not "
+                    "been tested in this app session."
+                )
+            ),
         }
 
     def set_session_credential(self, api_key: str) -> dict[str, Any]:
@@ -1872,6 +1986,47 @@ def _coding_agent_command(agent: str, *, executable: str | None = None) -> list[
     if executable:
         command[0] = executable
     return command
+
+
+def _command_fingerprint(command: list[str]) -> str:
+    encoded = json.dumps(command, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _coding_agent_probe_command(command: list[str], *, agent: str) -> list[str]:
+    prompt = (
+        "Reply with exactly AGENTIC_HARNESS_AGENT_READY. "
+        "This is a connection test. Do not inspect or modify files."
+    )
+    result = [part.replace("{objective}", prompt) for part in command]
+    if all("{objective}" not in part for part in command):
+        result.append(prompt)
+    if agent != "codex":
+        return result
+
+    sandbox_found = False
+    for index, part in enumerate(result):
+        if part in {"-s", "--sandbox"} and index + 1 < len(result):
+            result[index + 1] = "read-only"
+            sandbox_found = True
+        elif part.startswith("--sandbox="):
+            result[index] = "--sandbox=read-only"
+            sandbox_found = True
+    if not sandbox_found:
+        prompt_index = result.index(prompt) if prompt in result else len(result)
+        result[prompt_index:prompt_index] = ["-s", "read-only"]
+    return result
+
+
+def _coding_agent_probe_error(
+    label: str,
+    proc: subprocess.CompletedProcess[str],
+) -> str:
+    raw = (proc.stderr or proc.stdout or "No diagnostic output was returned.").strip()
+    details = redact_secrets(raw)
+    if len(details) > 1_500:
+        details = details[-1_500:]
+    return f"{label} connection test failed with exit code {proc.returncode}: {details}"
 
 
 def _existing_coding_agent_command(

@@ -225,13 +225,54 @@ class CodingAgentWorker:
 
 
 def _parse_harness_outcome(stdout: str) -> dict[str, object]:
+    """Return the last valid structured outcome emitted by a coding agent.
+
+    Coding-agent CLIs do not all preserve the exact marker spelling requested
+    in the prompt.  In practice they emit either the documented
+    ``HARNESS_RESULT_JSON=<object>`` marker or a JSON wrapper such as
+    ``{"HARNESS_RESULT_JSON": <object>}``, and either form may be pretty
+    printed across multiple lines.  Parse all supported candidates and keep
+    the last valid one instead of letting a later malformed marker erase an
+    earlier valid completion claim.
+    """
+
     marker = "HARNESS_RESULT_JSON="
-    for line in reversed(stdout.splitlines()):
-        if not line.startswith(marker):
-            continue
+    decoder = json.JSONDecoder()
+    candidates: list[tuple[int, dict[str, object]]] = []
+
+    start = 0
+    while True:
+        index = stdout.find(marker, start)
+        if index < 0:
+            break
         try:
-            value = json.loads(line[len(marker) :])
+            value, _ = decoder.raw_decode(stdout[index + len(marker) :].lstrip())
         except json.JSONDecodeError:
-            return {}
-        return value if isinstance(value, dict) else {}
-    return {}
+            pass
+        else:
+            if isinstance(value, dict):
+                candidates.append((index, value))
+        start = index + len(marker)
+
+    wrapper_key = '"HARNESS_RESULT_JSON"'
+    start = 0
+    while True:
+        key_index = stdout.find(wrapper_key, start)
+        if key_index < 0:
+            break
+        object_index = stdout.rfind("{", 0, key_index + 1)
+        if object_index >= 0:
+            try:
+                value, _ = decoder.raw_decode(stdout[object_index:])
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(value, dict):
+                    outcome = value.get("HARNESS_RESULT_JSON")
+                    if isinstance(outcome, dict):
+                        candidates.append((object_index, outcome))
+        start = key_index + len(wrapper_key)
+
+    if not candidates:
+        return {}
+    return max(candidates, key=lambda item: item[0])[1]
