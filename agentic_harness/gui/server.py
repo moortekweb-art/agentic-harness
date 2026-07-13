@@ -450,7 +450,13 @@ def make_handler(
             self.send_header("Cache-Control", "no-store")
             self._security_headers()
             self.end_headers()
-            self.wfile.write(encoded)
+            try:
+                self.wfile.write(encoded)
+            except (BrokenPipeError, ConnectionResetError):
+                # Mobile browsers may sleep or switch networks while a start
+                # command is still returning.  The task state is durable and
+                # the next status refresh will reconnect to it.
+                return
 
         def _allowed(self, query: str) -> bool:
             client = self.client_address[0] if self.client_address else "local"

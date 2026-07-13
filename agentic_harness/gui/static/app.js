@@ -4,6 +4,7 @@ const TOKEN_KEY = "agentic-harness-gui-session-token";
 const TOKEN_PARAM = "token";
 const ICON_PREFIX = "#icon-";
 const API_TIMEOUT_MS = 20000;
+const START_TIMEOUT_MS = 90000;
 
 const GOAL_STARTERS = Object.freeze({
   create: {
@@ -222,13 +223,13 @@ function showTokenDialog() {
   return state.authPromptPromise;
 }
 
-async function api(path, options = {}, retry = true) {
+async function api(path, options = {}, retry = true, timeoutMs = API_TIMEOUT_MS) {
   const headers = new Headers(options.headers || {});
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (state.authToken) headers.set("Authorization", `Bearer ${state.authToken}`);
   const controller = typeof AbortController === "function" ? new AbortController() : null;
   const timeout = controller
-    ? window.setTimeout(() => controller.abort(), API_TIMEOUT_MS)
+    ? window.setTimeout(() => controller.abort(), timeoutMs)
     : null;
   let response;
   try {
@@ -247,7 +248,7 @@ async function api(path, options = {}, retry = true) {
     if (entered) {
       state.authToken = entered;
       sessionStorage.setItem(TOKEN_KEY, entered);
-      return api(path, options, false);
+      return api(path, options, false, timeoutMs);
     }
   }
   const payload = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
@@ -439,7 +440,7 @@ function updateStartButton() {
   els.startButton.disabled = state.busy || !canStart || !hasObjective
     || (verificationRequired && !hasVerification);
   if (state.busy) {
-    els.startHelp.textContent = "Starting the goal. This can take a few seconds.";
+    els.startHelp.textContent = "Sending the goal. Planning can take up to a minute; this page will reconnect if your phone sleeps.";
   } else if (!canStart) {
     els.startHelp.textContent = state.readiness.next_action
       || state.readiness.summary
@@ -679,12 +680,27 @@ function renderTask(task) {
 
   const progress = normalizeProgress(task);
   const percent = Number(progress.percent);
-  els.progressGroup.hidden = !(progress.determinate && Number.isFinite(percent));
-  if (!els.progressGroup.hidden) {
+  const indeterminate = progress.determinate === false
+    && ["starting", "working", "checking", "needs_review"].includes(status);
+  const determinate = progress.determinate === true && Number.isFinite(percent);
+  els.progressGroup.hidden = !(determinate || indeterminate);
+  if (determinate) {
     const bounded = Math.max(0, Math.min(100, percent));
     els.progressValue.textContent = `${bounded}%`;
     els.progressBar.style.width = `${bounded}%`;
+    els.progressTrack.className = "progress-track";
     els.progressTrack.setAttribute("aria-valuenow", String(bounded));
+    els.progressTrack.removeAttribute("aria-valuetext");
+  } else if (indeterminate) {
+    els.progressValue.textContent = progress.label || "In progress";
+    els.progressBar.style.width = "";
+    els.progressTrack.className = "progress-track indeterminate";
+    els.progressTrack.removeAttribute("aria-valuenow");
+    els.progressTrack.setAttribute("aria-valuetext", progress.label || "In progress");
+  } else {
+    els.progressTrack.className = "progress-track";
+    els.progressTrack.removeAttribute("aria-valuenow");
+    els.progressTrack.removeAttribute("aria-valuetext");
   }
 
   const current = task.current && typeof task.current === "object" ? task.current : {};
@@ -946,16 +962,53 @@ function singleFlight(key, operation) {
 
 async function startWork() {
   if (els.startButton.disabled) return;
+  const objective = els.objective.value.trim();
   await runAction(async () => {
-    const task = await api("/api/tasks", {
-      method: "POST",
-      body: JSON.stringify({
-        mode: state.mode,
-        objective: els.objective.value.trim(),
-        safe_areas: linesFrom(els.safeAreas),
-        checks: linesFrom(els.checks),
-      }),
+    const submittedAt = new Date().toISOString();
+    renderTask({
+      id: `pending-${Date.now()}`,
+      objective,
+      human_title: objective.slice(0, 80),
+      status: "starting",
+      status_label: "Starting",
+      result_category: "in_progress",
+      summary: "Your goal was sent. The assistant is preparing it; you can safely return to this page if the connection changes.",
+      progress: { determinate: false, percent: null, label: "Starting" },
+      current: {
+        cycle: 0,
+        current_subgoal: "Preparing the task",
+        checkpoint: "Connecting",
+        last_event_at: submittedAt,
+      },
+      plan: [
+        { status: "in_progress", step: "Understand the request" },
+        { status: "pending", step: "Complete the requested work" },
+        { status: "pending", step: "Verify the result" },
+      ],
+      requirements: [{ status: "active", text: `Requested outcome: ${objective}` }],
+      events: [{ stage: "act", summary: "Goal sent to the assistant", checkpoint: "Starting" }],
+      allowed_actions: [],
+      metadata: { updated_at: submittedAt },
     });
+    let task;
+    try {
+      task = await api("/api/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: state.mode,
+          objective,
+          safe_areas: linesFrom(els.safeAreas),
+          checks: linesFrom(els.checks),
+        }),
+      }, true, START_TIMEOUT_MS);
+    } catch (startError) {
+      const recovered = await api("/api/tasks/current");
+      if (!["starting", "working", "checking", "needs_review"].includes(recovered.status)) {
+        throw startError;
+      }
+      recovered.summary = "Your goal was accepted and is running. This page reconnected to the current task.";
+      task = recovered;
+    }
     state.viewingHistoryId = "";
     state.liveTask = task;
     renderTask(task);
@@ -1065,6 +1118,7 @@ function connectStatusStream() {
     schedulePolling();
     return;
   }
+  if (state.socket && Number(state.socket.readyState) < 2) return;
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${scheme}://${window.location.host}/api/tasks/stream`);
   state.socket = socket;
@@ -1084,11 +1138,18 @@ function connectStatusStream() {
     }
   });
   socket.addEventListener("close", () => {
+    if (state.socket === socket) state.socket = null;
     schedulePolling();
     const delay = state.reconnectDelay;
     state.reconnectDelay = Math.min(30000, state.reconnectDelay * 2);
     window.setTimeout(connectStatusStream, delay);
   });
+}
+
+function recoverVisibleSession() {
+  if (document.visibilityState === "hidden") return;
+  Promise.all([refreshTask(true), refreshHealth(), refreshHistory()]).catch(() => {});
+  connectStatusStream();
 }
 
 function applyTheme(theme) {
@@ -1181,6 +1242,9 @@ els.exportButton.addEventListener("click", () => exportSession().catch((error) =
   });
 });
 document.addEventListener("keydown", handleShortcut);
+document.addEventListener("visibilitychange", recoverVisibleSession);
+window.addEventListener("pageshow", recoverVisibleSession);
+window.addEventListener("online", recoverVisibleSession);
 
 captureTokenFromUrl();
 applyTheme(localStorage.getItem(THEME_KEY) || "light");

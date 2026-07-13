@@ -107,7 +107,11 @@ def test_gui_recovers_from_slow_requests_and_failed_status_streams() -> None:
     assert 'singleFlight("health"' in javascript
     assert 'singleFlight("history"' in javascript
     assert "function stopPolling()" in javascript
-    assert 'socket.addEventListener("close", () => {\n    schedulePolling();' in javascript
+    assert 'socket.addEventListener("close", () => {' in javascript
+    assert "if (state.socket === socket) state.socket = null" in javascript
+    assert "schedulePolling();" in javascript
+    assert 'window.addEventListener("pageshow", recoverVisibleSession)' in javascript
+    assert 'window.addEventListener("online", recoverVisibleSession)' in javascript
 
 
 def test_gui_status_stream_advances_managed_work_without_babysitting() -> None:

@@ -346,7 +346,11 @@ def test_task_from_command_result_maps_review_state() -> None:
     assert task["status"] == "needs_review"
     assert task["needs_human"] is True
     assert task["summary"] == "ship it"
-    assert task["progress"] == 70
+    assert task["progress"] == {
+        "determinate": False,
+        "percent": None,
+        "label": "In progress",
+    }
     assert task["metadata"]["command"] == "local-goal status --json"
 
 
@@ -591,7 +595,85 @@ def test_task_from_command_result_treats_retryable_failure_as_recoverable() -> N
     assert task["status"] == "checking"
     assert task["needs_human"] is False
     assert task["summary"] == "backend timed out"
-    assert task["progress"] == 60
+    assert task["progress"] == {
+        "determinate": False,
+        "percent": None,
+        "label": "In progress",
+    }
+
+
+def test_managed_working_task_exposes_live_iteration_without_fake_percent() -> None:
+    run_dir = "/tmp/reports/runs/20260713T075645Z-audit-docs"
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "contract": "local_node1_goal_supervisor.v1",
+                "classification": "working",
+                "phase": "running",
+                "generated_at": "2026-07-13T08:01:12Z",
+                "active_goal": {
+                    "accepted": False,
+                    "objective": "Audit the setup guide for unclear instructions",
+                    "run_dir": run_dir,
+                    "current_subgoal": None,
+                },
+                "goal_state": {
+                    "phase": "executing",
+                    "last_updated": "2026-07-13T08:01:12Z",
+                },
+                "runtime": {
+                    "loop_state": {
+                        "status": "running",
+                        "iteration": 5,
+                        "max_iterations": 24,
+                        "detail": "starting opencode iteration",
+                        "updated_at": "2026-07-13T08:01:05Z",
+                    }
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="ready")
+
+    assert task["status"] == "working"
+    assert task["id"] == "20260713T075645Z-audit-docs"
+    assert task["objective"] == "Audit the setup guide for unclear instructions"
+    assert task["progress"] == {
+        "determinate": False,
+        "percent": None,
+        "label": "In progress",
+    }
+    assert task["current"] == {
+        "cycle": 5,
+        "max_cycles": 24,
+        "current_subgoal": "Working through the request (pass 5)",
+        "checkpoint": "Pass 5 of up to 24",
+        "last_event_at": "2026-07-13T08:01:05Z",
+    }
+    assert task["events"] == [
+        {
+            "stage": "act",
+            "summary": "Agent pass 5 is active.",
+            "checkpoint": "Pass 5 of up to 24",
+            "at": "2026-07-13T08:01:05Z",
+        }
+    ]
+    assert [row["status"] for row in task["plan"]] == [
+        "completed",
+        "in_progress",
+        "pending",
+    ]
+    assert task["requirements"] == [
+        {
+            "status": "active",
+            "text": "Requested outcome: Audit the setup guide for unclear instructions",
+        }
+    ]
+    assert task["metadata"]["updated_at"] == "2026-07-13T08:01:05Z"
 
 
 def test_task_from_command_result_blocks_permanent_command_failures() -> None:
@@ -1065,7 +1147,8 @@ def test_gui_frontend_keeps_embedded_flow_single_and_legacy_modes_human_named() 
 
     assert 'worker?.type === "local_goal"' in app
     assert "renderModes(payload.modes || [])" in app
-    assert 'objective: els.objective.value.trim()' in app
+    assert "const objective = els.objective.value.trim()" in app
+    assert "objective," in app
     assert "mode: state.mode" in app
     assert "allowed_actions" in app
 
