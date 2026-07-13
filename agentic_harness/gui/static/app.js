@@ -146,6 +146,8 @@ const els = {
   executionChoice: byId("executionChoice"),
   codingAgentFields: byId("codingAgentFields"),
   codingAgentChoice: byId("codingAgentChoice"),
+  testCodingAgentButton: byId("testCodingAgentButton"),
+  codingAgentConnectionResult: byId("codingAgentConnectionResult"),
   providerFields: byId("providerFields"),
   providerPreset: byId("providerPreset"),
   providerPresetHelp: byId("providerPresetHelp"),
@@ -888,12 +890,15 @@ function renderSetup(setup) {
   const worker = setup.worker || {};
   renderDetectedAgents(setup, worker);
   renderProviderTemplates(setup);
+  const executionValidation = setup.execution_validation || {};
   els.executionSummary.textContent = setup.configured
     ? worker.type === "model_agent"
       ? `${worker.model || "Model"} · ${worker.credential_source || "no key"}`
       : worker.type === "local_goal"
         ? "Verified agent ready"
-        : worker.label || worker.type || "Configured"
+        : executionValidation.verified
+          ? `${worker.label || "Coding agent"} connection verified`
+          : `${worker.label || "Coding agent"} installed · connection not tested`
     : "Setup required";
   const previousCheck = previousSetup
     ? previousSetup.verification_command || previousSetup.suggested_check || ""
@@ -1143,6 +1148,27 @@ async function testConnection() {
   }
 }
 
+async function testCodingAgent() {
+  els.codingAgentConnectionResult.textContent = "Testing without file access…";
+  try {
+    const result = await api("/api/setup/test", {
+      method: "POST",
+      body: JSON.stringify({
+        execution: "coding_agent",
+        agent: els.codingAgentChoice.value,
+      }),
+    }, true, START_TIMEOUT_MS);
+    els.codingAgentConnectionResult.textContent = result.summary || (
+      result.verified ? "Connection and model verified." : "Executable found."
+    );
+    await Promise.all([refreshSetup(), refreshHealth()]);
+  } catch (error) {
+    els.codingAgentConnectionResult.textContent = error instanceof Error
+      ? error.message
+      : String(error);
+  }
+}
+
 async function runAction(action) {
   if (state.busy) return;
   setBusy(true);
@@ -1259,6 +1285,7 @@ els.setupForm.addEventListener("submit", saveSetup);
 els.executionChoice.addEventListener("change", updateSetupFields);
 els.providerPreset.addEventListener("change", applyProviderTemplate);
 els.testConnectionButton.addEventListener("click", testConnection);
+els.testCodingAgentButton.addEventListener("click", testCodingAgent);
 els.continueButton.addEventListener("click", () => els.continueDialog.showModal());
 els.closeContinueButton.addEventListener("click", () => els.continueDialog.close());
 els.continueForm.addEventListener("submit", (event) => {

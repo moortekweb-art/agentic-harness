@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-agentic-harness"
-version = "0.8.0"
+version = "0.8.1"
 description = "Run coding agents and only mark work done when independent checks pass."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -30,7 +30,7 @@ dependencies = ["PyYAML>=6.0"]
 Homepage = "https://github.com/moortekweb-art/agentic-harness"
 Repository = "https://github.com/moortekweb-art/agentic-harness"
 Issues = "https://github.com/moortekweb-art/agentic-harness/issues"
-Changelog = "https://github.com/moortekweb-art/agentic-harness/blob/main/docs/RELEASE_NOTES_0.8.0.md"
+Changelog = "https://github.com/moortekweb-art/agentic-harness/blob/main/docs/RELEASE_NOTES_0.8.1.md"
 
 [project.optional-dependencies]
 test = [

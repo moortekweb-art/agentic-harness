@@ -19,6 +19,7 @@ from agentic_harness.core.workspace import capture_workspace_snapshot
 AUTONOMY_CONTRACT = "agentic_harness.autonomy.v1"
 COMPLETION_AUDIT_CONTRACT = "agentic_harness.completion_audit.v1"
 EVIDENCE_CONTRACT = "agentic_harness.evidence.v1"
+_COMPLETE_OUTCOME_STATUSES = {"complete", "completed", "done"}
 
 
 @dataclass(frozen=True)
@@ -146,7 +147,13 @@ class AutonomousRunner:
             return self._record_budget_exhaustion(goal, exhausted, lease)
 
         if goal.status is GoalStatus.FAILED:
-            return self._record_blocker(goal, _worker_failure(goal), lease)
+            reason = _worker_failure(goal)
+            return self._record_blocker(
+                goal,
+                reason,
+                lease,
+                immediate=_permanent_worker_failure(goal),
+            )
 
         outcome_status = str(outcome.get("status") or "").strip().lower()
         if outcome_status == "progress":
@@ -285,7 +292,10 @@ class AutonomousRunner:
             "Completion requires every derived requirement to be satisfied with concrete evidence.",
             "Return one HARNESS_RESULT_JSON object with status, plan, current_subgoal, ",
             "checkpoint, requirements, blockers, summary, and verification evidence.",
-            "Requirement evidence must contain only harness-issued identifiers, never prose.",
+            "Use status complete for finished work. Every requirement must include a stable id, ",
+            "status satisfied, and an evidence list.",
+            "Requirement evidence must contain only the exact harness-issued identifiers listed ",
+            "below, never your own tool-call IDs or prose.",
         ]
         strategy = goal.metadata.get("execution_strategy")
         if isinstance(strategy, dict):
@@ -388,7 +398,7 @@ class AutonomousRunner:
         usage = budget.get("usage")
         if not isinstance(limits, dict) or not isinstance(usage, dict):
             return None
-        complete = str(outcome.get("status") or "").strip().lower() == "complete"
+        complete = _complete_outcome(outcome)
         checks = (
             ("max_cycles", "cycles", "cycle budget"),
             ("max_total_tokens", "total_tokens", "token budget"),
@@ -483,7 +493,7 @@ class AutonomousRunner:
             )
             if not has_independent_criterion:
                 failures.append("deterministic review has no independent criterion")
-            if str(outcome.get("status") or "").strip().lower() != "complete":
+            if not _complete_outcome(outcome):
                 failures.append("structured completion claim is missing")
             if not str(outcome.get("summary") or "").strip():
                 failures.append("structured completion claim has no summary")
@@ -578,7 +588,14 @@ class AutonomousRunner:
             "evidence_registry": list(evidence_registry.values()),
         }
 
-    def _record_blocker(self, goal: Goal, reason: str, lease: object) -> Goal:
+    def _record_blocker(
+        self,
+        goal: Goal,
+        reason: str,
+        lease: object,
+        *,
+        immediate: bool = False,
+    ) -> Goal:
         autonomy = _autonomy(goal)
         signature = _blocker_signature(self.supervisor, reason)
         previous = autonomy.get("blocker")
@@ -587,6 +604,8 @@ class AutonomousRunner:
             int(previous.get("consecutive_count") or 0) if isinstance(previous, dict) else 0
         )
         count = previous_count + 1 if signature == previous_signature else 1
+        if immediate:
+            count = max(count, self.policy.repeated_blocker_limit)
         autonomy["blocker"] = {
             "signature": signature,
             "consecutive_count": count,
@@ -638,6 +657,42 @@ def _autonomy(goal: Goal) -> dict[str, Any]:
 
 def _worker_failure(goal: Goal) -> str:
     return str(goal.error or goal.metadata.get("worker_summary") or "worker failed")
+
+
+def _complete_outcome(outcome: dict[str, Any]) -> bool:
+    return str(outcome.get("status") or "").strip().lower() in _COMPLETE_OUTCOME_STATUSES
+
+
+def _permanent_worker_failure(goal: Goal) -> bool:
+    """Identify launch/configuration failures that another agent pass cannot repair."""
+
+    returncode = goal.metadata.get("worker_returncode")
+    if isinstance(returncode, int) and returncode in {2, 126, 127}:
+        return True
+    text = " ".join(
+        str(value or "").lower()
+        for value in (
+            goal.error,
+            goal.metadata.get("worker_summary"),
+        )
+    )
+    permanent_markers = (
+        "could not start",
+        "command not found",
+        "executable missing",
+        "invalid configuration",
+        "invalid value",
+        "unsupported service_tier",
+        "unsupported service tier",
+        "requires a newer version",
+        "requires newer codex",
+        "not logged in",
+        "authentication failed",
+        "unauthorized",
+        "unknown model",
+        "model is not supported",
+    )
+    return any(marker in text for marker in permanent_markers)
 
 
 def _review_failure(goal: Goal) -> str:

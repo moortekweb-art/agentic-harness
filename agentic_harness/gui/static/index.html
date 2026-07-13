@@ -499,6 +499,10 @@
         <div id="codingAgentFields">
           <label class="field-label" for="codingAgentChoice">Coding agent</label>
           <select id="codingAgentChoice"><option value="codex">Codex</option><option value="opencode">OpenCode</option><option value="aider">Aider</option><option value="codewhale">CodeWhale</option></select>
+          <div class="actions compact">
+            <button type="button" id="testCodingAgentButton">Test coding agent</button>
+            <span id="codingAgentConnectionResult" role="status"></span>
+          </div>
         </div>
         <div id="providerFields" hidden>
           <label class="field-label" for="providerPreset">Provider template (optional)</label>

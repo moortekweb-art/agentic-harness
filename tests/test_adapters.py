@@ -261,6 +261,57 @@ def test_coding_agent_worker_extracts_structured_harness_outcome(monkeypatch, tm
     assert result.outcome == outcome
 
 
+def test_coding_agent_worker_extracts_json_wrapped_harness_outcome(
+    monkeypatch, tmp_path
+) -> None:
+    outcome = {
+        "status": "completed",
+        "summary": "implemented and verified",
+        "requirements": [],
+        "blockers": [],
+    }
+
+    def fake_run(cmd, **kwargs):
+        stdout = json.dumps({"HARNESS_RESULT_JSON": outcome}, indent=2) + "\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout, "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    worker = CodingAgentWorker(["codex", "exec", "{objective}"], cwd=tmp_path)
+
+    result = worker.run(Goal("wrapped completion", id="goal-wrapped"))
+
+    assert result.success is True
+    assert result.outcome == outcome
+    assert result.summary == "implemented and verified"
+
+
+def test_coding_agent_worker_extracts_multiline_marker_and_skips_malformed_latest(
+    monkeypatch, tmp_path
+) -> None:
+    outcome = {
+        "status": "complete",
+        "summary": "valid earlier result",
+        "requirements": [],
+        "blockers": [],
+    }
+
+    def fake_run(cmd, **kwargs):
+        stdout = (
+            "HARNESS_RESULT_JSON="
+            + json.dumps(outcome, indent=2)
+            + "\nHARNESS_RESULT_JSON={broken\n"
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout, "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    worker = CodingAgentWorker(["codex", "exec", "{objective}"], cwd=tmp_path)
+
+    result = worker.run(Goal("multiline completion", id="goal-multiline"))
+
+    assert result.outcome == outcome
+    assert result.summary == "valid earlier result"
+
+
 def test_coding_agent_worker_redacts_secret_like_transcript_content(monkeypatch, tmp_path) -> None:
     def fake_run(cmd, **kwargs):
         return subprocess.CompletedProcess(

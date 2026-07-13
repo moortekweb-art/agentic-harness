@@ -437,6 +437,10 @@ async function testConfiguredVerificationReplacesOnlyThePreviousSuggestion() {
     suggested_check: "npm test",
   });
   assert.equal(app.elements.get("checks").value, "npm run verify");
+  assert.equal(
+    app.elements.get("executionSummary").textContent,
+    "Codex installed · connection not tested",
+  );
 
   app.elements.get("checks").value = "npm run verify:focused";
   app.context.renderSetup({
@@ -447,6 +451,58 @@ async function testConfiguredVerificationReplacesOnlyThePreviousSuggestion() {
     verification_command: "npm run verify:default",
   });
   assert.equal(app.elements.get("checks").value, "npm run verify:focused");
+}
+
+async function testCodingAgentConnectionTestReportsLiveValidation() {
+  const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    workspace: "/tmp/project",
+    worker: { type: "coding_agent", agent: "codex", label: "Codex" },
+    execution_validation: { verified: false, scope: "executable_only" },
+    execution_options: [
+      {
+        key: "coding_agent",
+        available: true,
+        recommended: true,
+        recommended_agent: "codex",
+        agents: [{ key: "codex", label: "Codex", available: true, recommended: true }],
+      },
+    ],
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url, options = {}) => {
+      if (url === "/api/setup/test" && options.method === "POST") {
+        return response({
+          reachable: true,
+          verified: true,
+          scope: "live_model",
+          summary: "Codex connection and configured model are working.",
+        });
+      }
+      if (url === "/api/setup") {
+        return response({
+          ...setupPayload,
+          execution_validation: { verified: true, scope: "live_model" },
+        });
+      }
+      return response(okPayloadFor(url, setupPayload));
+    },
+  });
+
+  await app.elements.get("testCodingAgentButton").listeners.click();
+  await tick();
+
+  assert.equal(
+    app.elements.get("codingAgentConnectionResult").textContent,
+    "Codex connection and configured model are working.",
+  );
+  assert.equal(app.elements.get("executionSummary").textContent, "Codex connection verified");
+  const probe = app.fetchCalls.find((call) => call.url === "/api/setup/test");
+  assert.equal(JSON.parse(probe.options.body).agent, "codex");
 }
 
 async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDraft() {
@@ -980,6 +1036,7 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
   await testLegacySetupContractCompletesBootstrapAndAttachesStatusStream();
   await testFreshSetupOpensOnceAndSelectsTheRecommendedDetectedAgent();
   await testConfiguredVerificationReplacesOnlyThePreviousSuggestion();
+  await testCodingAgentConnectionTestReportsLiveValidation();
   await testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDraft();
   await testPortableUserChoosesProviderIndependentStrategy();
   await testProviderTemplatePrefillsEditableValues();
