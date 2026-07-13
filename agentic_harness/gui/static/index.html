@@ -276,6 +276,7 @@
             <p class="eyebrow">New goal</p>
             <h2>What outcome do you want?</h2>
             <p class="help-text">Describe one result. The assistant will keep the goal, show each checkpoint, run your check, and only mark it done when the evidence passes.</p>
+            <p class="help-text task-fit">Best fit: ask it to create, repair, check, or deliver something in this workspace. For a question that only needs an answer, use your normal assistant chat.</p>
           </div>
 
           <label class="field-label" for="objective">Objective</label>
@@ -285,9 +286,17 @@
             placeholder="Example: add a CSV export, update its tests, and explain the changed files"
           ></textarea>
 
-          <label class="field-label" for="checks">Verification command for this goal</label>
+          <section id="modeSection" class="mode-section" hidden>
+            <div class="mode-heading">
+              <span class="field-label">How should the assistant approach it?</span>
+              <span class="mode-recommendation">Plan first is a good default.</span>
+            </div>
+            <div class="mode-grid" id="modes" role="group" aria-label="Work approach"></div>
+          </section>
+
+          <label class="field-label" id="verificationLabel" for="checks">Verification command for this goal</label>
           <textarea id="checks" rows="2" required placeholder="Example: python -m pytest -q"></textarea>
-          <p class="help-text">Pre-filled from Setup. Edit it here to override the default for this run. This check runs independently, and the task is never verified done unless it passes.</p>
+          <p class="help-text" id="verificationHelp">Pre-filled from Setup. Edit it here to override the default for this run. This check runs independently, and the task is never verified done unless it passes.</p>
 
           <details class="boundaries">
             <summary>Optional scope</summary>
@@ -306,7 +315,7 @@
               <span>Refresh</span>
             </button>
           </div>
-          <p class="help-text" id="startHelp" role="status">Describe the outcome and add the command that will prove it is complete.</p>
+          <p class="help-text" id="startHelp" role="status">Describe the outcome you want. The app will explain anything else it needs.</p>
         </div>
 
         <aside class="status-panel" aria-live="polite">

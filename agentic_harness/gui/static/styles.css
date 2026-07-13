@@ -269,6 +269,12 @@ select {
   font-size: 0.9rem;
 }
 
+.task-fit {
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: rgba(39, 105, 93, 0.07);
+}
+
 #objective {
   min-height: 220px;
   flex: 1 1 220px;
@@ -315,6 +321,23 @@ select:focus {
   margin: 16px 0;
 }
 
+.mode-section {
+  margin-top: 4px;
+}
+
+.mode-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mode-recommendation {
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .mode-card {
   display: block;
   min-height: 138px;
@@ -326,6 +349,26 @@ select:focus {
   text-align: left;
   box-shadow: var(--card-shadow);
   transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.mode-card strong,
+.mode-card span,
+.mode-card small {
+  display: block;
+}
+
+.mode-card strong {
+  margin-bottom: 7px;
+  color: var(--ink);
+}
+
+.mode-card span,
+.mode-card small {
+  color: var(--muted);
+}
+
+.mode-card small {
+  margin-top: 8px;
 }
 
 .mode-card:hover {

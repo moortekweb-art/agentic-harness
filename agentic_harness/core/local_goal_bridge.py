@@ -51,30 +51,30 @@ HUMAN_MODES: tuple[HumanMode, ...] = (
     HumanMode(
         key="local",
         number=1,
-        title="Use this computer",
-        best_for="small, bounded work that should stay on this Linux machine",
-        caution="best when the work is clear and only one task should move",
+        title="Quick task",
+        best_for="a small, clear job that can be completed in one focused pass",
+        caution="Choose this when you already know the result you want.",
     ),
     HumanMode(
         key="guided",
         number=2,
-        title="Plan, then execute",
-        best_for="important work where an external planner should shape the approach",
-        caution="keeps review in the loop before the work is called done",
+        title="Plan first",
+        best_for="important or unfamiliar work where the assistant should plan before changing anything",
+        caution="Recommended when you are unsure which approach is best.",
     ),
     HumanMode(
         key="cloud",
         number=3,
-        title="Use a long-running orchestrator",
-        best_for="longer work owned by a configured external orchestration service",
-        caution="keeps results reviewable before they are accepted",
+        title="Keep working",
+        best_for="a larger job that may need several attempts or take a while",
+        caution="Use this for work you want the assistant to continue until it has evidence.",
     ),
     HumanMode(
         key="experimental",
         number=4,
-        title="Try an experimental executor",
-        best_for="tiny sandbox checks with a separately configured experimental path",
-        caution="not the default for broad source edits or important production work",
+        title="Safe experiment",
+        best_for="a tiny, low-risk trial where an experimental worker can be evaluated",
+        caution="Keep this away from important production work and broad changes.",
     ),
 )
 
@@ -97,6 +97,11 @@ class LocalGoalBridge:
     _status_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _status_cache: CommandResult | None = field(default=None, init=False, repr=False)
     _status_cache_at: float = field(default=0.0, init=False, repr=False)
+    _last_run_cache: CommandResult | None = field(default=None, init=False, repr=False)
+    _last_run_cache_at: float = field(default=0.0, init=False, repr=False)
+    _monitor_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _monitor_cache: CommandResult | None = field(default=None, init=False, repr=False)
+    _monitor_cache_at: float = field(default=0.0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         resolved_doc_root = resolve_doc_root(self.doc_root)
@@ -145,8 +150,13 @@ class LocalGoalBridge:
             stderr=completed.stderr,
         )
 
-    def enqueue_mode3a(self, options: Mode3AGoalOptions) -> CommandResult:
-        capabilities = self.run(["capabilities", "--json"])
+    def enqueue_mode3a(
+        self,
+        options: Mode3AGoalOptions,
+        *,
+        capabilities: CommandResult | None = None,
+    ) -> CommandResult:
+        capabilities = capabilities or self.run(["capabilities", "--json"])
         if not _supports_candidate_contract(capabilities, EXTERNAL_CANDIDATE_CONTRACT):
             return CommandResult(
                 args=capabilities.args,
@@ -157,11 +167,19 @@ class LocalGoalBridge:
                     f"contract: {EXTERNAL_CANDIDATE_CONTRACT}"
                 ),
             )
+        routing = _routing_defaults(capabilities)
         goal = build_mode3a_goal(options)
         return self.enqueue_cloud_goal(
             goal,
-            worker=_external_setting("AGENTIC_HARNESS_EXTERNAL_LONG_WORKER", "long-horizon"),
-            planner=_external_setting("AGENTIC_HARNESS_EXTERNAL_PLANNER", "planner"),
+            worker=_external_setting(
+                "AGENTIC_HARNESS_EXTERNAL_LONG_WORKER",
+                routing["long_worker"],
+            ),
+            planner=_external_setting(
+                "AGENTIC_HARNESS_EXTERNAL_PLANNER",
+                routing["planner"],
+            ),
+            executor=routing["executor"],
             contract=EXTERNAL_CANDIDATE_CONTRACT,
         )
 
@@ -174,49 +192,77 @@ class LocalGoalBridge:
         checks: tuple[str, ...] = (),
     ) -> CommandResult:
         mode = human_mode_by_key(mode_key)
+        capabilities = self.run(["capabilities", "--json"])
+        routing = _routing_defaults(capabilities)
         if mode.key == "local":
-            return self.start_local_goal(objective)
-        if mode.key == "guided":
-            return self.start_guided_goal(objective)
-        if mode.key == "cloud":
-            return self.enqueue_mode3a(
+            result = self.start_local_goal(objective, executor=routing["executor"])
+        elif mode.key == "guided":
+            result = self.start_guided_goal(
+                objective,
+                planner=routing["planner"],
+                executor=routing["executor"],
+            )
+        elif mode.key == "cloud":
+            result = self.enqueue_mode3a(
                 Mode3AGoalOptions(
                     objective=objective,
                     allowed_paths=safe_areas,
                     verification=checks,
-                )
+                ),
+                capabilities=capabilities,
             )
-        if mode.key == "experimental":
+        elif mode.key == "experimental":
             goal = build_experimental_goal(objective, safe_areas=safe_areas, checks=checks)
-            return self.enqueue_cloud_goal(
+            result = self.enqueue_cloud_goal(
                 goal,
                 worker=_external_setting(
                     "AGENTIC_HARNESS_EXTERNAL_EXPERIMENTAL_WORKER",
-                    "experimental",
+                    routing["experimental_worker"],
                 ),
                 planner="none",
+                executor=routing["executor"],
+                contract=EXTERNAL_CANDIDATE_CONTRACT,
             )
-        raise ValueError(f"unsupported mode {mode.key}")
+        else:
+            raise ValueError(f"unsupported mode {mode.key}")
+        self.invalidate_status_caches()
+        return result
 
-    def start_local_goal(self, goal: str) -> CommandResult:
+    def invalidate_status_caches(self) -> None:
+        with self._status_lock:
+            self._status_cache = None
+            self._status_cache_at = 0.0
+            self._last_run_cache = None
+            self._last_run_cache_at = 0.0
+        with self._monitor_lock:
+            self._monitor_cache = None
+            self._monitor_cache_at = 0.0
+
+    def start_local_goal(self, goal: str, *, executor: str = "opencode") -> CommandResult:
         return self.run(
             [
                 "quick-start",
                 "--executor",
-                _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", "executor"),
+                _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", executor),
                 "--goal",
                 goal,
             ]
         )
 
-    def start_guided_goal(self, goal: str) -> CommandResult:
+    def start_guided_goal(
+        self,
+        goal: str,
+        *,
+        planner: str = "gpt-5.5",
+        executor: str = "opencode",
+    ) -> CommandResult:
         return self.run(
             [
                 "premium-start",
                 "--planner",
-                _external_setting("AGENTIC_HARNESS_EXTERNAL_PLANNER", "planner"),
+                _external_setting("AGENTIC_HARNESS_EXTERNAL_PLANNER", planner),
                 "--executor",
-                _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", "executor"),
+                _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", executor),
                 "--goal",
                 goal,
             ]
@@ -228,6 +274,7 @@ class LocalGoalBridge:
         *,
         worker: str,
         planner: str = "planner",
+        executor: str = "opencode",
         contract: str = "",
     ) -> CommandResult:
         args = ["enqueue"]
@@ -238,7 +285,7 @@ class LocalGoalBridge:
                 "--planner",
                 planner,
                 "--executor",
-                _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", "executor"),
+                _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", executor),
                 "--executor-worker",
                 worker,
                 "--goal",
@@ -267,6 +314,22 @@ class LocalGoalBridge:
             self._status_cache_at = time.monotonic()
             return result
 
+    def last_run(self, *, json_output: bool = False) -> CommandResult:
+        args = ["last-run"]
+        if json_output:
+            args.append("--json")
+        now = time.monotonic()
+        with self._status_lock:
+            if (
+                self._last_run_cache is not None
+                and now - self._last_run_cache_at < 5.0
+            ):
+                return self._last_run_cache
+            result = self.run(args)
+            self._last_run_cache = result
+            self._last_run_cache_at = time.monotonic()
+            return result
+
     def mode3a_status(self, *, json_output: bool = False) -> CommandResult:
         return self.run(["mode3a-status", "--json"] if json_output else ["mode3a-status"])
 
@@ -279,7 +342,17 @@ class LocalGoalBridge:
         ]
         if json_output:
             args.append("--json")
-        return self.run(args)
+        now = time.monotonic()
+        with self._monitor_lock:
+            if (
+                self._monitor_cache is not None
+                and now - self._monitor_cache_at < 8.0
+            ):
+                return self._monitor_cache
+            result = self.run(args)
+            self._monitor_cache = result
+            self._monitor_cache_at = time.monotonic()
+            return result
 
     def background_supervision(self) -> dict[str, object]:
         result = self.run(["capabilities", "--json"])
@@ -443,6 +516,60 @@ def format_human_modes() -> str:
 
 def _external_setting(name: str, default: str) -> str:
     return os.environ.get(name, "").strip() or default
+
+
+def _routing_defaults(result: CommandResult) -> dict[str, str]:
+    """Choose only routes advertised by the optional external backend."""
+    defaults = {
+        "executor": "opencode",
+        "planner": "gpt-5.5",
+        "long_worker": "opencode-kimi-build",
+        "experimental_worker": "glm52-direct-implementation-canary",
+    }
+    if result.returncode != 0:
+        return defaults
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return defaults
+    if not isinstance(payload, dict):
+        return defaults
+    capabilities = payload.get("capabilities")
+    if isinstance(capabilities, dict):
+        payload = capabilities
+    lanes = payload.get("lanes")
+    if not isinstance(lanes, dict):
+        return defaults
+
+    local = lanes.get("local")
+    if isinstance(local, dict) and isinstance(local.get("executor"), str):
+        defaults["executor"] = local["executor"]
+
+    guided = lanes.get("premium_planner_local_builder")
+    if isinstance(guided, dict):
+        planners = _string_values(guided.get("planners"))
+        if planners:
+            defaults["planner"] = "gpt-5.5" if "gpt-5.5" in planners else planners[0]
+
+    cloud = lanes.get("cloud_executor")
+    if isinstance(cloud, dict):
+        workers = _string_values(cloud.get("executor_workers"))
+        configured_long = cloud.get("default_executor_worker")
+        if isinstance(configured_long, str) and configured_long in workers:
+            defaults["long_worker"] = configured_long
+        elif workers:
+            defaults["long_worker"] = workers[0]
+        canaries = _string_values(cloud.get("adapter_canary_workers"))
+        if canaries:
+            preferred = "glm52-direct-implementation-canary"
+            defaults["experimental_worker"] = preferred if preferred in canaries else canaries[0]
+    return defaults
+
+
+def _string_values(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item.strip()]
 
 
 def _supports_candidate_contract(result: CommandResult, contract: str) -> bool:
