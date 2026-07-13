@@ -21,6 +21,10 @@ import webbrowser
 from agentic_harness.core.local_goal_bridge import LocalGoalBridge, resolve_doc_root
 from agentic_harness.core.errors import HarnessError
 from agentic_harness.core.redaction import redact_secrets
+from agentic_harness.core.strategies import (
+    DEFAULT_PUBLIC_STRATEGY,
+    PUBLIC_STRATEGIES,
+)
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.gui.api import (
     command_task,
@@ -48,15 +52,7 @@ SECURITY_HEADERS = {
 
 
 def _portable_modes() -> list[dict[str, Any]]:
-    return [
-        {
-            "key": "goal",
-            "number": 1,
-            "label": "Verified goal",
-            "best_for": "One clear task that should continue until its checks pass.",
-            "caution": "The configured execution method may edit files in the selected workspace.",
-        }
-    ]
+    return [strategy.to_public_dict() for strategy in PUBLIC_STRATEGIES]
 
 
 def serve_gui(
@@ -182,7 +178,9 @@ def make_handler(
                     {
                         "modes": _portable_modes()
                         if embedded
-                        else modes_payload()
+                        else modes_payload(),
+                        "default": DEFAULT_PUBLIC_STRATEGY if embedded else "guided",
+                        "kind": "strategy" if embedded else "managed_route",
                     }
                 )
             elif route == "/api/readiness":

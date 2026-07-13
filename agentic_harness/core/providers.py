@@ -16,6 +16,59 @@ _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 @dataclass(frozen=True)
+class ProviderTemplate:
+    """Editable convenience values for a provider-neutral setup form."""
+
+    key: str
+    label: str
+    description: str
+    endpoint: str = ""
+    model: str = ""
+    api_key_env: str = ""
+    entitlement_note: str = ""
+
+    def to_public_dict(self) -> dict[str, str]:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "description": self.description,
+            "endpoint": self.endpoint,
+            "model": self.model,
+            "api_key_env": self.api_key_env,
+            "entitlement_note": self.entitlement_note,
+        }
+
+
+PROVIDER_TEMPLATES: tuple[ProviderTemplate, ...] = (
+    ProviderTemplate(
+        key="custom",
+        label="Custom OpenAI-compatible provider",
+        description="Enter any compatible endpoint and model ID.",
+    ),
+    ProviderTemplate(
+        key="zai_api",
+        label="Z.ai API",
+        description="Start with Z.ai's general OpenAI-compatible endpoint.",
+        endpoint="https://api.z.ai/api/paas/v4/chat/completions",
+        model="glm-5.1",
+        api_key_env="ZAI_API_KEY",
+    ),
+    ProviderTemplate(
+        key="zai_coding_plan",
+        label="Z.ai GLM Coding Plan",
+        description="Use a GLM Coding Plan entitlement with editable endpoint and model values.",
+        endpoint="https://api.z.ai/api/coding/paas/v4/chat/completions",
+        model="glm-5.2",
+        api_key_env="ZAI_API_KEY",
+        entitlement_note=(
+            "Z.ai limits the Coding Plan endpoint to supported coding tools; confirm that your "
+            "account and client are eligible before using this template."
+        ),
+    ),
+)
+
+
+@dataclass(frozen=True)
 class ProviderProfile:
     """Non-secret configuration for one OpenAI-compatible model endpoint."""
 

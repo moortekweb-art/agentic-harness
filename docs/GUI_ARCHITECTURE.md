@@ -44,6 +44,21 @@ and arbitrary model identifiers. The same setup surface also supports an
 installed coding-agent executable. Model brand is not part of the execution
 contract.
 
+Four product decisions remain independent:
+
+| Decision | Examples | Persisted as |
+| --- | --- | --- |
+| Execution method | installed coding agent, built-in model worker | worker configuration |
+| Provider | local endpoint, custom cloud endpoint, editable Z.ai template | non-secret provider profile |
+| Work approach | Quick task, Plan first, Keep working, Bounded experiment | goal execution strategy |
+| Verification | tests, lint, build, or another deterministic command | goal review command |
+
+An execution strategy supplies plain-language guidance and can only tighten the
+workspace autonomy limits. It cannot enlarge configured cycles, elapsed time,
+tokens, provider calls, or tool calls. `Bounded experiment` additionally fails
+closed unless the built-in worker and at least one explicit allowed path are
+selected. Provider templates never select or alter a strategy.
+
 An external orchestration adapter remains available with
 `--backend local-goal`. It is optional, is not the default public product path,
 and is not installed by this distribution. See
@@ -72,6 +87,10 @@ URLs, or included in session exports. After a service restart, a session-key
 profile reports that the credential must be re-entered. A remote endpoint also
 requires explicit persisted consent that selected file excerpts and tool
 results may leave the computer.
+
+Provider templates are public, non-secret form defaults. Their endpoint, model,
+and environment-variable fields remain editable, and availability is always
+proved by the connection test rather than inferred from the template label.
 
 ### Bounded model agent
 
@@ -139,6 +158,12 @@ status, plan, requirements, current subgoal, checkpoint, cycle, events, changed
 files, verification, artifacts, allowed actions, safety boundaries, budget
 usage, and final-result evidence.
 
+`GET /api/modes` describes work strategies for the embedded public backend and
+marks `plan` as the default. The optional managed compatibility backend retains
+its separate managed-route vocabulary. `GET /api/setup` declares the embedded
+deployment as `local_self_hosted` and `multi_user: false`; clients must not
+mistake that process for a shared hosted control plane.
+
 ## Progress and completion
 
 Progress is determinate only when a persisted plan or requirement set supplies
@@ -175,6 +200,8 @@ worker-authored completion claim can select one of these trusted categories.
 
 This remains a local control surface. For remote access, keep the service bound
 to loopback and place an authenticated private-network proxy in front of it.
+It is not a tenant-isolated public web service. The additional controls required
+for that product shape are recorded in [PUBLIC_RELEASE.md](PUBLIC_RELEASE.md).
 
 ## Release verification
 

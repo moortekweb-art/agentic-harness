@@ -4,6 +4,10 @@
 `local-agentic-harness` install as the CLI. It serves packaged static assets and
 uses the selected workspace's `.agentic-harness/` state.
 
+This guide deploys the public package as a single-user self-hosted application.
+It does not convert the process into a shared public SaaS. Do not point anonymous
+internet traffic at a real workstation, its source tree, or its provider keys.
+
 ## Local service
 
 Install the release in a dedicated environment, choose the workspace, and copy
@@ -50,6 +54,16 @@ refused unless `AGENTIC_HARNESS_GUI_TOKEN` is set. For a reverse proxy:
 - enforce authentication and transport encryption at the proxy or private
   network; and
 - do not expose the control surface directly to the public internet.
+
+## Hosted product boundary
+
+A public demo or multi-user service must use a separate execution plane. At a
+minimum it needs authenticated identities, a disposable isolated workspace per
+run, per-user secret injection, outbound-network policy, concurrency and spend
+quotas, request and artifact size limits, abuse monitoring, audit records, and
+automatic teardown. The local GUI process is not that boundary, even when a
+reverse proxy adds TLS and login. See [PUBLIC_RELEASE.md](PUBLIC_RELEASE.md) for
+the release split and required acceptance gates.
 
 Tailscale Serve can proxy a loopback service to an authenticated tailnet. Use
 the current Tailscale documentation for the exact command and ACL syntax,

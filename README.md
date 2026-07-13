@@ -76,6 +76,19 @@ This is the same install, not two products. Both interfaces use
 `.agentic-harness/` inside the selected workspace. The portable embedded engine
 is the default and does not require an external orchestration service.
 
+The goal screen offers four provider-independent work approaches:
+
+| Approach | Intended use | Runtime boundary |
+| --- | --- | --- |
+| Quick task | One small, clear change | Small retry and spending caps |
+| Plan first | Important or unfamiliar work | Balanced caps; recommended default |
+| Keep working | Larger resumable work | Full workspace-configured limits |
+| Bounded experiment | A tiny reversible trial | Built-in model worker plus an explicit file scope |
+
+The approach is not a model choice. Any compatible provider can be used with
+Quick task, Plan first, or Keep working. Bounded experiment additionally
+requires the built-in worker because it can enforce the selected path boundary.
+
 ## Advanced Workflows
 
 ### Recipes
@@ -195,6 +208,15 @@ Native Anthropic Messages and Google Gemini transports are not built into the
 embedded engine. Use an OpenAI-compatible gateway, an installed coding agent,
 or an optional external orchestrator if those native APIs are required.
 
+Setup includes editable convenience templates for a custom provider, the Z.ai
+general API, and a Z.ai GLM Coding Plan account. Templates only pre-fill the
+endpoint, model ID, and environment-variable name; they do not bundle a key or
+turn a provider into a work approach. The GLM Coding Plan template starts with
+`glm-5.2`, but the value remains editable because the user's account and current
+provider entitlement determine which model IDs and clients are allowed. Z.ai
+documents separate [general API](https://docs.z.ai/api-reference/introduction)
+and [Coding Plan](https://docs.z.ai/api-reference/llm/chat-completion) base URLs.
+
 The GUI is the recommended way to create a model profile. This equivalent cloud
 profile uses an environment-variable reference and contains no API key:
 
@@ -290,6 +312,13 @@ reverse proxy uses another hostname, add only that expected hostname to
 
 See [GUI deployment](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_DEPLOYMENT.md) for the portable systemd and private
 network pattern.
+
+The public release is a self-hosted application for one trusted user and one
+selected workspace. Publishing the package does not make the maintainer's
+running GUI a safe shared website. A hosted multi-user service needs identity,
+per-user isolated workspaces and secrets, quotas, abuse controls, cleanup, and
+an independently operated execution plane. See the
+[public-release boundary](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/PUBLIC_RELEASE.md).
 
 ## Recovery and Evidence
 
@@ -391,6 +420,7 @@ goal/report smoke test, and writes `SHA256SUMS` beside the artifacts.
 - [GUI architecture](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_ARCHITECTURE.md)
 - [GUI design](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_DESIGN.md)
 - [GUI deployment](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_DEPLOYMENT.md)
+- [Public-release boundary](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/PUBLIC_RELEASE.md)
 - [Autonomous goal contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/CODEX_GOAL_PARITY.md)
 - [Evidence contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EVIDENCE_CONTRACT.md)
 - [Turnstone integration boundary](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/TURNSTONE_INTEGRATION.md)

@@ -128,13 +128,23 @@ function okPayloadFor(url, setupPayload = null, taskPayload = null, healthPayloa
     };
   }
   if (url === "/api/modes") {
+    const managed = setupPayload?.worker?.type === "local_goal";
     return {
-      modes: [
-        { key: "local", label: "Quick task", best_for: "small work", caution: "" },
-        { key: "guided", label: "Plan first", best_for: "important work", caution: "recommended" },
-        { key: "cloud", label: "Keep working", best_for: "large work", caution: "" },
-        { key: "experimental", label: "Safe experiment", best_for: "tiny trials", caution: "" },
-      ],
+      default: managed ? "guided" : "plan",
+      kind: managed ? "managed_route" : "strategy",
+      modes: managed
+        ? [
+          { key: "local", label: "Quick task", best_for: "small work", caution: "" },
+          { key: "guided", label: "Plan first", best_for: "important work", caution: "recommended" },
+          { key: "cloud", label: "Keep working", best_for: "large work", caution: "" },
+          { key: "experimental", label: "Safe experiment", best_for: "tiny trials", caution: "" },
+        ]
+        : [
+          { key: "quick", label: "Quick task", best_for: "small work", caution: "" },
+          { key: "plan", label: "Plan first", best_for: "important work", caution: "recommended" },
+          { key: "persistent", label: "Keep working", best_for: "large work", caution: "" },
+          { key: "experiment", label: "Bounded experiment", best_for: "tiny trials", caution: "" },
+        ],
     };
   }
   if (url === "/api/setup") {
@@ -472,11 +482,100 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
       objective: "Fix the regression",
       safeAreas: "",
       checks: "python -m pytest -q",
-      mode: "guided",
+      mode: "plan",
       goalKind: "",
       draftVersion: 2,
     },
   );
+}
+
+async function testPortableUserChoosesProviderIndependentStrategy() {
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: true,
+      editable: true,
+      workspace: "/tmp/project",
+      worker: { type: "coding_agent", agent: "codex", label: "Codex" },
+      verification_command: "python -m pytest -q",
+    },
+  });
+  const objective = app.elements.get("objective");
+  const modes = app.elements.get("modes");
+
+  assert.equal(app.elements.get("modeSection").hidden, false);
+  assert.equal(modes.children.length, 4);
+  assert.equal(app.elements.get("modeSelect").value, "plan");
+  objective.value = "Fix the public first-run flow";
+  objective.listeners.input();
+  modes.children[0].listeners.click();
+  await app.context.startWork();
+
+  const submission = app.fetchCalls.find((call) => call.url === "/api/tasks");
+  const body = JSON.parse(submission.options.body);
+  assert.equal(body.strategy, "quick");
+  assert.equal("mode" in body, false);
+}
+
+async function testProviderTemplatePrefillsEditableValues() {
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: false,
+      workspace: "/tmp/project",
+      provider_templates: [
+        { key: "custom", label: "Custom provider" },
+        {
+          key: "zai_coding_plan",
+          label: "Z.ai GLM Coding Plan",
+          endpoint: "https://api.z.ai/api/coding/paas/v4/chat/completions",
+          model: "glm-5.2",
+          api_key_env: "ZAI_API_KEY",
+          entitlement_note: "Confirm client eligibility.",
+        },
+      ],
+    },
+  });
+  const preset = app.elements.get("providerPreset");
+  preset.value = "zai_coding_plan";
+  preset.listeners.change();
+
+  assert.equal(
+    app.elements.get("providerEndpoint").value,
+    "https://api.z.ai/api/coding/paas/v4/chat/completions",
+  );
+  assert.equal(app.elements.get("providerModel").value, "glm-5.2");
+  assert.equal(app.elements.get("providerApiKeyEnv").value, "ZAI_API_KEY");
+  assert.equal(app.elements.get("connectionResult").textContent, "Confirm client eligibility.");
+}
+
+async function testBoundedExperimentExplainsAndRequiresExplicitScope() {
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: true,
+      editable: true,
+      workspace: "/tmp/project",
+      worker: { type: "model_agent", model: "local-model" },
+      verification_command: "python -m pytest -q",
+    },
+  });
+  const objective = app.elements.get("objective");
+  const safeAreas = app.elements.get("safeAreas");
+  const start = app.elements.get("startButton");
+  objective.value = "Try a reversible wording change";
+  objective.listeners.input();
+  app.elements.get("modes").children[3].listeners.click();
+
+  assert.equal(start.disabled, true);
+  assert.match(app.elements.get("startHelp").textContent, /allowed file or folder/i);
+
+  safeAreas.value = "README.md";
+  safeAreas.listeners.input();
+  assert.equal(start.disabled, false);
 }
 
 async function testLegacyHumanCanChooseEveryModeWithoutWritingACommand() {
@@ -732,6 +831,7 @@ async function testTerminalReceiptOverridesRawDoneAndRendersTrustedEvidence() {
   assert.equal(app.elements.get("finalRetries").textContent, "1");
   assert.equal(app.elements.get("attemptsValue").textContent, "2");
   assert.equal(app.elements.get("checkpoint").textContent, "claimed done");
+  assert.equal(app.elements.get("workApproachValue").textContent, "Plan first");
   assert.equal(app.elements.get("workDetailGrid").hidden, true);
   assert.equal(app.elements.get("activitySection").hidden, true);
   assert.equal(app.elements.get("changedFilesEvidence").hidden, true);
@@ -881,6 +981,9 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
   await testFreshSetupOpensOnceAndSelectsTheRecommendedDetectedAgent();
   await testConfiguredVerificationReplacesOnlyThePreviousSuggestion();
   await testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDraft();
+  await testPortableUserChoosesProviderIndependentStrategy();
+  await testProviderTemplatePrefillsEditableValues();
+  await testBoundedExperimentExplainsAndRequiresExplicitScope();
   await testLegacyHumanCanChooseEveryModeWithoutWritingACommand();
   await testGoalStartersAndCompactModeSelectorKeepPlainLanguageDraftState();
   await testCompletedGoalClearsOnlyItsMatchingStaleDraft();

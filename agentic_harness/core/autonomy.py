@@ -287,6 +287,11 @@ class AutonomousRunner:
             "checkpoint, requirements, blockers, summary, and verification evidence.",
             "Requirement evidence must contain only harness-issued identifiers, never prose.",
         ]
+        strategy = goal.metadata.get("execution_strategy")
+        if isinstance(strategy, dict):
+            strategy_instruction = str(strategy.get("instruction") or "").strip()
+            if strategy_instruction:
+                lines.extend(["", strategy_instruction])
         review_refs = _expected_review_evidence_refs(self.supervisor)
         if review_refs:
             lines.append(
