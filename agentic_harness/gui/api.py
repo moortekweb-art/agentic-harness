@@ -269,6 +269,7 @@ def _task(
         command = " ".join(str(part) for part in details["args"])
     agent_loop = _agent_loop_for_status(status)
     readiness_gate = _readiness_gate(status, summary, details)
+    runtime_context = _runtime_context(status, details)
     changed = changed_files or []
     checks = verification or []
     result_category = {
@@ -288,7 +289,7 @@ def _task(
                 "trusted": False,
                 "summary": "The worker reported completion; the managed reviewer accepted the evidence.",
             },
-            "attempts": 1,
+            "attempts": max(1, runtime_context["current"]["cycle"]),
             "retries": 0,
             "review_attempts": [
                 {
@@ -313,7 +314,8 @@ def _task(
             "remaining": [],
         }
     return {
-        "id": "",
+        "id": runtime_context["id"],
+        "objective": runtime_context["objective"],
         "human_title": "Current work",
         "status": status,
         "status_label": _label_for_status(status),
@@ -328,9 +330,13 @@ def _task(
         "allowed_actions": _allowed_actions(status),
         "agent_loop": agent_loop,
         "readiness_gate": readiness_gate,
+        "current": runtime_context["current"],
+        "plan": runtime_context["plan"],
+        "requirements": runtime_context["requirements"],
+        "events": runtime_context["events"],
         "metadata": {
             "command": command,
-            "updated_at": datetime.now(UTC).isoformat(),
+            "updated_at": runtime_context["updated_at"] or datetime.now(UTC).isoformat(),
         },
         "advanced_details": details,
     }
@@ -427,17 +433,174 @@ def _label_for_status(status: str) -> str:
     }.get(status, "Working")
 
 
-def _progress_for_status(status: str) -> int:
+def _progress_for_status(status: str) -> dict[str, Any]:
+    """Expose only progress that the external runtime can honestly measure."""
+    if status == "done":
+        return {"determinate": True, "percent": 100, "label": "Complete"}
+    if status in {"starting", "working", "checking", "needs_review"}:
+        return {"determinate": False, "percent": None, "label": "In progress"}
+    return {"determinate": False, "percent": None, "label": ""}
+
+
+def _runtime_context(status: str, details: dict[str, Any]) -> dict[str, Any]:
+    payload = details.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    active_goal = payload.get("active_goal")
+    active_goal = active_goal if isinstance(active_goal, dict) else {}
+    goal_state = payload.get("goal_state")
+    goal_state = goal_state if isinstance(goal_state, dict) else {}
+    runtime = payload.get("runtime")
+    runtime = runtime if isinstance(runtime, dict) else {}
+    loop_state = runtime.get("loop_state")
+    loop_state = loop_state if isinstance(loop_state, dict) else {}
+    latest_event = payload.get("events")
+    latest_event = latest_event.get("latest") if isinstance(latest_event, dict) else {}
+    latest_event = latest_event if isinstance(latest_event, dict) else {}
+
+    iteration = _nonnegative_int(loop_state.get("iteration"))
+    maximum = _nonnegative_int(loop_state.get("max_iterations"))
+    phase = str(goal_state.get("phase") or payload.get("phase") or status).strip().lower()
+    updated_at = next(
+        (
+            value.strip()
+            for value in (
+                loop_state.get("updated_at"),
+                goal_state.get("last_updated"),
+                latest_event.get("ts"),
+                payload.get("generated_at"),
+            )
+            if isinstance(value, str) and value.strip()
+        ),
+        "",
+    )
+    objective = str(active_goal.get("objective") or "").strip()
+    run_dir = str(active_goal.get("run_dir") or "").rstrip("/")
+    task_id = str(active_goal.get("id") or "").strip()
+    if not task_id and run_dir:
+        task_id = run_dir.rsplit("/", 1)[-1]
+
+    subgoal = active_goal.get("current_subgoal")
+    if isinstance(subgoal, dict):
+        subgoal = subgoal.get("title") or subgoal.get("objective") or subgoal.get("id")
+    subgoal = str(subgoal or "").strip()
+    current_action = subgoal or _current_action(status, iteration)
+    checkpoint = _checkpoint_label(status, phase, iteration, maximum)
+    events = _runtime_events(status, iteration, checkpoint, updated_at)
+
     return {
-        "ready": 0,
-        "starting": 10,
-        "working": 45,
-        "checking": 60,
-        "needs_review": 70,
-        "blocked": 0,
-        "stopped": 0,
-        "done": 100,
-    }.get(status, 45)
+        "id": task_id,
+        "objective": objective,
+        "updated_at": updated_at,
+        "current": {
+            "cycle": iteration,
+            "max_cycles": maximum,
+            "current_subgoal": current_action,
+            "checkpoint": checkpoint,
+            "last_event_at": updated_at,
+        },
+        "plan": _workflow_plan(status),
+        "requirements": (
+            [{"status": "active", "text": f"Requested outcome: {objective}"}]
+            if objective
+            else []
+        ),
+        "events": events,
+    }
+
+
+def _nonnegative_int(value: Any) -> int:
+    if type(value) is not int:
+        return 0
+    return max(0, value)
+
+
+def _current_action(status: str, iteration: int) -> str:
+    if status == "starting":
+        return "Preparing the task"
+    if status == "working":
+        return f"Working through the request (pass {iteration})" if iteration else "Working through the request"
+    if status == "checking":
+        return "Checking the evidence"
+    if status == "needs_review":
+        return "Preparing the result for review"
+    if status == "done":
+        return "Finished and independently verified"
+    if status == "blocked":
+        return "Waiting for a required decision"
+    if status == "stopped":
+        return "Stopped safely"
+    return "Waiting for a goal"
+
+
+def _checkpoint_label(status: str, phase: str, iteration: int, maximum: int) -> str:
+    if status == "working" and iteration:
+        return f"Pass {iteration} of up to {maximum}" if maximum else f"Pass {iteration}"
+    if status == "starting":
+        return "Starting"
+    if status == "checking":
+        return "Verification"
+    if status == "needs_review":
+        return "Review"
+    if status == "done":
+        return "Complete"
+    if status == "blocked":
+        return "Needs attention"
+    if status == "stopped":
+        return "Stopped"
+    if phase and phase not in {"idle", "ready"}:
+        return phase.replace("_", " ").title()
+    return "Ready"
+
+
+def _runtime_events(
+    status: str,
+    iteration: int,
+    checkpoint: str,
+    updated_at: str,
+) -> list[dict[str, Any]]:
+    if status not in {"starting", "working", "checking", "needs_review"}:
+        return []
+    if status == "working" and iteration:
+        summary = f"Agent pass {iteration} is active."
+    elif status == "starting":
+        summary = "The task was accepted and is being prepared."
+    elif status == "checking":
+        summary = "The latest work is being checked."
+    else:
+        summary = "The latest evidence is ready for review."
+    return [
+        {
+            "stage": "act" if status in {"starting", "working"} else "check",
+            "summary": summary,
+            "checkpoint": checkpoint,
+            "at": updated_at,
+        }
+    ]
+
+
+def _workflow_plan(status: str) -> list[dict[str, str]]:
+    if status == "ready":
+        return []
+    order = ["Understand the request", "Complete the requested work", "Verify the result"]
+    active_index = {
+        "starting": 0,
+        "working": 1,
+        "checking": 2,
+        "needs_review": 2,
+        "done": 3,
+        "blocked": 1,
+        "stopped": 1,
+    }.get(status, 0)
+    rows: list[dict[str, str]] = []
+    for index, step in enumerate(order):
+        if index < active_index:
+            step_status = "completed"
+        elif index == active_index and active_index < len(order):
+            step_status = "in_progress"
+        else:
+            step_status = "pending"
+        rows.append({"status": step_status, "step": step})
+    return rows
 
 
 def _agent_loop_for_status(status: str) -> dict[str, Any]:

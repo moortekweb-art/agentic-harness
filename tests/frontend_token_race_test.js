@@ -64,6 +64,10 @@ class Element {
     this[name] = value;
   }
 
+  removeAttribute(name) {
+    delete this[name];
+  }
+
   focus() {}
 }
 
@@ -168,11 +172,15 @@ async function runApp({
   setupPayload = null,
   taskPayload = null,
   healthPayload = null,
+  fetchOverride = null,
 } = {}) {
   const elements = new Map();
+  const documentListeners = {};
+  const windowListeners = {};
   const document = {
     body: new Element("body"),
     documentElement: new Element("html"),
+    visibilityState: "visible",
     openDialogs: [],
     removedDialogs: 0,
     getElementById(id) {
@@ -184,7 +192,9 @@ async function runApp({
     createElement(tag) {
       return tag === "dialog" ? new Dialog(document) : new Element();
     },
-    addEventListener() {},
+    addEventListener(type, handler) {
+      documentListeners[type] = handler;
+    },
   };
   const initialSession = {};
   if (initialToken) initialSession["agentic-harness-gui-session-token"] = initialToken;
@@ -198,6 +208,7 @@ async function runApp({
   class WebSocketShim {
     constructor(url) {
       this.url = url;
+      this.readyState = 0;
       websocketUrls.push(url);
       this.listeners = {};
     }
@@ -222,6 +233,7 @@ async function runApp({
       if (!publicAccess && auth !== "Bearer correct-token") {
         return { status: 401, ok: false, json: async () => ({ ok: false }) };
       }
+      if (fetchOverride) return fetchOverride(url, options);
       return {
         status: 200,
         ok: true,
@@ -243,6 +255,9 @@ async function runApp({
       setTimeout,
       setInterval() { return 1; },
       clearInterval() {},
+      addEventListener(type, handler) {
+        windowListeners[type] = handler;
+      },
       alert(message) {
         throw new Error(message);
       },
@@ -266,6 +281,8 @@ async function runApp({
     sessionStorage,
     websocketUrls,
     consoleErrors,
+    documentListeners,
+    windowListeners,
   };
 }
 
@@ -759,6 +776,103 @@ async function testRawDoneWithoutTrustedReceiptRemainsUnverified() {
   );
 }
 
+async function testManagedWorkingTaskShowsRealPassAndIndeterminateProgress() {
+  const app = await runApp({
+    publicAccess: true,
+    taskPayload: {
+      id: "run-5",
+      objective: "Audit the setup guide",
+      status: "working",
+      status_label: "Working",
+      result_category: "in_progress",
+      summary: "The assistant is working on the task.",
+      progress: { determinate: false, percent: null, label: "In progress" },
+      current: {
+        cycle: 5,
+        max_cycles: 24,
+        current_subgoal: "Working through the request (pass 5)",
+        checkpoint: "Pass 5 of up to 24",
+        last_event_at: "2026-07-13T08:01:05Z",
+      },
+      plan: [
+        { status: "completed", step: "Understand the request" },
+        { status: "in_progress", step: "Complete the requested work" },
+        { status: "pending", step: "Verify the result" },
+      ],
+      requirements: [{ status: "active", text: "Requested outcome: Audit the setup guide" }],
+      events: [{ stage: "act", summary: "Agent pass 5 is active.", checkpoint: "Pass 5 of up to 24" }],
+      allowed_actions: [{ action: "stop", enabled: true }],
+    },
+  });
+
+  assert.equal(app.elements.get("progressGroup").hidden, false);
+  assert.equal(app.elements.get("progressValue").textContent, "In progress");
+  assert.equal(app.elements.get("progressTrack").className, "progress-track indeterminate");
+  assert.equal(app.elements.get("progressTrack")["aria-valuenow"], undefined);
+  assert.equal(app.elements.get("currentSubgoal").textContent, "Working through the request (pass 5)");
+  assert.equal(app.elements.get("checkpoint").textContent, "Pass 5 of up to 24");
+  assert.equal(app.elements.get("attemptsValue").textContent, "5");
+  assert.match(app.elements.get("eventTimeline").children[0].textContent, /Agent pass 5 is active/);
+}
+
+async function testReturningToSafariRefreshesStatusWithoutOpeningAnotherStream() {
+  const app = await runApp({ publicAccess: true });
+  assert.equal(app.fetchCalls.length, 5);
+  assert.equal(app.websocketUrls.length, 1);
+
+  app.windowListeners.pageshow();
+  await tick();
+  await tick();
+
+  assert.equal(app.fetchCalls.length, 8);
+  assert.equal(app.websocketUrls.length, 1);
+  assert.equal(app.fetchCalls.slice(5).some((call) => call.url === "/api/tasks/current"), true);
+}
+
+async function testLostStartResponseReconnectsToTheAcceptedTask() {
+  let currentReads = 0;
+  const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
+  const app = await runApp({
+    publicAccess: true,
+    fetchOverride: async (url) => {
+      if (url === "/api/tasks") throw new TypeError("mobile connection changed");
+      if (url === "/api/tasks/current") {
+        currentReads += 1;
+        return response(currentReads === 1 ? {
+          status: "ready",
+          status_label: "Ready",
+          result_category: "in_progress",
+          summary: "Backend ready",
+          progress: { determinate: false, percent: null, label: "" },
+        } : {
+          id: "accepted-run",
+          status: "working",
+          status_label: "Working",
+          result_category: "in_progress",
+          summary: "The assistant is working on the task.",
+          progress: { determinate: false, percent: null, label: "In progress" },
+          current: { cycle: 1, checkpoint: "Pass 1", current_subgoal: "Working through the request" },
+          allowed_actions: [{ action: "stop", enabled: true }],
+        });
+      }
+      return response(okPayloadFor(url));
+    },
+  });
+  const objective = app.elements.get("objective");
+  objective.value = "Audit this project";
+  objective.listeners.input();
+
+  await app.context.startWork();
+
+  assert.equal(app.elements.get("statusLabel").textContent, "Working");
+  assert.equal(
+    app.elements.get("summary").textContent,
+    "Your goal was accepted and is running. This page reconnected to the current task.",
+  );
+  assert.equal(app.elements.get("attemptsValue").textContent, "1");
+  assert.equal(objective.value, "");
+}
+
 (async () => {
   await testConcurrentStartup401sShareOnePromptAndAllRetry();
   await testStaleTokenIsClearedPromptedOnceAndReplaced();
@@ -774,4 +888,7 @@ async function testRawDoneWithoutTrustedReceiptRemainsUnverified() {
   await testPausedBackgroundAssistantIsNotCalledAnActiveTask();
   await testTerminalReceiptOverridesRawDoneAndRendersTrustedEvidence();
   await testRawDoneWithoutTrustedReceiptRemainsUnverified();
+  await testManagedWorkingTaskShowsRealPassAndIndeterminateProgress();
+  await testReturningToSafariRefreshesStatusWithoutOpeningAnotherStream();
+  await testLostStartResponseReconnectsToTheAcceptedTask();
 })();
