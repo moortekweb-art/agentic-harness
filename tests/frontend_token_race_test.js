@@ -244,6 +244,23 @@ async function runApp({
         return { status: 401, ok: false, json: async () => ({ ok: false }) };
       }
       if (fetchOverride) return fetchOverride(url, options);
+      if (url === "/api/tasks" && options.method === "POST") {
+        const submission = JSON.parse(options.body);
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({
+            id: "new-run",
+            objective: submission.objective,
+            status: "starting",
+            status_label: "Starting",
+            result_category: "in_progress",
+            summary: submission.objective,
+            current: { cycle: 0, checkpoint: "Starting", current_subgoal: "Preparing the task" },
+            metadata: { start_accepted: true },
+          }),
+        };
+      }
       return {
         status: 200,
         ok: true,
@@ -985,6 +1002,132 @@ async function testReturningToSafariRefreshesStatusWithoutOpeningAnotherStream()
   assert.equal(app.fetchCalls.slice(5).some((call) => call.url === "/api/tasks/current"), true);
 }
 
+async function testPendingStartIgnoresThePreviousGoalsLiveStatus() {
+  const oldObjective = "Audit the setup guide";
+  const newObjective = "Audit the current system for reliability problems";
+  const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
+  let currentTask = {
+    id: "old-run",
+    objective: oldObjective,
+    status: "working",
+    status_label: "Working",
+    result_category: "in_progress",
+    summary: "The previous task is still visible.",
+    current: { cycle: 1, checkpoint: "Pass 1", current_subgoal: "Old work" },
+    requirements: [{ status: "active", text: `Requested outcome: ${oldObjective}` }],
+  };
+  let resolveStart;
+  const startResponse = new Promise((resolve) => { resolveStart = resolve; });
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/legacy-workspace",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url, options = {}) => {
+      if (url === "/api/tasks" && options.method === "POST") return startResponse;
+      if (url === "/api/tasks/current") return response(currentTask);
+      return response(okPayloadFor(url, setupPayload, currentTask));
+    },
+  });
+  const objective = app.elements.get("objective");
+  objective.value = newObjective;
+  objective.listeners.input();
+
+  const startPromise = app.context.startWork();
+  await tick();
+  assert.match(app.elements.get("requirementsList").children[0].textContent, new RegExp(newObjective));
+
+  await app.context.refreshTask(true);
+  assert.match(app.elements.get("requirementsList").children[0].textContent, new RegExp(newObjective));
+  assert.doesNotMatch(app.elements.get("requirementsList").children[0].textContent, new RegExp(oldObjective));
+
+  currentTask = {
+    id: "new-run",
+    objective: newObjective,
+    status: "working",
+    status_label: "Working",
+    result_category: "in_progress",
+    summary: "The new audit is running.",
+    current: { cycle: 1, checkpoint: "Pass 1", current_subgoal: "New audit" },
+    requirements: [{ status: "active", text: `Requested outcome: ${newObjective}` }],
+  };
+  resolveStart(response(currentTask));
+  await startPromise;
+
+  assert.equal(app.elements.get("summary").textContent, "The new audit is running.");
+  assert.match(app.elements.get("requirementsList").children[0].textContent, new RegExp(newObjective));
+  assert.equal(objective.value, "");
+}
+
+async function testRejectedStartShowsTheBlockerAndKeepsTheDraft() {
+  const newObjective = "Audit the current system";
+  const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
+  let currentTask = {
+    id: "old-run",
+    objective: "Review current work",
+    status: "needs_review",
+    status_label: "Review needed",
+    result_category: "in_progress",
+    summary: "Review the current task before starting another one.",
+    current: { cycle: 2, checkpoint: "Review", current_subgoal: "Review current work" },
+  };
+  const rejected = {
+    id: "",
+    objective: newObjective,
+    status: "needs_review",
+    status_label: "Review needed",
+    result_category: "in_progress",
+    summary: "Review the current task before starting another one.",
+    current: { cycle: 0, checkpoint: "Review", current_subgoal: "" },
+    metadata: { start_accepted: false },
+  };
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/legacy-workspace",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url, options = {}) => {
+      if (url === "/api/tasks" && options.method === "POST") return response(rejected);
+      if (url === "/api/tasks/current") return response(currentTask);
+      return response(okPayloadFor(url, setupPayload, currentTask));
+    },
+  });
+  const objective = app.elements.get("objective");
+  objective.value = newObjective;
+  objective.listeners.input();
+
+  await app.context.startWork();
+
+  assert.equal(app.elements.get("statusLabel").textContent, "Review needed");
+  assert.equal(
+    app.elements.get("summary").textContent,
+    "Review the current task before starting another one.",
+  );
+  assert.equal(objective.value, newObjective);
+
+  currentTask = {
+    id: "",
+    objective: "",
+    status: "ready",
+    status_label: "Ready",
+    result_category: "in_progress",
+    summary: "Ready for a new task.",
+    current: { cycle: 0, checkpoint: "", current_subgoal: "" },
+  };
+  await app.context.refreshTask(true);
+  assert.equal(app.elements.get("summary").textContent, "Ready for a new task.");
+}
+
 async function testLostStartResponseReconnectsToTheAcceptedTask() {
   let currentReads = 0;
   const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
@@ -1002,6 +1145,7 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
           progress: { determinate: false, percent: null, label: "" },
         } : {
           id: "accepted-run",
+          objective: "Audit this project",
           status: "working",
           status_label: "Working",
           result_category: "in_progress",
@@ -1050,5 +1194,7 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
   await testRawDoneWithoutTrustedReceiptRemainsUnverified();
   await testManagedWorkingTaskShowsRealPassAndIndeterminateProgress();
   await testReturningToSafariRefreshesStatusWithoutOpeningAnotherStream();
+  await testPendingStartIgnoresThePreviousGoalsLiveStatus();
+  await testRejectedStartShowsTheBlockerAndKeepsTheDraft();
   await testLostStartResponseReconnectsToTheAcceptedTask();
 })();

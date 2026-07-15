@@ -193,15 +193,14 @@ def make_handler(
                     self._json({"current": current, "tasks": service.history()})
                 else:
                     payload = tasks_payload(bridge)
-                    session.record(payload["current"])
+                    payload["current"] = session.record(payload["current"])
                     payload["tasks"] = session.history() or payload["tasks"]
                     self._json(payload)
             elif route == "/api/tasks/current":
                 if embedded:
                     self._json(service.status())
                 else:
-                    task = status_task(bridge)
-                    session.record(task)
+                    task = session.record(status_task(bridge))
                     self._json(task)
             elif route == "/api/tasks/history":
                 query = parse_qs(parsed.query).get("q", [""])[0]
@@ -346,28 +345,28 @@ def make_handler(
                     self._json(service.status())
                 else:
                     task = watch_task(bridge)
-                    session.record(task)
+                    task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/accept":
                 if embedded:
                     self._json(service.accept())
                 else:
                     task = command_task(bridge, "accept", body)
-                    session.record(task)
+                    task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/continue":
                 if embedded:
                     self._json(service.continue_task(str(body.get("feedback") or "")))
                 else:
                     task = command_task(bridge, "continue", body)
-                    session.record(task)
+                    task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/stop":
                 if embedded:
                     self._json(service.stop())
                 else:
                     task = command_task(bridge, "stop", body)
-                    session.record(task)
+                    task = session.record(task)
                     self._json(task)
             elif route == "/api/session/import":
                 if embedded:
@@ -545,7 +544,7 @@ def make_handler(
                     else:
                         task = status_task(bridge)
                     if not embedded:
-                        session.record(task)
+                        task = session.record(task)
                     message = redact_secrets(json.dumps(task, sort_keys=True))
                     self.wfile.write(_websocket_text_frame(message))
                     self.wfile.flush()
@@ -583,14 +582,26 @@ class GuiSession:
     def __init__(self) -> None:
         self._history: list[dict[str, Any]] = []
         self._next_id = 1
+        self._active_objective = ""
 
     def enrich(self, task: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
         task = dict(task)
         objective = str(source.get("objective", "")).strip()
         if objective:
-            task["summary"] = objective
+            task["objective"] = objective
             task["human_title"] = objective[:80]
+            if str(task.get("status", "")) not in {"blocked", "needs_review"}:
+                task["summary"] = objective
         metadata = dict(task.get("metadata", {}))
+        start_accepted = str(task.get("status", "")) not in {
+            "blocked",
+            "needs_review",
+            "ready",
+            "stopped",
+        }
+        metadata["start_accepted"] = start_accepted
+        if start_accepted and objective:
+            self._active_objective = objective
         for key in ("mode", "priority"):
             value = str(source.get(key, "")).strip()
             if value:
@@ -600,9 +611,37 @@ class GuiSession:
         task["metadata"] = metadata
         return task
 
-    def record(self, task: dict[str, Any]) -> None:
+    def _reconcile_active_objective(self, task: dict[str, Any]) -> dict[str, Any]:
+        task = dict(task)
+        if str(task.get("status", "")) == "ready" and not task.get("id"):
+            self._active_objective = ""
+            return task
+        full_objective = self._active_objective
+        reported_objective = str(task.get("objective", "")).strip()
+        if not full_objective:
+            return task
+        if reported_objective and not full_objective.startswith(reported_objective):
+            return task
+        task["objective"] = full_objective
+        task["human_title"] = full_objective[:80]
+        requirements = task.get("requirements")
+        if isinstance(requirements, list):
+            task["requirements"] = [
+                {
+                    **requirement,
+                    "text": f"Requested outcome: {full_objective}",
+                }
+                if isinstance(requirement, dict)
+                and str(requirement.get("text", "")).startswith("Requested outcome:")
+                else requirement
+                for requirement in requirements
+            ]
+        return task
+
+    def record(self, task: dict[str, Any]) -> dict[str, Any]:
         if not task:
-            return
+            return task
+        task = self._reconcile_active_objective(task)
         entry = dict(task)
         if not entry.get("id"):
             entry["id"] = f"task-{self._next_id}"
@@ -610,6 +649,7 @@ class GuiSession:
         self._history = [item for item in self._history if item.get("summary") != entry.get("summary")]
         self._history.insert(0, entry)
         self._history = self._history[:100]
+        return task
 
     def history(self, *, query: str = "") -> list[dict[str, Any]]:
         tasks = list(self._history)

@@ -303,7 +303,7 @@ def test_distribution_name_avoids_occupied_pypi_project() -> None:
     metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert metadata["project"]["name"] == "local-agentic-harness"
-    assert metadata["project"]["version"] == "0.8.1"
+    assert metadata["project"]["version"] == "0.8.2"
     assert metadata["project"]["requires-python"] == ">=3.11,<3.15"
     assert metadata["project"]["scripts"]["agentic-harness"] == "agentic_harness.cli:main"
     assert metadata["project"]["scripts"]["agentic-harness-gui"] == (
