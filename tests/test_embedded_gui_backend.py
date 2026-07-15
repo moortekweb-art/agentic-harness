@@ -17,6 +17,7 @@ from agentic_harness.core.artifacts import ArtifactStore
 from agentic_harness.core.autonomy import AutonomousRunner
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.core.factory import build_supervisor
+from agentic_harness.core.safety import split_command
 from agentic_harness.core.state import Goal, GoalStatus
 
 
@@ -409,8 +410,12 @@ def test_safe_demo_runs_without_setup_credentials_or_selected_workspace_access(t
     assert finished["final_result"]["worker_claim"]["label"] == ("Scripted worker report (not AI)")
     assert finished["metadata"]["execution"]["label"] == ("Safe demo · scripted worker")
     assert finished["changed_files"] == [{"path": "calculator.py", "status": "modified"}]
-    assert finished["final_result"]["verification_commands"] == [
-        "python -c 'from calculator import add; assert add(2, 3) == 5'"
+    verification_commands = finished["final_result"]["verification_commands"]
+    assert len(verification_commands) == 1
+    assert split_command(verification_commands[0]) == [
+        "python",
+        "-c",
+        "from calculator import add; assert add(2, 3) == 5",
     ]
     assert selected_project_file.read_text(encoding="utf-8") == "untouched\n"
     assert not (tmp_path / "calculator.py").exists()
