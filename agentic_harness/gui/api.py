@@ -342,6 +342,7 @@ def _task(
         "metadata": {
             "command": command,
             "updated_at": runtime_context["updated_at"] or datetime.now(UTC).isoformat(),
+            "observed_at": _managed_observed_at(details),
             "execution": _managed_execution_context(details),
         },
         "advanced_details": details,
@@ -381,6 +382,14 @@ def _managed_execution_context(details: dict[str, Any]) -> dict[str, str]:
             "detail": "This task uses the workspace owner's managed execution route.",
         }
     return {}
+
+
+def _managed_observed_at(details: dict[str, Any]) -> str:
+    payload = details.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    value = payload.get("generated_at")
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _external_status_is_accepted(payload: dict[str, Any] | None) -> bool:

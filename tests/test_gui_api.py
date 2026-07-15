@@ -92,8 +92,14 @@ def test_gui_api_exposes_only_state_appropriate_human_actions() -> None:
 def test_managed_task_explains_hybrid_cloud_planner_and_local_execution() -> None:
     payload = {
         "classification": "working",
+        "generated_at": "2026-07-15T04:45:00Z",
         "active_goal": {"planner": "gpt-5.5", "executor": "opencode"},
-        "runtime": {"loop_state": {"model": "local-node1-vllm"}},
+        "runtime": {
+            "loop_state": {
+                "model": "local-node1-vllm",
+                "updated_at": "2026-07-15T04:24:54Z",
+            }
+        },
     }
 
     task = task_from_command_result(
@@ -108,6 +114,8 @@ def test_managed_task_explains_hybrid_cloud_planner_and_local_execution() -> Non
             "Planning uses gpt-5.5; execution uses local-node1-vllm through opencode."
         ),
     }
+    assert task["metadata"]["updated_at"] == "2026-07-15T04:24:54Z"
+    assert task["metadata"]["observed_at"] == "2026-07-15T04:45:00Z"
 
 
 def test_managed_acceptance_becomes_verified_gui_result_only_with_matching_last_run() -> None:
@@ -322,7 +330,8 @@ def test_gui_microcopy_and_footer_use_distinct_status_metadata() -> None:
     assert 'id="statusUpdated"' in html
     assert 'id="statusContext"' not in html
     assert "No progress recorded yet" in html
-    assert "Last meaningful update" in javascript
+    assert "Last progress" in javascript
+    assert "Status checked" in javascript
     assert "renderStatusFooter" in javascript
 
 

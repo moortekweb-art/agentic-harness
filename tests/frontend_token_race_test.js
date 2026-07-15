@@ -1027,6 +1027,10 @@ async function testManagedWorkingTaskShowsRealPassAndIndeterminateProgress() {
       requirements: [{ status: "active", text: "Requested outcome: Audit the setup guide" }],
       events: [{ stage: "act", summary: "Agent pass 5 is active.", checkpoint: "Pass 5 of up to 24" }],
       allowed_actions: [{ action: "stop", enabled: true }],
+      metadata: {
+        updated_at: "2026-07-13T08:01:05Z",
+        observed_at: "2026-07-13T08:20:00Z",
+      },
     },
   });
 
@@ -1038,6 +1042,8 @@ async function testManagedWorkingTaskShowsRealPassAndIndeterminateProgress() {
   assert.equal(app.elements.get("checkpoint").textContent, "Pass 5 of up to 24");
   assert.equal(app.elements.get("attemptsValue").textContent, "5");
   assert.match(app.elements.get("eventTimeline").children[0].textContent, /Agent pass 5 is active/);
+  assert.match(app.elements.get("statusUpdated").textContent, /Last progress/);
+  assert.match(app.elements.get("statusUpdated").textContent, /Status checked/);
 }
 
 async function testReturningToSafariRefreshesStatusWithoutOpeningAnotherStream() {

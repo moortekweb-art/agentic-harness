@@ -813,14 +813,24 @@ function renderStatusFooter(task) {
   const current = task.current && typeof task.current === "object" ? task.current : {};
   const metadata = task.metadata && typeof task.metadata === "object" ? task.metadata : {};
   const value = current.last_event_at || metadata.updated_at;
-  if (!value) {
+  const observedValue = metadata.observed_at || "";
+  if (!value && !observedValue) {
     els.statusUpdated.textContent = "No progress recorded yet";
     return;
   }
   const timestamp = new Date(value);
-  els.statusUpdated.textContent = Number.isNaN(timestamp.getTime())
+  const progressText = !value
+    ? "No progress recorded yet"
+    : Number.isNaN(timestamp.getTime())
     ? "Progress time unavailable"
-    : `Last meaningful update ${timestamp.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+    : `Last progress ${timestamp.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  const observed = new Date(observedValue);
+  const observedText = observedValue && !Number.isNaN(observed.getTime())
+    ? `Status checked ${observed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+    : "";
+  els.statusUpdated.textContent = observedText && observedValue !== value
+    ? `${progressText} · ${observedText}`
+    : progressText;
 }
 
 function renderHistory(tasks) {
