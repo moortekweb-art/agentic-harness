@@ -63,9 +63,7 @@ def test_ci_runs_on_linux_windows_and_macos() -> None:
 
 
 def test_ci_keeps_cross_platform_tests_but_deduplicates_heavy_checks() -> None:
-    workflow = yaml.safe_load(
-        (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    )
+    workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
 
     assert workflow["on"]["push"] == {"branches": ["main"]}
     assert workflow["on"]["pull_request"] is None
@@ -157,9 +155,7 @@ def test_active_publish_workflow_gates_oidc_on_exact_verified_release_commit() -
         if step.get("name") == "Require protected default-branch recovery source"
     )
     assert source_gate["if"] == "github.event_name == 'workflow_dispatch'"
-    assert source_gate["env"]["DEFAULT_BRANCH"] == (
-        "${{ github.event.repository.default_branch }}"
-    )
+    assert source_gate["env"]["DEFAULT_BRANCH"] == ("${{ github.event.repository.default_branch }}")
     assert '"$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH"' in source_gate["run"]
     publish = workflow["jobs"]["publish"]
     assert set(publish["needs"]) == {"validate", "stage_release"}
@@ -201,9 +197,7 @@ def test_active_publish_workflow_gates_oidc_on_exact_verified_release_commit() -
     assert "environment" not in stage
     assert "github.ref_name" not in str(stage)
     stage_release_step = next(
-        step
-        for step in stage["steps"]
-        if step.get("name") == "Create or update draft release"
+        step for step in stage["steps"] if step.get("name") == "Create or update draft release"
     )
     assert stage_release_step["env"]["GH_REPO"] == "${{ github.repository }}"
     final = workflow["jobs"]["publish_release"]
@@ -211,9 +205,7 @@ def test_active_publish_workflow_gates_oidc_on_exact_verified_release_commit() -
     assert final["environment"]["name"] == "github-release"
     assert "github.ref_name" not in str(final)
     final_release_step = next(
-        step
-        for step in final["steps"]
-        if step.get("name") == "Make the verified release public"
+        step for step in final["steps"] if step.get("name") == "Make the verified release public"
     )
     assert final_release_step["env"]["GH_REPO"] == "${{ github.repository }}"
     assert "--draft=false" in text
@@ -254,7 +246,7 @@ def test_active_publish_workflow_gates_oidc_on_exact_verified_release_commit() -
 def test_publish_template_never_interpolates_release_tag_inside_python_source() -> None:
     text = (REPO_ROOT / "docs/templates/publish.yml").read_text(encoding="utf-8")
 
-    assert 'RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}' in text
+    assert "RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}" in text
     assert "github.event.release" not in text
 
 
@@ -303,12 +295,10 @@ def test_distribution_name_avoids_occupied_pypi_project() -> None:
     metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert metadata["project"]["name"] == "local-agentic-harness"
-    assert metadata["project"]["version"] == "0.9.0"
+    assert metadata["project"]["version"] == "0.9.1"
     assert metadata["project"]["requires-python"] == ">=3.11,<3.15"
     assert metadata["project"]["scripts"]["agentic-harness"] == "agentic_harness.cli:main"
-    assert metadata["project"]["scripts"]["agentic-harness-gui"] == (
-        "agentic_harness.gui.cli:main"
-    )
+    assert metadata["project"]["scripts"]["agentic-harness-gui"] == ("agentic_harness.gui.cli:main")
     assert metadata["project"]["urls"]["Repository"].startswith("https://github.com/")
     assert "Development Status :: 4 - Beta" in metadata["project"]["classifiers"]
 
@@ -327,9 +317,7 @@ def test_release_docs_match_current_package_version() -> None:
     assert f"v{version}" in checklist
     assert f"docs/RELEASE_NOTES_{version}.md" in checklist
     assert release_notes.exists()
-    assert release_notes.read_text(encoding="utf-8").startswith(
-        f"# Agentic Harness v{version}\n"
-    )
+    assert release_notes.read_text(encoding="utf-8").startswith(f"# Agentic Harness v{version}\n")
 
 
 def test_trusted_publishing_docs_record_current_receipt_and_steady_state() -> None:
@@ -396,8 +384,7 @@ def test_pypi_readme_uses_resolvable_absolute_links() -> None:
 
     assert destinations
     assert all(
-        target.startswith(("https://", "http://", "mailto:", "#"))
-        for target in destinations
+        target.startswith(("https://", "http://", "mailto:", "#")) for target in destinations
     )
 
 
