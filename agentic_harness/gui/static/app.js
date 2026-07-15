@@ -64,6 +64,7 @@ const state = {
   formReconciled: false,
   restoredDraftVersion: 0,
   providerTemplates: [],
+  localModelDetection: null,
 };
 
 const byId = (id) => document.getElementById(id);
@@ -77,6 +78,12 @@ const els = {
   shortcutsButton: byId("shortcutsButton"),
   workspacePath: byId("workspacePath"),
   executionSummary: byId("executionSummary"),
+  demoCallout: byId("demoCallout"),
+  demoTitle: byId("demoTitle"),
+  demoSummary: byId("demoSummary"),
+  demoButton: byId("demoButton"),
+  demoButtonLabel: byId("demoButtonLabel"),
+  demoSetupButton: byId("demoSetupButton"),
   starterCreate: byId("starterCreate"),
   starterFix: byId("starterFix"),
   starterAudit: byId("starterAudit"),
@@ -154,6 +161,10 @@ const els = {
   providerPreset: byId("providerPreset"),
   providerPresetHelp: byId("providerPresetHelp"),
   localModelRequirement: byId("localModelRequirement"),
+  localModelDetectionRow: byId("localModelDetectionRow"),
+  localModelDetection: byId("localModelDetection"),
+  useDetectedModelButton: byId("useDetectedModelButton"),
+  checkLocalModelsButton: byId("checkLocalModelsButton"),
   providerEndpoint: byId("providerEndpoint"),
   providerModel: byId("providerModel"),
   providerApiKeyEnv: byId("providerApiKeyEnv"),
@@ -169,6 +180,7 @@ const els = {
   maxProviderCalls: byId("maxProviderCalls"),
   maxToolCalls: byId("maxToolCalls"),
   setupError: byId("setupError"),
+  setupDemoButton: byId("setupDemoButton"),
   continueDialog: byId("continueDialog"),
   continueForm: byId("continueForm"),
   closeContinueButton: byId("closeContinueButton"),
@@ -442,12 +454,13 @@ function restoreForm() {
 function setBusy(busy) {
   state.busy = busy;
   updateStartButton();
-  [els.startButton, els.checkButton, els.continueButton, els.acceptButton, els.stopButton].forEach((button) => {
+  [els.startButton, els.checkButton, els.continueButton, els.acceptButton, els.stopButton, els.demoButton, els.setupDemoButton].forEach((button) => {
     button.setAttribute("aria-busy", String(busy));
   });
-  [els.checkButton, els.continueButton, els.acceptButton, els.stopButton].forEach((button) => {
+  [els.checkButton, els.continueButton, els.acceptButton, els.stopButton, els.setupDemoButton].forEach((button) => {
     button.disabled = busy;
   });
+  updateDemoCallout(state.currentTask);
 }
 
 function updateStartButton() {
@@ -628,7 +641,9 @@ function renderFinalReceipt(task, receipt) {
   const workerClaim = final.worker_claim && typeof final.worker_claim === "object"
     ? final.worker_claim
     : {};
-  els.finalWorkerClaimLabel.textContent = "Assistant report";
+  els.finalWorkerClaimLabel.textContent = task.metadata?.demo?.enabled === true
+    ? workerClaim.label || "Scripted worker report (not AI)"
+    : "Assistant report";
   els.finalWorkerClaim.textContent = workerClaim.summary || "No assistant completion report was recorded.";
   els.finalAttempts.textContent = String(Number.isFinite(final.attempts) ? final.attempts : 0);
   els.finalRetries.textContent = String(Number.isFinite(final.retries) ? final.retries : 0);
@@ -688,6 +703,8 @@ function renderTask(task) {
     ["starting", "working", "checking", "stopping", "needs_review", "blocked"].includes(status),
   );
   document.body.dataset.taskComplete = String(receipt.terminal);
+  document.body.dataset.demo = String(task.metadata?.demo?.enabled === true);
+  updateDemoCallout(task);
   const taskId = String(task.id || "");
   if (receipt.terminal && taskId !== state.lastRenderedTaskId) els.completedDetails.open = false;
   state.lastRenderedTaskId = taskId;
@@ -886,9 +903,38 @@ function renderDetectedAgents(setup, worker) {
   if (!setup.configured && codingAgent.recommended) els.executionChoice.value = "coding_agent";
 }
 
+function updateDemoCallout(task = null) {
+  const demo = state.setup?.demo;
+  const available = demo?.available === true
+    && state.setup?.editable !== false
+    && state.setup?.configured !== true;
+  els.demoCallout.hidden = !available;
+  if (!available) return;
+  const isDemo = task?.metadata?.demo?.enabled === true;
+  const active = isDemo && ["starting", "working", "checking", "stopping", "needs_review"].includes(task.status);
+  const verified = isDemo && task.result_category === "verified_done";
+  if (active) {
+    els.demoTitle.textContent = "Safe demo running";
+    els.demoSummary.textContent = "The scripted practice worker is repairing the temporary calculator while the harness records progress and independent evidence.";
+    els.demoButtonLabel.textContent = "Demo running…";
+  } else if (verified) {
+    els.demoTitle.textContent = "Demo complete. Connect real execution when you are ready.";
+    els.demoSummary.textContent = "The harness rejected the scripted worker's first false completion, repaired the temporary calculator, and accepted the result only after an independent check passed.";
+    els.demoButtonLabel.textContent = "Run demo again";
+  } else {
+    els.demoTitle.textContent = "See a verified result in about a minute";
+    els.demoSummary.textContent = "Run the real harness on a temporary practice project with a scripted worker. It uses no AI model or API key, and it never touches the project shown above.";
+    els.demoButtonLabel.textContent = "Try safe demo";
+  }
+  els.demoButton.disabled = state.busy || active;
+  els.setupDemoButton.disabled = state.busy || active;
+  els.setupDemoButton.textContent = verified ? "Run safe demo again" : active ? "Demo running…" : "Try safe demo instead";
+}
+
 function renderSetup(setup) {
   const previousSetup = state.setup;
   state.setup = setup;
+  updateDemoCallout(state.currentTask);
   const humanModes = setup.editable === false && setup.worker?.type === "local_goal";
   els.modeSection.hidden = false;
   els.checks.required = !humanModes;
@@ -913,15 +959,21 @@ function renderSetup(setup) {
   const worker = setup.worker || {};
   renderDetectedAgents(setup, worker);
   const executionValidation = setup.execution_validation || {};
-  els.executionSummary.textContent = setup.configured
-    ? worker.type === "model_agent"
-      ? `${worker.model || "Model"} · ${worker.data_location === "local" ? "data stays local" : "cloud endpoint"}`
-        : worker.type === "local_goal"
-        ? setup.execution_summary || "Managed runtime · route shown on active task"
-        : executionValidation.verified
-          ? `${worker.label || "Coding agent"} connection verified · model location set in agent`
-          : `${worker.label || "Coding agent"} installed · connection not tested · model location set in agent`
-    : "Setup required";
+  const currentExecution = state.currentTask?.metadata?.execution;
+  if (state.currentTask?.metadata?.demo?.enabled === true && currentExecution?.label) {
+    els.executionSummary.textContent = `${currentExecution.label} · Data stays local`;
+    els.executionSummary.title = currentExecution.detail || currentExecution.label;
+  } else {
+    els.executionSummary.textContent = setup.configured
+      ? worker.type === "model_agent"
+        ? `${worker.model || "Model"} · ${worker.data_location === "local" ? "data stays local" : "cloud endpoint"}`
+          : worker.type === "local_goal"
+          ? setup.execution_summary || "Managed runtime · route shown on active task"
+          : executionValidation.verified
+            ? `${worker.label || "Coding agent"} connection verified · model location set in agent`
+            : `${worker.label || "Coding agent"} installed · connection not tested · model location set in agent`
+      : "Setup required";
+  }
   const previousCheck = previousSetup
     ? previousSetup.verification_command || previousSetup.suggested_check || ""
     : "";
@@ -952,9 +1004,15 @@ function renderSetup(setup) {
   }
   updateSetupFields();
   updateStartButton();
+  if (setup.local_model_detection && state.localModelDetection === null) {
+    refreshLocalModelDetection().catch(() => {});
+  } else {
+    renderLocalModelDetection(state.localModelDetection || setup.local_model_detection);
+  }
   if (
     setup.configured === false
     && setup.editable !== false
+    && setup.demo?.available !== true
     && !state.setupPrompted
     && !els.setupDialog.open
   ) {
@@ -964,15 +1022,30 @@ function renderSetup(setup) {
 }
 
 function renderProviderTemplates(setup) {
-  const templates = Array.isArray(setup.provider_templates)
+  const baseTemplates = Array.isArray(setup.provider_templates)
     ? setup.provider_templates
     : [{ key: "custom", label: "Custom OpenAI-compatible provider" }];
+  const detected = new Map(
+    (state.localModelDetection?.detected || []).map((row) => [row.template_key, row]),
+  );
+  const templates = baseTemplates.map((template) => {
+    const local = detected.get(template.key);
+    return local
+      ? {
+          ...template,
+          detected: true,
+          endpoint: local.endpoint || template.endpoint,
+          model: local.model || template.model,
+        }
+      : template;
+  });
   state.providerTemplates = templates;
   refreshProviderPresets();
 }
 
 function refreshProviderPresets() {
   const execution = els.executionChoice.value;
+  const previous = els.providerPreset.value;
   const location = execution === "local_model"
     ? "local"
     : execution === "cloud_model"
@@ -989,10 +1062,12 @@ function refreshProviderPresets() {
   templates.forEach((template) => {
     const option = document.createElement("option");
     option.value = template.key;
-    option.textContent = template.label;
+    option.textContent = `${template.label}${template.detected ? " (detected)" : ""}`;
     els.providerPreset.append(option);
   });
-  els.providerPreset.value = "custom";
+  els.providerPreset.value = templates.some((template) => template.key === previous)
+    ? previous
+    : "custom";
   els.providerPresetHelp.textContent = location === "local"
     ? "Choose a local-server preset, then enter the exact model ID loaded by that server."
     : location === "cloud"
@@ -1025,6 +1100,8 @@ function updateSetupFields({ resetProvider = false } = {}) {
   els.codingAgentFields.hidden = model;
   els.remoteDataRow.hidden = execution !== "cloud_model";
   els.localModelRequirement.hidden = execution !== "local_model";
+  els.localModelDetectionRow.hidden = execution !== "local_model";
+  renderLocalModelDetection(state.localModelDetection || state.setup?.local_model_detection);
   els.executionDisclosure.textContent = execution === "local_model"
     ? "No cloud account is required. Work stays on this computer or your private LAN, but you must start a compatible local model server first."
     : execution === "cloud_model"
@@ -1041,6 +1118,77 @@ async function refreshHealth() {
 
 async function refreshSetup() {
   renderSetup(await api("/api/setup"));
+}
+
+function renderLocalModelDetection(payload) {
+  const result = payload && typeof payload === "object"
+    ? payload
+    : { status: "not_checked", detected: [], summary: "Check this computer for Ollama and LM Studio." };
+  const detected = Array.isArray(result.detected) ? result.detected : [];
+  els.localModelDetection.textContent = result.status === "checking"
+    ? "Checking this computer for Ollama and LM Studio…"
+    : result.summary || "No supported local model server was detected.";
+  els.useDetectedModelButton.hidden = detected.length === 0;
+  if (detected.length) {
+    const first = detected[0];
+    els.useDetectedModelButton.textContent = `Use ${first.label}${first.model ? ` · ${first.model}` : ""}`;
+  }
+  const found = detected.length > 0;
+  els.localModelRequirement.textContent = found
+    ? "A compatible local model server is running. Review the detected endpoint and model ID before saving."
+    : "A compatible model server must already be running. Agentic Harness controls the work and verification; it does not download or host a model for you.";
+}
+
+async function refreshLocalModelDetection() {
+  return singleFlight("local-model-detection", async () => {
+    state.localModelDetection = {
+      status: "checking",
+      detected: [],
+      summary: "Checking this computer for Ollama and LM Studio…",
+    };
+    renderLocalModelDetection(state.localModelDetection);
+    try {
+      state.localModelDetection = await api("/api/setup/local-models");
+    } catch (error) {
+      state.localModelDetection = {
+        status: "unavailable",
+        detected: [],
+        summary: error instanceof Error ? error.message : "Local model detection is unavailable.",
+      };
+    }
+    renderLocalModelDetection(state.localModelDetection);
+    if (state.setup) renderProviderTemplates(state.setup);
+    updateSetupFields();
+    return state.localModelDetection;
+  });
+}
+
+function useDetectedLocalModel() {
+  const detected = state.localModelDetection?.detected;
+  const first = Array.isArray(detected) ? detected[0] : null;
+  if (!first) return;
+  els.executionChoice.value = "local_model";
+  updateSetupFields();
+  if (first.template_key) els.providerPreset.value = first.template_key;
+  applyProviderTemplate();
+  els.providerEndpoint.value = first.endpoint || els.providerEndpoint.value;
+  els.providerModel.value = first.model || els.providerModel.value;
+  els.connectionResult.textContent = `${first.label} was detected on this computer. Test the connection before saving.`;
+}
+
+async function startDemo() {
+  await runAction(async () => {
+    const task = await api("/api/demo", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    if (els.setupDialog.open) els.setupDialog.close();
+    state.pendingStartObjective = "";
+    state.viewingHistoryId = "";
+    state.liveTask = task;
+    renderTask(task);
+    await Promise.all([refreshHistory(), refreshSetup()]);
+  });
 }
 
 async function refreshModes() {
@@ -1375,10 +1523,15 @@ function handleShortcut(event) {
 els.startButton.addEventListener("click", startWork);
 els.checkButton.addEventListener("click", () => runAction(() => refreshTask(true)));
 els.setupButton.addEventListener("click", () => els.setupDialog.showModal());
+els.demoButton.addEventListener("click", startDemo);
+els.demoSetupButton.addEventListener("click", () => els.setupDialog.showModal());
+els.setupDemoButton.addEventListener("click", startDemo);
 els.closeSetupButton.addEventListener("click", () => els.setupDialog.close());
 els.setupForm.addEventListener("submit", saveSetup);
 els.executionChoice.addEventListener("change", () => updateSetupFields({ resetProvider: true }));
 els.providerPreset.addEventListener("change", applyProviderTemplate);
+els.useDetectedModelButton.addEventListener("click", useDetectedLocalModel);
+els.checkLocalModelsButton.addEventListener("click", () => refreshLocalModelDetection());
 els.testConnectionButton.addEventListener("click", testConnection);
 els.testCodingAgentButton.addEventListener("click", testCodingAgent);
 els.continueButton.addEventListener("click", () => els.continueDialog.showModal());

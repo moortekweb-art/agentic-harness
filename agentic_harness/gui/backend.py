@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+from http.client import HTTPConnection
 import hashlib
 import json
 import os
 from pathlib import Path
 import stat
 import subprocess
+import sys
+from tempfile import TemporaryDirectory
 from threading import Event, Lock, RLock, Thread
 from typing import Any
 
@@ -23,6 +27,7 @@ from agentic_harness.core.config import (
     detect_review_command,
     load_config,
 )
+from agentic_harness.core.demos import create_demo
 from agentic_harness.core.errors import ConfigError, HarnessError, StateLockError
 from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.factory import autonomy_policy_from_config, build_supervisor
@@ -70,6 +75,72 @@ _CODING_AGENT_LABELS = {
     "aider": "Aider",
 }
 
+_LOCAL_MODEL_PROBES = (
+    {
+        "template_key": "ollama_local",
+        "label": "Ollama",
+        "port": 11434,
+        "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
+    },
+    {
+        "template_key": "lm_studio_local",
+        "label": "LM Studio",
+        "port": 1234,
+        "endpoint": "http://127.0.0.1:1234/v1/chat/completions",
+    },
+)
+
+_DEMO_OBJECTIVE = "Fix the deliberately broken calculator and prove that adding 2 and 3 returns 5."
+_DEMO_CHECK = "from calculator import add; assert add(2, 3) == 5"
+_DEMO_CHECK_LABEL = format_command(["python", "-c", _DEMO_CHECK])
+_GUI_DEMO_WORKER = '''"""Scripted practice worker for the isolated GUI demo."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+
+goal_id = os.environ.get("AGENTIC_HARNESS_GOAL_ID", "practice-goal").strip()
+attempt_path = Path(".agentic-harness") / "runs" / goal_id / "demo-worker-attempt"
+attempt_path.parent.mkdir(parents=True, exist_ok=True)
+attempt = int(attempt_path.read_text(encoding="utf-8") or "0") if attempt_path.exists() else 0
+attempt_path.write_text(str(attempt + 1), encoding="utf-8")
+calculator = Path("calculator.py")
+if attempt == 0:
+    summary = "claimed completion before repairing the deliberately broken calculator"
+else:
+    content = calculator.read_text(encoding="utf-8")
+    calculator.write_text(
+        content.replace("return left + right + 1", "return left + right"),
+        encoding="utf-8",
+    )
+    summary = "repaired the calculator after the first claim was rejected"
+outcome = {
+    "status": "complete",
+    "plan": [
+        {"status": "complete", "step": "Inspect the deliberately broken calculator"},
+        {"status": "complete", "step": "Repair the addition result"},
+        {"status": "complete", "step": "Submit the result for independent verification"},
+    ],
+    "current_subgoal": "Prove the repaired calculator returns the expected result",
+    "checkpoint": "repair_submitted_for_independent_review",
+    "requirements": [
+        {
+            "id": "calculator-result",
+            "text": "Adding 2 and 3 returns 5",
+            "status": "satisfied",
+            "evidence": ["review:1"],
+        }
+    ],
+    "blockers": [],
+    "summary": summary,
+}
+print(summary)
+print("HARNESS_RESULT_JSON=" + json.dumps(outcome, separators=(",", ":")))
+'''
+
 
 class EmbeddedExecutionBackend:
     """Run one project-local goal in a background thread with durable state."""
@@ -90,6 +161,8 @@ class EmbeddedExecutionBackend:
         self._thread_lock = Lock()
         self._config_lock = RLock()
         self._execution_validation: dict[str, Any] = {}
+        self._demo_workspace: TemporaryDirectory[str] | None = None
+        self._demo_backend: EmbeddedExecutionBackend | None = None
         self._resume_orphaned_goal()
 
     def _resume_orphaned_goal(self) -> None:
@@ -115,9 +188,7 @@ class EmbeddedExecutionBackend:
                 review_commands = [config.review_command]
             if not review_commands:
                 self._record_driver_error(
-                    ConfigError(
-                        "The interrupted task has no independent verification command."
-                    )
+                    ConfigError("The interrupted task has no independent verification command.")
                 )
                 return
             self._start_thread(
@@ -143,9 +214,36 @@ class EmbeddedExecutionBackend:
             return self._readiness_locked()
 
     def _readiness_locked(self) -> dict[str, Any]:
+        demo_task = self._demo_status()
+        if demo_task is not None and demo_task["status"] in {
+            "starting",
+            "working",
+            "checking",
+            "stopping",
+            "needs_review",
+        }:
+            return {
+                "state": "working",
+                "label": "Safe demo running",
+                "can_start": False,
+                "can_queue": False,
+                "requires_review": False,
+                "summary": "The isolated practice task is still running.",
+                "next_action": "Follow the demo progress and its independent verification.",
+            }
         try:
             config = self._config()
         except ConfigError as exc:
+            if demo_task is not None and demo_task.get("result_category") == "verified_done":
+                return {
+                    "state": "setup_required",
+                    "label": "Demo complete",
+                    "can_start": False,
+                    "can_queue": False,
+                    "requires_review": False,
+                    "summary": "The safe demo passed. Connect your own coding agent or model for real work.",
+                    "next_action": "Open Setup and choose how real workspace tasks should run.",
+                }
             return {
                 "state": "setup_required",
                 "label": "Setup needed",
@@ -177,9 +275,7 @@ class EmbeddedExecutionBackend:
                 "next_action": "Open Setup and enter the key again.",
             }
         current = self.store.read_current_goal()
-        if self._driver_active() or (
-            current is not None and not _durably_terminal(current)
-        ):
+        if self._driver_active() or (current is not None and not _durably_terminal(current)):
             return {
                 "state": "working",
                 "label": "Work in progress",
@@ -221,6 +317,7 @@ class EmbeddedExecutionBackend:
 
     def _setup_locked(self) -> dict[str, Any]:
         suggested = _detect_check(self.project_dir)
+        demo_task = self._demo_status()
         try:
             config = self._config()
         except ConfigError:
@@ -237,9 +334,25 @@ class EmbeddedExecutionBackend:
                 "multi_user": False,
                 "summary": "One trusted user and one workspace on this computer.",
             },
-            "provider_templates": [
-                template.to_public_dict() for template in PROVIDER_TEMPLATES
-            ],
+            "provider_templates": [template.to_public_dict() for template in PROVIDER_TEMPLATES],
+            "demo": {
+                "available": True,
+                "kind": "scripted_practice",
+                "model_used": False,
+                "workspace": "isolated_temporary",
+                "summary": (
+                    "Runs the real harness in a temporary practice project with a scripted "
+                    "worker. No API key, model server, or selected-workspace access is used."
+                ),
+                "state": (
+                    str(demo_task.get("status") or "ready") if demo_task is not None else "ready"
+                ),
+            },
+            "local_model_detection": {
+                "status": "not_checked",
+                "detected": [],
+                "summary": "Checking this computer for Ollama and LM Studio is available on demand.",
+            },
             "execution_options": [
                 {
                     "key": "coding_agent",
@@ -292,6 +405,108 @@ class EmbeddedExecutionBackend:
                 )
         return result
 
+    def detect_local_models(self) -> dict[str, Any]:
+        """Probe only fixed loopback endpoints for supported local model servers."""
+
+        detected = [
+            result
+            for probe in _LOCAL_MODEL_PROBES
+            if (result := _probe_local_model_server(probe)) is not None
+        ]
+        if detected:
+            labels = ", ".join(
+                f"{row['label']} ({row['model']})" if row["model"] else str(row["label"])
+                for row in detected
+            )
+            summary = f"Detected on this computer: {labels}."
+        else:
+            summary = (
+                "No running Ollama or LM Studio server was detected. You can start one "
+                "and check again, or enter another local OpenAI-compatible endpoint."
+            )
+        return {
+            "status": "found" if detected else "not_found",
+            "detected": detected,
+            "summary": summary,
+        }
+
+    def start_demo(self) -> dict[str, Any]:
+        """Start a credential-free practice run in an isolated temporary workspace."""
+
+        with self._config_lock:
+            current_demo = self._demo_status()
+            if current_demo is not None and current_demo["status"] in {
+                "starting",
+                "working",
+                "checking",
+                "stopping",
+                "needs_review",
+            }:
+                return current_demo
+            current = self.store.read_current_goal()
+            if self._driver_active() or (current is not None and not _durably_terminal(current)):
+                return self._blocked_task(
+                    "Stop or finish the current workspace task before starting the safe demo.",
+                    action="view_current",
+                )
+            self._dispose_demo()
+            workspace = TemporaryDirectory(prefix="agentic-harness-safe-demo-")
+            demo_path = Path(workspace.name).resolve()
+            demo_path.chmod(0o700)
+            create_demo("fix-tests", demo_path)
+            (demo_path / "mock_coding_agent.py").write_text(
+                _GUI_DEMO_WORKER,
+                encoding="utf-8",
+            )
+            demo = EmbeddedExecutionBackend(demo_path)
+            demo._write_config(
+                {
+                    "version": 1,
+                    "worker": {
+                        "type": "coding_agent",
+                        "coding_agent_command": [
+                            sys.executable,
+                            str(demo_path / "mock_coding_agent.py"),
+                        ],
+                        "coding_agent_timeout": 120,
+                        "coding_agent_transcript": (
+                            ".agentic-harness/runs/{goal_id}/demo-worker.log"
+                        ),
+                    },
+                    "review_command": [sys.executable, "-c", _DEMO_CHECK],
+                    "review_command_timeout": 30,
+                    "autonomy": {
+                        "max_cycles": 4,
+                        "max_elapsed_seconds": 120,
+                        "max_total_tokens": 1_000,
+                        "max_provider_calls": 1,
+                        "max_tool_calls": 20,
+                    },
+                }
+            )
+            self._demo_workspace = workspace
+            self._demo_backend = demo
+            task = demo.start(
+                {
+                    "objective": _DEMO_OBJECTIVE,
+                    "strategy": "quick",
+                    "safe_areas": ["calculator.py"],
+                }
+            )
+            return _tag_demo_task(task)
+
+    def _demo_status(self) -> dict[str, Any] | None:
+        if self._demo_backend is None:
+            return None
+        return _tag_demo_task(self._demo_backend.status())
+
+    def _dispose_demo(self) -> None:
+        workspace = self._demo_workspace
+        self._demo_backend = None
+        self._demo_workspace = None
+        if workspace is not None:
+            workspace.cleanup()
+
     def configure(self, body: dict[str, Any]) -> dict[str, Any]:
         with self._config_lock:
             return self._configure_locked(body)
@@ -302,9 +517,7 @@ class EmbeddedExecutionBackend:
         except ConfigError:
             existing = None
         if existing is not None and not _gui_setup_editable(existing):
-            raise ValueError(
-                f"The existing {existing.worker} setup is read-only in the GUI."
-            )
+            raise ValueError(f"The existing {existing.worker} setup is read-only in the GUI.")
         execution = str(body.get("execution") or "").strip()
         verification_text = str(
             body.get("verification_command") or _detect_check(self.project_dir)
@@ -324,11 +537,11 @@ class EmbeddedExecutionBackend:
                 )
             entered_key = str(body.get("api_key") or "").strip()
             if entered_key and profile.api_key_env:
-                raise ValueError("Choose either a session API key or an environment variable, not both.")
+                raise ValueError(
+                    "Choose either a session API key or an environment variable, not both."
+                )
             existing_model = (
-                existing
-                if existing is not None and existing.worker == "model_agent"
-                else None
+                existing if existing is not None and existing.worker == "model_agent" else None
             )
             preserve_session = (
                 not entered_key
@@ -403,9 +616,7 @@ class EmbeddedExecutionBackend:
             if command is None:
                 command = _coding_agent_command(agent, executable=resolved)
             existing_coding_agent = (
-                existing
-                if existing is not None and existing.worker == "coding_agent"
-                else None
+                existing if existing is not None and existing.worker == "coding_agent" else None
             )
             payload = {
                 "version": 1,
@@ -453,7 +664,9 @@ class EmbeddedExecutionBackend:
         )
         entered_key = str(body.get("api_key") or "").strip()
         if entered_key and profile.api_key_env:
-            raise ValueError("Choose either a session API key or an environment variable, not both.")
+            raise ValueError(
+                "Choose either a session API key or an environment variable, not both."
+            )
         api_key = entered_key or resolve_api_key(profile.api_key_env)
         provider = OpenAICompatibleProvider(
             endpoint=profile.endpoint,
@@ -466,7 +679,7 @@ class EmbeddedExecutionBackend:
             [
                 {
                     "role": "system",
-                    "content": "Return exactly this JSON object: {\"action\":\"report_outcome\",\"arguments\":{\"status\":\"progress\"}}",
+                    "content": 'Return exactly this JSON object: {"action":"report_outcome","arguments":{"status":"progress"}}',
                 },
                 {"role": "user", "content": "Connection and structured-action test."},
             ]
@@ -563,11 +776,9 @@ class EmbeddedExecutionBackend:
     def _coding_agent_validation(self, command: list[str]) -> dict[str, Any]:
         agent = _coding_agent_selection(command)
         label = _CODING_AGENT_LABELS.get(agent, "Coding agent")
-        verified = (
-            self._execution_validation.get("verified") is True
-            and self._execution_validation.get("fingerprint")
-            == _command_fingerprint(command)
-        )
+        verified = self._execution_validation.get(
+            "verified"
+        ) is True and self._execution_validation.get("fingerprint") == _command_fingerprint(command)
         return {
             "verified": verified,
             "scope": "live_model" if verified else "executable_only",
@@ -649,14 +860,11 @@ class EmbeddedExecutionBackend:
         if readiness["can_start"] is not True:
             action = "setup" if readiness["state"] == "setup_required" else "view_current"
             return self._blocked_task(str(readiness["summary"]), action=action)
+        self._dispose_demo()
         try:
             config = self._config()
             strategy = strategy_by_key(
-                str(
-                    body.get("strategy")
-                    or body.get("mode")
-                    or DEFAULT_PUBLIC_STRATEGY
-                )
+                str(body.get("strategy") or body.get("mode") or DEFAULT_PUBLIC_STRATEGY)
             )
             safe_areas = _safe_areas(body.get("safe_areas"), self.project_dir)
             strategy_error = self._strategy_boundary_error(
@@ -709,6 +917,9 @@ class EmbeddedExecutionBackend:
         return self._current_task(goal)
 
     def status(self) -> dict[str, Any]:
+        demo_task = self._demo_status()
+        if demo_task is not None:
+            return demo_task
         goal = self.store.read_current_goal()
         if goal is None:
             return self._ready_task()
@@ -755,17 +966,25 @@ class EmbeddedExecutionBackend:
             self._current_task(goal) if goal.id == current_id else self._task(goal)
             for goal in self.store.list_goals()
         ]
+        if self._demo_backend is not None:
+            tasks = [
+                _tag_demo_task(task) for task in self._demo_backend.history(query=query)
+            ] + tasks
         if needle:
             tasks = [task for task in tasks if needle in json.dumps(task, sort_keys=True).lower()]
         return tasks
 
     def events(self, *, after: int = 0) -> list[dict[str, Any]]:
+        if self._demo_backend is not None:
+            return self._demo_backend.events(after=after)
         goal = self.store.read_current_goal()
         if goal is None:
             return []
         return TaskEventStore(self.project_dir, goal.id).read(after=after)
 
     def preview_file(self, path: str, *, goal_id: str = "") -> dict[str, Any]:
+        if self._demo_backend is not None and self._demo_has_goal(goal_id):
+            return self._demo_backend.preview_file(path, goal_id=goal_id)
         goal = self._preview_goal(goal_id)
         if goal is None:
             raise ValueError("There is no task with changed files.")
@@ -788,6 +1007,8 @@ class EmbeddedExecutionBackend:
         return self._preview(path)
 
     def preview_artifact(self, path: str, *, goal_id: str = "") -> dict[str, Any]:
+        if self._demo_backend is not None and self._demo_has_goal(goal_id):
+            return self._demo_backend.preview_artifact(path, goal_id=goal_id)
         goal = self._preview_goal(goal_id)
         if goal is None or path not in goal.artifacts:
             raise ValueError("Only a recorded artifact from the selected task can be previewed.")
@@ -800,6 +1021,13 @@ class EmbeddedExecutionBackend:
             (goal for goal in self.store.list_goals() if goal.id == goal_id),
             None,
         )
+
+    def _demo_has_goal(self, goal_id: str) -> bool:
+        if self._demo_backend is None:
+            return False
+        if not goal_id:
+            return True
+        return any(task.get("id") == goal_id for task in self._demo_backend.history())
 
     def _preview(self, relative: str) -> dict[str, Any]:
         requested = Path(relative)
@@ -847,6 +1075,8 @@ class EmbeddedExecutionBackend:
         }
 
     def continue_task(self, feedback: str = "") -> dict[str, Any]:
+        if self._demo_backend is not None:
+            return _tag_demo_task(self._demo_backend.continue_task(feedback))
         with self._config_lock:
             return self._continue_task_locked(feedback)
 
@@ -894,6 +1124,8 @@ class EmbeddedExecutionBackend:
             return self._blocked_task(str(exc), action="setup")
 
     def accept(self) -> dict[str, Any]:
+        if self._demo_backend is not None:
+            return _tag_demo_task(self._demo_backend.accept())
         goal = self.store.read_current_goal()
         if goal is None:
             return self._blocked_task("There is no task to accept.", action="new_task")
@@ -905,6 +1137,8 @@ class EmbeddedExecutionBackend:
         )
 
     def stop(self) -> dict[str, Any]:
+        if self._demo_backend is not None:
+            return _tag_demo_task(self._demo_backend.stop())
         goal = self.store.read_current_goal()
         if goal is None:
             return self._ready_task()
@@ -932,8 +1166,10 @@ class EmbeddedExecutionBackend:
                     api_key=self.api_key,
                     cancel_requested=self._cancel.is_set,
                 )
-                policy = policy or self.policy or autonomy_policy_from_config(
-                    load_config(self.project_dir)
+                policy = (
+                    policy
+                    or self.policy
+                    or autonomy_policy_from_config(load_config(self.project_dir))
                 )
             runner = AutonomousRunner(
                 supervisor,
@@ -1050,9 +1286,7 @@ class EmbeddedExecutionBackend:
         plan_value = autonomy.get("plan")
         plan: list[Any] = plan_value if isinstance(plan_value, list) else []
         requirements_value = autonomy.get("requirements")
-        requirements: list[Any] = (
-            requirements_value if isinstance(requirements_value, list) else []
-        )
+        requirements: list[Any] = requirements_value if isinstance(requirements_value, list) else []
         events = TaskEventStore(self.project_dir, goal.id).read()
         frozen_changes = goal.metadata.get("terminal_workspace_changes")
         changes = (
@@ -1086,9 +1320,7 @@ class EmbeddedExecutionBackend:
             status_label = receipt.label
         progress = _progress(public_status, plan, requirements)
         blocker = autonomy.get("blocker")
-        blocker_reason = (
-            str(blocker.get("reason") or "") if isinstance(blocker, dict) else ""
-        )
+        blocker_reason = str(blocker.get("reason") or "") if isinstance(blocker, dict) else ""
         trusted_error = (
             str(goal.error or blocker_reason) if status in {"blocked", "stopped"} else ""
         )
@@ -1147,7 +1379,9 @@ class EmbeddedExecutionBackend:
                 "observed_at": goal.updated_at,
                 "worker": self._public_worker(),
                 "strategy": _public_strategy(goal),
-                "budget": autonomy.get("budget") if isinstance(autonomy.get("budget"), dict) else {},
+                "budget": autonomy.get("budget")
+                if isinstance(autonomy.get("budget"), dict)
+                else {},
             },
         }
 
@@ -1199,9 +1433,7 @@ class EmbeddedExecutionBackend:
                     return current
                 existing_report = _terminal_report_path(self.project_dir, current)
                 existing_content = _read_report(existing_report)
-                workspace_state = str(
-                    current.metadata.get("terminal_workspace_state_sha256") or ""
-                )
+                workspace_state = str(current.metadata.get("terminal_workspace_state_sha256") or "")
                 frozen_changes = current.metadata.get("terminal_workspace_changes")
                 if not isinstance(frozen_changes, dict):
                     parsed = _workspace_changes_from_report(existing_content)
@@ -1240,9 +1472,7 @@ class EmbeddedExecutionBackend:
                     and not current.metadata.get("terminal_report_state_sha256")
                     and _legacy_report_matches(current, existing_content)
                 ):
-                    current.metadata["terminal_report_contract"] = (
-                        TERMINAL_REPORT_CONTRACT
-                    )
+                    current.metadata["terminal_report_contract"] = TERMINAL_REPORT_CONTRACT
                     current.metadata["terminal_report_state_sha256"] = desired_state
                     if existing_report is None:
                         return current
@@ -1269,8 +1499,7 @@ class EmbeddedExecutionBackend:
         state_digest = str(goal.metadata.get("terminal_report_state_sha256") or "")
         content_digest = str(goal.metadata.get("terminal_report_content_sha256") or "")
         if (
-            goal.metadata.get("terminal_report_contract")
-            != TERMINAL_REPORT_CONTRACT
+            goal.metadata.get("terminal_report_contract") != TERMINAL_REPORT_CONTRACT
             or not state_digest
             or state_digest != _terminal_report_state_sha256(self.project_dir, goal)
             or not content_digest
@@ -1313,7 +1542,13 @@ class EmbeddedExecutionBackend:
             if readiness["can_start"]
             else [{"action": "setup", "enabled": True}],
             "safety": {},
-            "final_result": {"accepted": False, "summary": "", "what_changed": [], "checks": [], "remaining": []},
+            "final_result": {
+                "accepted": False,
+                "summary": "",
+                "what_changed": [],
+                "checks": [],
+                "remaining": [],
+            },
             "metadata": {"workspace": str(self.project_dir)},
         }
 
@@ -1447,9 +1682,7 @@ def _sensitive_preview_path(path: Path, root: Path) -> bool:
         "oauth_token.json",
         "auth_token.json",
     }
-    oauth_variant = (
-        name.startswith("client_secret") and name.endswith(".json")
-    ) or (
+    oauth_variant = (name.startswith("client_secret") and name.endswith(".json")) or (
         name.startswith(("oauth_token", "auth_token")) and name.endswith(".json")
     )
     return (
@@ -1544,9 +1777,7 @@ def _verification(goal: Goal, outcome: dict[str, Any]) -> list[dict[str, Any]]:
                     "message": redact_secrets(str(row.get("message") or "")),
                     "independent": row.get("independent") is True,
                     "source": (
-                        "independent"
-                        if row.get("independent") is True
-                        else "worker-reported"
+                        "independent" if row.get("independent") is True else "worker-reported"
                     ),
                 }
             )
@@ -1582,11 +1813,7 @@ def _final_result_payload(
     reason = receipt.trusted_reason if terminal_ready else ""
     return {
         "label": receipt.label if terminal_ready else "In progress",
-        "accepted": (
-            terminal_ready
-            and receipt.category == "verified_done"
-            and status == "done"
-        ),
+        "accepted": (terminal_ready and receipt.category == "verified_done" and status == "done"),
         "summary": reason,
         "reason": reason,
         "worker_claim": {
@@ -1689,9 +1916,7 @@ def _terminal_state_sha256(
 ) -> str:
     payload = goal.to_dict()
     payload.pop("updated_at", None)
-    payload["artifacts"] = [
-        path for path in goal.artifacts if Path(path).name != "report.md"
-    ]
+    payload["artifacts"] = [path for path in goal.artifacts if Path(path).name != "report.md"]
     metadata = payload.get("metadata")
     if isinstance(metadata, dict):
         for key in (
@@ -1757,9 +1982,7 @@ def _legacy_report_matches(goal: Goal, content: str) -> bool:
         return False
     if any(line not in content for line in _report_review_attempt_lines(receipt)):
         return False
-    if any(
-        line not in content for line in _report_verification_command_lines(receipt)
-    ):
+    if any(line not in content for line in _report_verification_command_lines(receipt)):
         return False
     if lines.count("## Artifacts") != 1:
         return False
@@ -1768,9 +1991,7 @@ def _legacy_report_matches(goal: Goal, content: str) -> bool:
     raw_fields = [line.lstrip("- ") for line in lines]
     if any(line.startswith("Summary:") for line in raw_fields):
         return False
-    if receipt.category != "verified_done" and any(
-        "Status: done" in line for line in lines
-    ):
+    if receipt.category != "verified_done" and any("Status: done" in line for line in lines):
         return False
     return True
 
@@ -1811,8 +2032,7 @@ def _report_verification_command_lines(receipt: RunReceipt) -> list[str]:
     if not receipt.verification_commands:
         return ["- No verification commands were recorded."]
     return [
-        f"- {number}. {command}"
-        for number, command in enumerate(receipt.verification_commands, 1)
+        f"- {number}. {command}" for number, command in enumerate(receipt.verification_commands, 1)
     ]
 
 
@@ -1984,6 +2204,106 @@ def _detect_check(project_dir: Path) -> str:
     return format_command(detect_review_command(project_dir))
 
 
+def _probe_local_model_server(probe: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a small public result from one fixed loopback model-server probe."""
+
+    try:
+        connection = HTTPConnection("127.0.0.1", int(probe["port"]), timeout=0.35)
+        connection.request("GET", "/v1/models", headers={"Accept": "application/json"})
+        response = connection.getresponse()
+        raw = response.read(65_537)
+    except (OSError, TimeoutError, ValueError):
+        return None
+    finally:
+        try:
+            connection.close()
+        except (NameError, OSError):
+            pass
+    if response.status != 200 or len(raw) > 65_536:
+        return None
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    model = ""
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict) and isinstance(row.get("id"), str):
+                model = row["id"].strip()[:300]
+                if model:
+                    break
+    return {
+        "template_key": str(probe["template_key"]),
+        "label": str(probe["label"]),
+        "endpoint": str(probe["endpoint"]),
+        "model": model,
+    }
+
+
+def _tag_demo_task(payload: dict[str, Any]) -> dict[str, Any]:
+    """Make the scripted, isolated nature of the practice run unambiguous."""
+
+    task = deepcopy(payload)
+    task["human_title"] = "Safe demo: verified repair"
+    metadata = task.setdefault("metadata", {})
+    metadata["demo"] = {
+        "enabled": True,
+        "kind": "scripted_practice",
+        "model_used": False,
+        "workspace": "temporary",
+        "data_location": "isolated_local",
+        "label": "Safe demo · scripted worker",
+    }
+    metadata["execution"] = {
+        "label": "Safe demo · scripted worker",
+        "data_location": "local",
+        "detail": (
+            "No model or API key is used. The temporary practice workspace is isolated "
+            "from the selected project."
+        ),
+    }
+    metadata["strategy"] = {
+        "key": "demo",
+        "label": "Safe demo",
+        "budget_profile": "practice",
+    }
+    worker = metadata.get("worker")
+    if not isinstance(worker, dict):
+        worker = {}
+    worker["label"] = "Scripted practice worker (not AI)"
+    worker["model_used"] = False
+    metadata["worker"] = worker
+    if task.get("status") in {
+        "starting",
+        "working",
+        "checking",
+        "stopping",
+        "needs_review",
+    }:
+        task["progress"] = {
+            "determinate": False,
+            "percent": None,
+            "label": "Waiting for independent verification",
+        }
+    safety = task.get("safety")
+    if isinstance(safety, dict) and isinstance(safety.get("checks"), list):
+        for check in safety["checks"]:
+            if isinstance(check, dict):
+                check["label"] = _DEMO_CHECK_LABEL
+    final = task.get("final_result")
+    if isinstance(final, dict):
+        if isinstance(final.get("verification_commands"), list):
+            final["verification_commands"] = [_DEMO_CHECK_LABEL]
+        claim = final.get("worker_claim")
+        if isinstance(claim, dict):
+            claim["label"] = "Scripted worker report (not AI)"
+            reported = str(claim.get("summary") or "").strip()
+            if reported and not reported.startswith("Scripted practice worker reported:"):
+                claim["summary"] = f"Scripted practice worker reported: {reported}"
+    return task
+
+
 def _coding_agent_command(agent: str, *, executable: str | None = None) -> list[str]:
     if agent not in _CODING_AGENT_COMMANDS:
         raise ValueError("Choose codex, opencode, aider, or codewhale.")
@@ -2054,23 +2374,28 @@ def _existing_coding_agent_command(
 def _coding_agent_options(
     config: HarnessConfig | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
-    available = {
-        agent: resolve_executable(agent) is not None for agent in _CODING_AGENT_COMMANDS
-    }
+    available = {agent: resolve_executable(agent) is not None for agent in _CODING_AGENT_COMMANDS}
     configured = ""
     current_available = False
     if config is not None and config.worker == "coding_agent":
         configured = _coding_agent_selection(config.coding_agent_command)
-        if configured != "current" and resolve_executable(config.coding_agent_command[0]) is not None:
+        if (
+            configured != "current"
+            and resolve_executable(config.coding_agent_command[0]) is not None
+        ):
             available[configured] = True
         elif configured == "current":
             current_available = (
                 bool(config.coding_agent_command)
                 and resolve_executable(config.coding_agent_command[0]) is not None
             )
-    recommended = configured if available.get(configured) else next(
-        (agent for agent, found in available.items() if found),
-        "",
+    recommended = (
+        configured
+        if available.get(configured)
+        else next(
+            (agent for agent, found in available.items() if found),
+            "",
+        )
     )
     if configured == "current" and current_available:
         recommended = "current"
@@ -2154,14 +2479,8 @@ def _gui_setup_editable(config: HarnessConfig) -> bool:
 def _autonomy_settings(body: dict[str, Any]) -> dict[str, int]:
     return {
         "max_cycles": _int_setting(body.get("max_cycles"), 100, 1, 10_000),
-        "max_elapsed_seconds": _int_setting(
-            body.get("max_elapsed_seconds"), 7_200, 1, 604_800
-        ),
-        "max_total_tokens": _int_setting(
-            body.get("max_total_tokens"), 500_000, 1, 100_000_000
-        ),
-        "max_provider_calls": _int_setting(
-            body.get("max_provider_calls"), 200, 1, 100_000
-        ),
+        "max_elapsed_seconds": _int_setting(body.get("max_elapsed_seconds"), 7_200, 1, 604_800),
+        "max_total_tokens": _int_setting(body.get("max_total_tokens"), 500_000, 1, 100_000_000),
+        "max_provider_calls": _int_setting(body.get("max_provider_calls"), 200, 1, 100_000),
         "max_tool_calls": _int_setting(body.get("max_tool_calls"), 1_000, 1, 1_000_000),
     }

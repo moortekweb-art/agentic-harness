@@ -215,6 +215,45 @@ h3 {
   text-align: right;
 }
 
+.first-success-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 0 18px;
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, var(--accent) 65%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 78%, var(--accent) 22%);
+  box-shadow: var(--panel-shadow);
+}
+
+.first-success-card > div:first-child {
+  min-width: 0;
+  max-width: 720px;
+}
+
+.first-success-card h2 {
+  color: var(--accent-strong);
+}
+
+.first-success-card p:not(.eyebrow) {
+  margin: 7px 0 0;
+}
+
+.first-success-note {
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.first-success-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 190px;
+}
+
 .start-panel,
 .status-panel {
   background: var(--panel);
@@ -1042,6 +1081,30 @@ dialog {
   border-left: 3px solid var(--warn);
 }
 
+.local-model-detection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 14px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.local-model-detection span {
+  flex: 1 1 260px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.local-model-detection button {
+  max-width: 100%;
+  white-space: normal;
+}
+
 .confirm-row {
   display: flex;
   align-items: flex-start;
@@ -1239,6 +1302,22 @@ dialog::backdrop {
   .workspace-strip span:last-child {
     margin-left: 0;
     text-align: left;
+  }
+
+  .first-success-card {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px;
+  }
+
+  .first-success-actions {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .first-success-actions button {
+    width: 100%;
   }
 
   .current-card,
