@@ -95,7 +95,8 @@ def test_gui_keeps_durable_history_in_sync_with_live_status() -> None:
     assert "refreshTask(), refreshHealth(), refreshHistory()" in javascript
     assert "const task = JSON.parse(event.data);" in javascript
     assert "state.liveTask = task;" in javascript
-    assert "if (!state.viewingHistoryId) renderTask(task);" in javascript
+    assert "function taskMatchesPendingStart(task)" in javascript
+    assert "adoptLiveTask(task);" in javascript
     assert "refreshHistory().catch(() => {});\n      refreshHealth().catch" in javascript
 
 

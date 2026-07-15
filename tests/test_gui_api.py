@@ -1344,6 +1344,8 @@ def test_gui_server_post_task_workflow_routes() -> None:
         stopped = post_json(base_url, "/api/tasks/current/stop", {})
 
     assert created["status"] == "starting"
+    assert created["objective"] == "test task"
+    assert created["metadata"]["start_accepted"] is True
     assert watched["status"] == "working"
     assert continued["status"] == "working"
     assert accepted["status"] == "done"
@@ -1369,6 +1371,41 @@ def test_gui_server_accepts_same_origin_json_post() -> None:
 
     assert created["status"] == "starting"
     assert bridge.commands[0][:1] == ["quick-start"]
+
+
+def test_gui_server_rejected_start_preserves_blocker_and_submitted_objective() -> None:
+    bridge = ReviewBridge()
+    with gui_server(bridge) as base_url:
+        created = post_json(
+            base_url,
+            "/api/tasks",
+            {"mode": "cloud", "objective": "new audit"},
+            origin=base_url,
+        )
+
+    assert created["status"] == "needs_review"
+    assert created["objective"] == "new audit"
+    assert created["summary"] != "new audit"
+    assert "review" in str(created["summary"]).lower()
+    assert created["metadata"]["start_accepted"] is False
+
+
+def test_gui_session_preserves_full_objective_when_worker_reports_only_a_title() -> None:
+    objective = "test task with the complete user request and all of its safety constraints"
+    with gui_server(FakeBridge()) as base_url:
+        created = post_json(
+            base_url,
+            "/api/tasks",
+            {"mode": "cloud", "objective": objective},
+            origin=base_url,
+        )
+        current = get_json(base_url, "/api/tasks/current")
+
+    assert created["objective"] == objective
+    assert current["objective"] == objective
+    assert current["requirements"] == [
+        {"status": "active", "text": f"Requested outcome: {objective}"}
+    ]
 
 
 def test_gui_server_rejects_cross_origin_task_post() -> None:

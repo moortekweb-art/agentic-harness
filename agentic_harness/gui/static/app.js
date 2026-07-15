@@ -59,6 +59,7 @@ const state = {
   pollTimer: null,
   reconnectDelay: 1000,
   refreshes: {},
+  pendingStartObjective: "",
   lastRenderedTaskId: "",
   formReconciled: false,
   restoredDraftVersion: 0,
@@ -992,14 +993,26 @@ async function refreshModes() {
   renderModes(payload.modes || [], payload.default || fallback);
 }
 
+function taskMatchesPendingStart(task) {
+  if (!state.pendingStartObjective) return true;
+  return String(task?.objective || "").trim() === state.pendingStartObjective;
+}
+
+function adoptLiveTask(task, { force = false } = {}) {
+  if (!taskMatchesPendingStart(task)) return false;
+  state.liveTask = task;
+  state.pendingStartObjective = "";
+  if (force || !state.viewingHistoryId) {
+    state.viewingHistoryId = "";
+    renderTask(task);
+  }
+  return true;
+}
+
 async function refreshTask(force = false) {
   return singleFlight("task", async () => {
     const task = await api("/api/tasks/current");
-    state.liveTask = task;
-    if (force || !state.viewingHistoryId) {
-      state.viewingHistoryId = "";
-      renderTask(task);
-    }
+    adoptLiveTask(task, { force });
   });
 }
 
@@ -1026,7 +1039,8 @@ async function startWork() {
   const objective = els.objective.value.trim();
   await runAction(async () => {
     const submittedAt = new Date().toISOString();
-    renderTask({
+    state.pendingStartObjective = objective;
+    const pendingTask = {
       id: `pending-${Date.now()}`,
       objective,
       human_title: objective.slice(0, 80),
@@ -1050,7 +1064,9 @@ async function startWork() {
       events: [{ stage: "act", summary: "Goal sent to the assistant", checkpoint: "Starting" }],
       allowed_actions: [],
       metadata: { updated_at: submittedAt },
-    });
+    };
+    state.liveTask = pendingTask;
+    renderTask(pendingTask);
     let task;
     try {
       task = await api("/api/tasks", {
@@ -1064,16 +1080,38 @@ async function startWork() {
         }),
       }, true, START_TIMEOUT_MS);
     } catch (startError) {
-      const recovered = await api("/api/tasks/current");
-      if (!["starting", "working", "checking", "needs_review"].includes(recovered.status)) {
+      let recovered;
+      try {
+        recovered = await api("/api/tasks/current");
+      } catch {
+        state.pendingStartObjective = "";
+        throw startError;
+      }
+      if (
+        !["starting", "working", "checking", "needs_review"].includes(recovered.status)
+        || !taskMatchesPendingStart(recovered)
+      ) {
+        state.pendingStartObjective = "";
         throw startError;
       }
       recovered.summary = "Your goal was accepted and is running. This page reconnected to the current task.";
       task = recovered;
     }
-    state.viewingHistoryId = "";
-    state.liveTask = task;
-    renderTask(task);
+    if (task.metadata?.start_accepted === false) {
+      state.pendingStartObjective = "";
+      adoptLiveTask(task, { force: true });
+      await refreshHistory();
+      return;
+    }
+    if (!taskMatchesPendingStart(task)) {
+      const recovered = await api("/api/tasks/current");
+      if (taskMatchesPendingStart(recovered)) task = recovered;
+    }
+    if (!taskMatchesPendingStart(task)) {
+      state.pendingStartObjective = "";
+      throw new Error("The new goal was not confirmed. Your draft is still here; review the current task and try again.");
+    }
+    adoptLiveTask(task, { force: true });
     resetNewGoalForm();
     await refreshHistory();
   });
@@ -1212,8 +1250,7 @@ function connectStatusStream() {
   socket.addEventListener("message", (event) => {
     try {
       const task = JSON.parse(event.data);
-      state.liveTask = task;
-      if (!state.viewingHistoryId) renderTask(task);
+      adoptLiveTask(task);
       refreshHistory().catch(() => {});
       refreshHealth().catch(() => {});
     } catch {
