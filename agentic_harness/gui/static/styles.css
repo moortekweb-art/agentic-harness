@@ -1001,6 +1001,47 @@ dialog {
   margin: 0;
 }
 
+.execution-disclosure,
+.demo-callout {
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 88%, var(--accent) 12%);
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.demo-callout {
+  margin-bottom: 14px;
+}
+
+.demo-callout strong {
+  color: var(--ink);
+}
+
+.demo-callout p {
+  margin: 5px 0 9px;
+}
+
+.demo-callout code {
+  display: block;
+  overflow-x: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.local-model-requirement {
+  margin-top: 10px;
+  padding-left: 10px;
+  border-left: 3px solid var(--warn);
+}
+
 .confirm-row {
   display: flex;
   align-items: flex-start;

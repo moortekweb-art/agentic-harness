@@ -1359,6 +1359,11 @@ class EmbeddedExecutionBackend:
                     "model": config.llm_model,
                     "endpoint": config.llm_endpoint,
                     "credential_source": credential_source,
+                    "data_location": ProviderProfile(
+                        endpoint=config.llm_endpoint,
+                        model=config.llm_model,
+                        api_key_env=config.llm_api_key_env,
+                    ).data_location,
                 }
             )
         return worker

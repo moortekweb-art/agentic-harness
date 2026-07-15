@@ -145,6 +145,7 @@ const els = {
   setupForm: byId("setupForm"),
   closeSetupButton: byId("closeSetupButton"),
   executionChoice: byId("executionChoice"),
+  executionDisclosure: byId("executionDisclosure"),
   codingAgentFields: byId("codingAgentFields"),
   codingAgentChoice: byId("codingAgentChoice"),
   testCodingAgentButton: byId("testCodingAgentButton"),
@@ -152,6 +153,7 @@ const els = {
   providerFields: byId("providerFields"),
   providerPreset: byId("providerPreset"),
   providerPresetHelp: byId("providerPresetHelp"),
+  localModelRequirement: byId("localModelRequirement"),
   providerEndpoint: byId("providerEndpoint"),
   providerModel: byId("providerModel"),
   providerApiKeyEnv: byId("providerApiKeyEnv"),
@@ -742,6 +744,16 @@ function renderTask(task) {
   const strategy = task.metadata?.strategy;
   els.workApproachValue.textContent = strategy?.label
     || (usesHumanModes() ? "Managed route" : "Plan first");
+  const execution = task.metadata?.execution;
+  if (execution?.label) {
+    const location = execution.data_location === "local"
+      ? "Data stays local"
+      : execution.data_location === "cloud_and_local"
+        ? "Cloud planning + local execution"
+        : "Managed data route";
+    els.executionSummary.textContent = `${execution.label} · ${location}`;
+    els.executionSummary.title = execution.detail || execution.label;
+  }
 
   textList(els.planList, task.plan, (row) => ({
     text: `${row.status || "pending"}: ${row.step || row.text || "Plan item"}`,
@@ -801,14 +813,24 @@ function renderStatusFooter(task) {
   const current = task.current && typeof task.current === "object" ? task.current : {};
   const metadata = task.metadata && typeof task.metadata === "object" ? task.metadata : {};
   const value = current.last_event_at || metadata.updated_at;
-  if (!value) {
+  const observedValue = metadata.observed_at || "";
+  if (!value && !observedValue) {
     els.statusUpdated.textContent = "No progress recorded yet";
     return;
   }
   const timestamp = new Date(value);
-  els.statusUpdated.textContent = Number.isNaN(timestamp.getTime())
+  const progressText = !value
+    ? "No progress recorded yet"
+    : Number.isNaN(timestamp.getTime())
     ? "Progress time unavailable"
-    : `Last meaningful update ${timestamp.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+    : `Last progress ${timestamp.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  const observed = new Date(observedValue);
+  const observedText = observedValue && !Number.isNaN(observed.getTime())
+    ? `Status checked ${observed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+    : "";
+  els.statusUpdated.textContent = observedText && observedValue !== value
+    ? `${progressText} · ${observedText}`
+    : progressText;
 }
 
 function renderHistory(tasks) {
@@ -890,16 +912,15 @@ function renderSetup(setup) {
   els.workspacePath.title = workspace || "Workspace path unavailable";
   const worker = setup.worker || {};
   renderDetectedAgents(setup, worker);
-  renderProviderTemplates(setup);
   const executionValidation = setup.execution_validation || {};
   els.executionSummary.textContent = setup.configured
     ? worker.type === "model_agent"
-      ? `${worker.model || "Model"} · ${worker.credential_source || "no key"}`
-      : worker.type === "local_goal"
-        ? "Verified agent ready"
+      ? `${worker.model || "Model"} · ${worker.data_location === "local" ? "data stays local" : "cloud endpoint"}`
+        : worker.type === "local_goal"
+        ? setup.execution_summary || "Managed runtime · route shown on active task"
         : executionValidation.verified
-          ? `${worker.label || "Coding agent"} connection verified`
-          : `${worker.label || "Coding agent"} installed · connection not tested`
+          ? `${worker.label || "Coding agent"} connection verified · model location set in agent`
+          : `${worker.label || "Coding agent"} installed · connection not tested · model location set in agent`
     : "Setup required";
   const previousCheck = previousSetup
     ? previousSetup.verification_command || previousSetup.suggested_check || ""
@@ -919,6 +940,7 @@ function renderSetup(setup) {
   } else if (worker.type === "coding_agent") {
     els.executionChoice.value = "coding_agent";
   }
+  renderProviderTemplates(setup);
   if (setup.limits) {
     els.maxCycles.value = String(setup.limits.max_cycles || 100);
     els.maxMinutes.value = String(
@@ -946,6 +968,23 @@ function renderProviderTemplates(setup) {
     ? setup.provider_templates
     : [{ key: "custom", label: "Custom OpenAI-compatible provider" }];
   state.providerTemplates = templates;
+  refreshProviderPresets();
+}
+
+function refreshProviderPresets() {
+  const execution = els.executionChoice.value;
+  const location = execution === "local_model"
+    ? "local"
+    : execution === "cloud_model"
+      ? "cloud"
+      : "";
+  const templates = state.providerTemplates.filter((template) => (
+    template.key === "custom"
+    || !location
+    || !template.data_location
+    || template.data_location === "both"
+    || template.data_location === location
+  ));
   els.providerPreset.replaceChildren();
   templates.forEach((template) => {
     const option = document.createElement("option");
@@ -954,7 +993,11 @@ function renderProviderTemplates(setup) {
     els.providerPreset.append(option);
   });
   els.providerPreset.value = "custom";
-  els.providerPresetHelp.textContent = "Templates only pre-fill editable values. Your provider account controls model and entitlement availability.";
+  els.providerPresetHelp.textContent = location === "local"
+    ? "Choose a local-server preset, then enter the exact model ID loaded by that server."
+    : location === "cloud"
+      ? "Templates only pre-fill editable values. Your provider account controls model and entitlement availability."
+      : "Choose an execution method to see matching provider templates.";
 }
 
 function applyProviderTemplate() {
@@ -967,12 +1010,27 @@ function applyProviderTemplate() {
   updateSetupFields();
 }
 
-function updateSetupFields() {
+function updateSetupFields({ resetProvider = false } = {}) {
   const execution = els.executionChoice.value;
   const model = execution !== "coding_agent";
+  if (resetProvider && model) {
+    els.providerEndpoint.value = "";
+    els.providerModel.value = "";
+    els.providerApiKeyEnv.value = "";
+    els.providerApiKey.value = "";
+    els.confirmRemoteData.checked = false;
+    els.connectionResult.textContent = "";
+  }
   els.providerFields.hidden = !model;
   els.codingAgentFields.hidden = model;
   els.remoteDataRow.hidden = execution !== "cloud_model";
+  els.localModelRequirement.hidden = execution !== "local_model";
+  els.executionDisclosure.textContent = execution === "local_model"
+    ? "No cloud account is required. Work stays on this computer or your private LAN, but you must start a compatible local model server first."
+    : execution === "cloud_model"
+      ? "The selected file excerpts and tool results may be sent to your provider. You supply and control that account."
+      : "The selected coding agent owns its own sign-in, model, and local-or-cloud routing. Agentic Harness adds the workflow and independent verification.";
+  if (model) refreshProviderPresets();
 }
 
 async function refreshHealth() {
@@ -1319,7 +1377,7 @@ els.checkButton.addEventListener("click", () => runAction(() => refreshTask(true
 els.setupButton.addEventListener("click", () => els.setupDialog.showModal());
 els.closeSetupButton.addEventListener("click", () => els.setupDialog.close());
 els.setupForm.addEventListener("submit", saveSetup);
-els.executionChoice.addEventListener("change", updateSetupFields);
+els.executionChoice.addEventListener("change", () => updateSetupFields({ resetProvider: true }));
 els.providerPreset.addEventListener("change", applyProviderTemplate);
 els.testConnectionButton.addEventListener("click", testConnection);
 els.testCodingAgentButton.addEventListener("click", testCodingAgent);

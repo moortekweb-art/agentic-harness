@@ -65,7 +65,12 @@ def setup_payload(bridge: LocalGoalBridge) -> dict[str, Any]:
         "worker": {
             "type": "local_goal",
             "label": "Existing local-goal runtime",
+            "data_location": "managed_per_goal",
         },
+        "execution_summary": (
+            "Managed runtime. The active task shows whether its planner and executor are "
+            "local, cloud, or mixed."
+        ),
     }
 
 
@@ -337,9 +342,54 @@ def _task(
         "metadata": {
             "command": command,
             "updated_at": runtime_context["updated_at"] or datetime.now(UTC).isoformat(),
+            "observed_at": _managed_observed_at(details),
+            "execution": _managed_execution_context(details),
         },
         "advanced_details": details,
     }
+
+
+def _managed_execution_context(details: dict[str, Any]) -> dict[str, str]:
+    """Return a plain execution/data-location label for the managed backend."""
+    payload = details.get("payload")
+    if not isinstance(payload, dict):
+        return {}
+    active = payload.get("active_goal")
+    runtime = payload.get("runtime")
+    loop_state = runtime.get("loop_state") if isinstance(runtime, dict) else None
+    planner = str(active.get("planner") or "").strip() if isinstance(active, dict) else ""
+    executor = str(active.get("executor") or "").strip() if isinstance(active, dict) else ""
+    model = str(loop_state.get("model") or "").strip() if isinstance(loop_state, dict) else ""
+    local_model = bool(model and ("local" in model.lower() or "vllm" in model.lower()))
+
+    if planner and local_model:
+        return {
+            "label": f"Hybrid: {planner} planner + local model",
+            "data_location": "cloud_and_local",
+            "detail": f"Planning uses {planner}; execution uses {model} through {executor or 'the managed worker'}.",
+        }
+    if local_model:
+        return {
+            "label": f"Local model: {model}",
+            "data_location": "local",
+            "detail": f"Execution stays on {model} through {executor or 'the managed worker'}.",
+        }
+    if planner or executor or model:
+        route = " + ".join(part for part in (planner, model or executor) if part)
+        return {
+            "label": f"Managed route: {route}",
+            "data_location": "managed",
+            "detail": "This task uses the workspace owner's managed execution route.",
+        }
+    return {}
+
+
+def _managed_observed_at(details: dict[str, Any]) -> str:
+    payload = details.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    value = payload.get("generated_at")
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _external_status_is_accepted(payload: dict[str, Any] | None) -> bool:

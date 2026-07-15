@@ -387,7 +387,7 @@ async function testLegacySetupContractCompletesBootstrapAndAttachesStatusStream(
 
   assert.equal(app.elements.get("workspacePath").textContent, "legacy workspace");
   assert.equal(app.elements.get("workspacePath").title, "/tmp/legacy-workspace");
-  assert.equal(app.elements.get("executionSummary").textContent, "Verified agent ready");
+  assert.match(app.elements.get("executionSummary").textContent, /Managed runtime/);
   assert.equal(app.elements.get("setupButton").hidden, true);
   assert.deepEqual(app.websocketUrls, ["ws://127.0.0.1:41111/api/tasks/stream"]);
   assert.equal(app.fetchCalls.some((call) => call.url === "/api/setup"), true);
@@ -456,7 +456,7 @@ async function testConfiguredVerificationReplacesOnlyThePreviousSuggestion() {
   assert.equal(app.elements.get("checks").value, "npm run verify");
   assert.equal(
     app.elements.get("executionSummary").textContent,
-    "Codex installed · connection not tested",
+    "Codex installed · connection not tested · model location set in agent",
   );
 
   app.elements.get("checks").value = "npm run verify:focused";
@@ -517,7 +517,10 @@ async function testCodingAgentConnectionTestReportsLiveValidation() {
     app.elements.get("codingAgentConnectionResult").textContent,
     "Codex connection and configured model are working.",
   );
-  assert.equal(app.elements.get("executionSummary").textContent, "Codex connection verified");
+  assert.equal(
+    app.elements.get("executionSummary").textContent,
+    "Codex connection verified · model location set in agent",
+  );
   const probe = app.fetchCalls.find((call) => call.url === "/api/setup/test");
   assert.equal(JSON.parse(probe.options.body).agent, "codex");
 }
@@ -622,6 +625,55 @@ async function testProviderTemplatePrefillsEditableValues() {
   assert.equal(app.elements.get("providerModel").value, "glm-5.2");
   assert.equal(app.elements.get("providerApiKeyEnv").value, "ZAI_API_KEY");
   assert.equal(app.elements.get("connectionResult").textContent, "Confirm client eligibility.");
+}
+
+async function testLocalAndCloudProviderChoicesStaySeparate() {
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: false,
+      workspace: "/tmp/project",
+      provider_templates: [
+        { key: "custom", label: "Custom provider", data_location: "both" },
+        {
+          key: "ollama_local",
+          label: "Ollama on this computer",
+          endpoint: "http://127.0.0.1:11434/v1/chat/completions",
+          data_location: "local",
+        },
+        {
+          key: "zai_api",
+          label: "Z.ai API",
+          endpoint: "https://api.z.ai/api/paas/v4/chat/completions",
+          data_location: "cloud",
+        },
+      ],
+    },
+  });
+  const execution = app.elements.get("executionChoice");
+  const preset = app.elements.get("providerPreset");
+
+  execution.value = "local_model";
+  execution.listeners.change();
+  assert.deepEqual(preset.children.map((option) => option.textContent), [
+    "Custom provider",
+    "Ollama on this computer",
+  ]);
+  preset.value = "ollama_local";
+  preset.listeners.change();
+  assert.equal(
+    app.elements.get("providerEndpoint").value,
+    "http://127.0.0.1:11434/v1/chat/completions",
+  );
+
+  execution.value = "cloud_model";
+  execution.listeners.change();
+  assert.equal(app.elements.get("providerEndpoint").value, "");
+  assert.deepEqual(preset.children.map((option) => option.textContent), [
+    "Custom provider",
+    "Z.ai API",
+  ]);
 }
 
 async function testBoundedExperimentExplainsAndRequiresExplicitScope() {
@@ -975,6 +1027,10 @@ async function testManagedWorkingTaskShowsRealPassAndIndeterminateProgress() {
       requirements: [{ status: "active", text: "Requested outcome: Audit the setup guide" }],
       events: [{ stage: "act", summary: "Agent pass 5 is active.", checkpoint: "Pass 5 of up to 24" }],
       allowed_actions: [{ action: "stop", enabled: true }],
+      metadata: {
+        updated_at: "2026-07-13T08:01:05Z",
+        observed_at: "2026-07-13T08:20:00Z",
+      },
     },
   });
 
@@ -986,6 +1042,8 @@ async function testManagedWorkingTaskShowsRealPassAndIndeterminateProgress() {
   assert.equal(app.elements.get("checkpoint").textContent, "Pass 5 of up to 24");
   assert.equal(app.elements.get("attemptsValue").textContent, "5");
   assert.match(app.elements.get("eventTimeline").children[0].textContent, /Agent pass 5 is active/);
+  assert.match(app.elements.get("statusUpdated").textContent, /Last progress/);
+  assert.match(app.elements.get("statusUpdated").textContent, /Status checked/);
 }
 
 async function testReturningToSafariRefreshesStatusWithoutOpeningAnotherStream() {
@@ -1184,6 +1242,7 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
   await testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDraft();
   await testPortableUserChoosesProviderIndependentStrategy();
   await testProviderTemplatePrefillsEditableValues();
+  await testLocalAndCloudProviderChoicesStaySeparate();
   await testBoundedExperimentExplainsAndRequiresExplicitScope();
   await testLegacyHumanCanChooseEveryModeWithoutWritingACommand();
   await testGoalStartersAndCompactModeSelectorKeepPlainLanguageDraftState();

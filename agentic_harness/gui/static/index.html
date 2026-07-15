@@ -496,6 +496,7 @@
           <option value="local_model">Local OpenAI-compatible model</option>
           <option value="cloud_model">Cloud OpenAI-compatible model</option>
         </select>
+        <div id="executionDisclosure" class="execution-disclosure" role="note"></div>
         <div id="codingAgentFields">
           <label class="field-label" for="codingAgentChoice">Coding agent</label>
           <select id="codingAgentChoice"><option value="codex">Codex</option><option value="opencode">OpenCode</option><option value="aider">Aider</option><option value="codewhale">CodeWhale</option></select>
@@ -510,6 +511,7 @@
             <option value="custom">Custom OpenAI-compatible provider</option>
           </select>
           <p class="help-text" id="providerPresetHelp">Templates only pre-fill editable values. Your provider account controls model and entitlement availability.</p>
+          <p class="help-text local-model-requirement" id="localModelRequirement" hidden>A compatible model server must already be running. Agentic Harness controls the work and verification; it does not download or host a model for you.</p>
           <label class="field-label" for="providerEndpoint">Chat completions endpoint</label>
           <input id="providerEndpoint" type="url" placeholder="http://127.0.0.1:8000/v1/chat/completions" />
           <label class="field-label" for="providerModel">Model ID</label>
@@ -524,6 +526,11 @@
           </div>
           <label class="confirm-row" id="remoteDataRow" hidden><input id="confirmRemoteData" type="checkbox" /><span>I understand selected file excerpts and tool results will be sent to this remote model endpoint.</span></label>
         </div>
+        <aside class="demo-callout">
+          <strong>No model or cloud account yet?</strong>
+          <p>Try the controlled offline mechanics demo from a terminal. It uses a mock coding agent so you can see failure, repair, and independent verification without sending project data anywhere.</p>
+          <code>agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force</code>
+        </aside>
         <label class="field-label" for="verificationCommand">Default verification command for this workspace</label>
         <input id="verificationCommand" type="text" placeholder="python -m pytest -q" required />
         <details>
