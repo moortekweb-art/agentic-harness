@@ -74,8 +74,11 @@ def test_gui_offers_an_explicitly_scripted_first_success_before_real_setup() -> 
     assert "Practice run" in html
     assert "never touches the project shown above" in html
     assert 'api("/api/demo"' in javascript
+    assert 'api("/api/demo/dismiss"' in javascript
     assert 'api("/api/setup/local-models"' in javascript
     assert "setup.demo?.available !== true" in javascript
+    assert "demo?.managed_overlay === true" in javascript
+    assert "Return to real workspace" in javascript
     assert "document.body.dataset.demo = String(" in javascript
     assert "state.currentTask?.metadata?.demo?.enabled === true" in javascript
     assert 'workerClaim.label || "Scripted worker report (not AI)"' in javascript

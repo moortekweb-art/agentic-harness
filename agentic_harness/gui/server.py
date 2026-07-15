@@ -6,7 +6,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from tempfile import TemporaryDirectory
+from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 import base64
 import hmac
@@ -65,9 +66,7 @@ def serve_gui(
     open_browser: bool = True,
     allow_port_fallback: bool = False,
 ) -> None:
-    if not _is_loopback_host(host) and not os.environ.get(
-        "AGENTIC_HARNESS_GUI_TOKEN", ""
-    ).strip():
+    if not _is_loopback_host(host) and not os.environ.get("AGENTIC_HARNESS_GUI_TOKEN", "").strip():
         raise GuiSecurityError(
             "AGENTIC_HARNESS_GUI_TOKEN is required before binding the GUI beyond loopback"
         )
@@ -148,14 +147,66 @@ def make_handler(
     allowed_hosts: set[str] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     session = GuiSession()
-    embedded = isinstance(service, EmbeddedExecutionBackend)
-    bridge = service
+    embedded_service = service if isinstance(service, EmbeddedExecutionBackend) else None
+    embedded = embedded_service is not None
+    bridge = cast(LocalGoalBridge, service)
+    managed_demo_workspace: TemporaryDirectory[str] | None = None
+    demo_service: EmbeddedExecutionBackend
+    if embedded_service is not None:
+        demo_service = embedded_service
+    else:
+        managed_demo_workspace = TemporaryDirectory(prefix="agentic-harness-managed-demo-host-")
+        demo_service = EmbeddedExecutionBackend(managed_demo_workspace.name)
     auth_token = os.environ.get("AGENTIC_HARNESS_GUI_TOKEN", "").strip()
     rate_limiter = RateLimiter(limit=240, window_seconds=60)
     trusted_hosts = allowed_hosts or {"127.0.0.1", "localhost", "::1"}
 
+    def demo_task() -> dict[str, Any] | None:
+        return demo_service.demo_status()
+
+    def active_embedded_service() -> EmbeddedExecutionBackend | None:
+        if embedded_service is not None:
+            return embedded_service
+        return demo_service if demo_task() is not None else None
+
+    def public_setup() -> dict[str, Any]:
+        if embedded_service is not None:
+            return embedded_service.setup()
+        payload = setup_payload(bridge)
+        demo = dict(demo_service.setup()["demo"])
+        demo.update(
+            {
+                "managed_overlay": True,
+                "summary": (
+                    "Runs the real harness in a temporary practice project without changing "
+                    "the connected managed workspace or its current task."
+                ),
+            }
+        )
+        payload["demo"] = demo
+        return payload
+
+    def public_health() -> dict[str, Any]:
+        if embedded_service is not None:
+            return embedded_service.health()
+        payload = health_payload(bridge)
+        if demo_task() is not None:
+            payload["readiness"] = demo_service.readiness()
+            payload["demo_overlay_active"] = True
+        return payload
+
+    def public_readiness() -> dict[str, Any]:
+        if not embedded and demo_task() is not None:
+            return demo_service.readiness()
+        return (
+            embedded_service.readiness()
+            if embedded_service is not None
+            else readiness_payload(bridge)
+        )
+
     class GuiHandler(BaseHTTPRequestHandler):
         server_version = "AgenticHarnessGUI/0.1"
+        _managed_demo_workspace = managed_demo_workspace
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -171,22 +222,21 @@ def make_handler(
                 return
             if route.startswith("/api/") and not self._allowed(parsed.query):
                 return
+            active = active_embedded_service()
             if route in {"/api/health", "/api/status"}:
-                self._json(service.health() if embedded else health_payload(bridge))
+                self._json(public_health())
             elif route == "/api/modes":
                 self._json(
                     {
-                        "modes": _portable_modes()
-                        if embedded
-                        else modes_payload(),
+                        "modes": _portable_modes() if embedded else modes_payload(),
                         "default": DEFAULT_PUBLIC_STRATEGY if embedded else "guided",
                         "kind": "strategy" if embedded else "managed_route",
                     }
                 )
             elif route == "/api/readiness":
-                self._json(service.readiness() if embedded else readiness_payload(bridge))
+                self._json(public_readiness())
             elif route == "/api/setup":
-                self._json(service.setup() if embedded else setup_payload(bridge))
+                self._json(public_setup())
             elif route == "/api/setup/local-models":
                 if embedded:
                     self._json(service.detect_local_models())
@@ -199,25 +249,25 @@ def make_handler(
                         status=HTTPStatus.BAD_REQUEST,
                     )
             elif route == "/api/tasks":
-                if embedded:
-                    current = service.status()
-                    self._json({"current": current, "tasks": service.history()})
+                if active is not None:
+                    current = active.status()
+                    self._json({"current": current, "tasks": active.history()})
                 else:
                     payload = tasks_payload(bridge)
                     payload["current"] = session.record(payload["current"])
                     payload["tasks"] = session.history() or payload["tasks"]
                     self._json(payload)
             elif route == "/api/tasks/current":
-                if embedded:
-                    self._json(service.status())
+                if active is not None:
+                    self._json(active.status())
                 else:
                     task = session.record(status_task(bridge))
                     self._json(task)
             elif route == "/api/tasks/history":
                 query = parse_qs(parsed.query).get("q", [""])[0]
                 self._json(
-                    {"tasks": service.history(query=query)}
-                    if embedded
+                    {"tasks": active.history(query=query)}
+                    if active is not None
                     else {"tasks": session.history(query=query)}
                 )
             elif route == "/api/tasks/current/events":
@@ -226,22 +276,22 @@ def make_handler(
                     after = max(0, int(after_raw))
                 except ValueError:
                     after = 0
-                self._json({"events": service.events(after=after) if embedded else []})
-            elif route == "/api/tasks/current/file" and embedded:
+                self._json({"events": active.events(after=after) if active is not None else []})
+            elif route == "/api/tasks/current/file" and active is not None:
                 path = parse_qs(parsed.query).get("path", [""])[0]
                 goal_id = parse_qs(parsed.query).get("goal_id", [""])[0]
                 try:
-                    self._json(service.preview_file(path, goal_id=goal_id))
+                    self._json(active.preview_file(path, goal_id=goal_id))
                 except (ValueError, OSError) as exc:
                     self._json(
                         {"ok": False, "error": str(exc)},
                         status=HTTPStatus.BAD_REQUEST,
                     )
-            elif route == "/api/tasks/current/artifact" and embedded:
+            elif route == "/api/tasks/current/artifact" and active is not None:
                 path = parse_qs(parsed.query).get("path", [""])[0]
                 goal_id = parse_qs(parsed.query).get("goal_id", [""])[0]
                 try:
-                    self._json(service.preview_artifact(path, goal_id=goal_id))
+                    self._json(active.preview_artifact(path, goal_id=goal_id))
                 except (ValueError, OSError) as exc:
                     self._json(
                         {"ok": False, "error": str(exc)},
@@ -249,14 +299,14 @@ def make_handler(
                     )
             elif route == "/api/tasks/current/details":
                 self._json(
-                    {"task": service.status(), "raw": {}}
-                    if embedded
+                    {"task": active.status(), "raw": {}}
+                    if active is not None
                     else details_payload(bridge)
                 )
             elif route == "/api/session":
                 self._json(
-                    {"version": 2, "tasks": service.history()}
-                    if embedded
+                    {"version": 2, "tasks": active.history()}
+                    if active is not None
                     else session.export()
                 )
             elif route.startswith("/api/"):
@@ -276,18 +326,20 @@ def make_handler(
             body = self._read_json()
             if body is None:
                 return
+            active = active_embedded_service()
             if route == "/api/demo":
-                if not embedded:
+                try:
+                    self._json(demo_service.start_demo())
+                except (ValueError, OSError, HarnessError) as exc:
                     self._json(
-                        {
-                            "ok": False,
-                            "error": "The safe demo is available only in a self-hosted workspace.",
-                        },
+                        {"ok": False, "error": str(exc)},
                         status=HTTPStatus.BAD_REQUEST,
                     )
-                    return
+            elif route == "/api/demo/dismiss":
                 try:
-                    self._json(service.start_demo())
+                    demo_service.clear_demo()
+                    task = service.status() if embedded else session.record(status_task(bridge))
+                    self._json(task)
                 except (ValueError, OSError, HarnessError) as exc:
                     self._json(
                         {"ok": False, "error": str(exc)},
@@ -297,6 +349,15 @@ def make_handler(
                 if embedded:
                     self._json(service.start(body))
                 else:
+                    if active is not None:
+                        try:
+                            demo_service.clear_demo()
+                        except ValueError as exc:
+                            self._json(
+                                {"ok": False, "error": str(exc)},
+                                status=HTTPStatus.BAD_REQUEST,
+                            )
+                            return
                     task = session.enrich(start_task(bridge, body), body)
                     session.record(task)
                     self._json(task)
@@ -328,9 +389,7 @@ def make_handler(
                     )
                     return
                 try:
-                    credential = service.set_session_credential(
-                        str(body.get("api_key") or "")
-                    )
+                    credential = service.set_session_credential(str(body.get("api_key") or ""))
                     self._json({"ok": True, "credential": credential})
                 except (ValueError, OSError, HarnessError) as exc:
                     self._json(
@@ -355,9 +414,12 @@ def make_handler(
                         status=HTTPStatus.BAD_REQUEST,
                     )
             elif route == "/api/tasks/bulk":
-                if embedded:
+                if active is not None:
                     self._json(
-                        {"ok": False, "error": "The embedded backend runs one visible goal at a time."},
+                        {
+                            "ok": False,
+                            "error": "The embedded backend runs one visible goal at a time.",
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                     )
                 else:
@@ -369,37 +431,40 @@ def make_handler(
                             tasks.append(task)
                     self._json({"tasks": tasks})
             elif route == "/api/tasks/current/watch":
-                if embedded:
-                    self._json(service.status())
+                if active is not None:
+                    self._json(active.status())
                 else:
                     task = watch_task(bridge)
                     task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/accept":
-                if embedded:
-                    self._json(service.accept())
+                if active is not None:
+                    self._json(active.accept())
                 else:
                     task = command_task(bridge, "accept", body)
                     task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/continue":
-                if embedded:
-                    self._json(service.continue_task(str(body.get("feedback") or "")))
+                if active is not None:
+                    self._json(active.continue_task(str(body.get("feedback") or "")))
                 else:
                     task = command_task(bridge, "continue", body)
                     task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/stop":
-                if embedded:
-                    self._json(service.stop())
+                if active is not None:
+                    self._json(active.stop())
                 else:
                     task = command_task(bridge, "stop", body)
                     task = session.record(task)
                     self._json(task)
             elif route == "/api/session/import":
-                if embedded:
+                if active is not None:
                     self._json(
-                        {"ok": False, "error": "Durable engine history cannot be replaced by a browser import."},
+                        {
+                            "ok": False,
+                            "error": "Durable engine history cannot be replaced by a browser import.",
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                     )
                 else:
@@ -466,9 +531,7 @@ def make_handler(
             return value
 
         def _json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
-            encoded = redact_secrets(
-                json.dumps(payload, indent=2, sort_keys=True)
-            ).encode("utf-8")
+            encoded = redact_secrets(json.dumps(payload, indent=2, sort_keys=True)).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))
@@ -486,12 +549,17 @@ def make_handler(
         def _allowed(self, query: str) -> bool:
             client = self.client_address[0] if self.client_address else "local"
             if not rate_limiter.allowed(client):
-                self._json({"ok": False, "error": "rate limit exceeded"}, status=HTTPStatus.TOO_MANY_REQUESTS)
+                self._json(
+                    {"ok": False, "error": "rate limit exceeded"},
+                    status=HTTPStatus.TOO_MANY_REQUESTS,
+                )
                 return False
             if not auth_token:
                 return True
             supplied = self.headers.get("Authorization", "")
-            bearer = supplied.removeprefix("Bearer ").strip() if supplied.startswith("Bearer ") else ""
+            bearer = (
+                supplied.removeprefix("Bearer ").strip() if supplied.startswith("Bearer ") else ""
+            )
             if _token_matches(bearer, auth_token):
                 return True
             self._json({"ok": False, "error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
@@ -547,14 +615,21 @@ def make_handler(
 
         def _websocket_status(self) -> None:
             if self.headers.get("Upgrade", "").lower() != "websocket":
-                self._json({"ok": False, "error": "websocket upgrade required"}, status=HTTPStatus.BAD_REQUEST)
+                self._json(
+                    {"ok": False, "error": "websocket upgrade required"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
                 return
             key = self.headers.get("Sec-WebSocket-Key", "").strip()
             if not key:
-                self._json({"ok": False, "error": "missing websocket key"}, status=HTTPStatus.BAD_REQUEST)
+                self._json(
+                    {"ok": False, "error": "missing websocket key"}, status=HTTPStatus.BAD_REQUEST
+                )
                 return
             accept = base64.b64encode(
-                hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+                hashlib.sha1(
+                    (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
+                ).digest()
             ).decode("ascii")
             self.send_response(HTTPStatus.SWITCHING_PROTOCOLS)
             self.send_header("Upgrade", "websocket")
@@ -564,14 +639,15 @@ def make_handler(
             next_monitor_at = time.monotonic() + STREAM_MONITOR_INTERVAL_SECONDS
             while True:
                 try:
-                    if embedded:
-                        task = service.status()
+                    active = active_embedded_service()
+                    if active is not None:
+                        task = active.status()
                     elif time.monotonic() >= next_monitor_at:
                         task = watch_task(bridge)
                         next_monitor_at = time.monotonic() + STREAM_MONITOR_INTERVAL_SECONDS
                     else:
                         task = status_task(bridge)
-                    if not embedded:
+                    if active is None and not embedded:
                         task = session.record(task)
                     message = redact_secrets(json.dumps(task, sort_keys=True))
                     self.wfile.write(_websocket_text_frame(message))
@@ -634,8 +710,16 @@ class GuiSession:
             value = str(source.get(key, "")).strip()
             if value:
                 metadata[key] = value
-        metadata["safe_areas"] = [str(item) for item in source.get("safe_areas", [])] if isinstance(source.get("safe_areas"), list) else []
-        metadata["checks"] = [str(item) for item in source.get("checks", [])] if isinstance(source.get("checks"), list) else []
+        metadata["safe_areas"] = (
+            [str(item) for item in source.get("safe_areas", [])]
+            if isinstance(source.get("safe_areas"), list)
+            else []
+        )
+        metadata["checks"] = (
+            [str(item) for item in source.get("checks", [])]
+            if isinstance(source.get("checks"), list)
+            else []
+        )
         task["metadata"] = metadata
         return task
 
@@ -674,7 +758,9 @@ class GuiSession:
         if not entry.get("id"):
             entry["id"] = f"task-{self._next_id}"
             self._next_id += 1
-        self._history = [item for item in self._history if item.get("summary") != entry.get("summary")]
+        self._history = [
+            item for item in self._history if item.get("summary") != entry.get("summary")
+        ]
         self._history.insert(0, entry)
         self._history = self._history[:100]
         return task

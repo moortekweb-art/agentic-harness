@@ -904,6 +904,18 @@ def test_gui_server_get_api_routes_return_json() -> None:
             "Managed runtime. The active task shows whether its planner and executor are "
             "local, cloud, or mixed."
         ),
+        "demo": {
+            "available": True,
+            "kind": "scripted_practice",
+            "managed_overlay": True,
+            "model_used": False,
+            "state": "ready",
+            "summary": (
+                "Runs the real harness in a temporary practice project without changing "
+                "the connected managed workspace or its current task."
+            ),
+            "workspace": "isolated_temporary",
+        },
     }
     assert health["no_babysitting"]["enabled"] is True
     assert health["readiness"]["agent_loop"]["stage"] == "Act"
@@ -1185,17 +1197,33 @@ def test_embedded_gui_exposes_safe_demo_and_local_model_detection_routes(tmp_pat
     assert finished["result_category"] == "verified_done"
 
 
-def test_managed_gui_rejects_self_hosted_demo_route() -> None:
-    with gui_server(FakeBridge()) as base_url:
-        result = post_error(
-            base_url,
-            "/api/demo",
-            b"{}",
-            headers={"Content-Type": "application/json"},
-        )
+def test_managed_gui_runs_and_dismisses_isolated_demo_without_changing_real_task() -> None:
+    bridge = FakeBridge()
+    with gui_server(bridge) as base_url:
+        setup = get_json(base_url, "/api/setup")
+        managed_before = get_json(base_url, "/api/tasks/current")
+        started = post_json(base_url, "/api/demo", {})
+        deadline = time.monotonic() + 5
+        finished = started
+        while time.monotonic() < deadline:
+            finished = get_json(base_url, "/api/tasks/current")
+            if finished.get("status") in {"done", "blocked", "failed"}:
+                break
+            time.sleep(0.02)
+        dismissed = post_json(base_url, "/api/demo/dismiss", {})
+        managed_after = get_json(base_url, "/api/tasks/current")
 
-    assert result.code == 400
-    assert "self-hosted workspace" in str(result.payload["error"])
+    assert setup["configured"] is True
+    assert setup["editable"] is False
+    assert setup["demo"]["available"] is True  # type: ignore[index]
+    assert setup["demo"]["managed_overlay"] is True  # type: ignore[index]
+    assert managed_before["objective"] == "test task"
+    assert started["metadata"]["demo"]["model_used"] is False  # type: ignore[index]
+    assert finished["status"] == "done"
+    assert finished["result_category"] == "verified_done"
+    assert dismissed["objective"] == "test task"
+    assert managed_after["objective"] == "test task"
+    assert bridge.commands == []
 
 
 def test_gui_frontend_plumbs_token_without_persisting_or_exporting_it() -> None:

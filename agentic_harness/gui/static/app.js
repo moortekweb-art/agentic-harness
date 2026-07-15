@@ -905,9 +905,12 @@ function renderDetectedAgents(setup, worker) {
 
 function updateDemoCallout(task = null) {
   const demo = state.setup?.demo;
+  const managedOverlay = demo?.managed_overlay === true;
   const available = demo?.available === true
-    && state.setup?.editable !== false
-    && state.setup?.configured !== true;
+    && (managedOverlay || (
+      state.setup?.editable !== false
+      && state.setup?.configured !== true
+    ));
   els.demoCallout.hidden = !available;
   if (!available) return;
   const isDemo = task?.metadata?.demo?.enabled === true;
@@ -923,12 +926,22 @@ function updateDemoCallout(task = null) {
     els.demoButtonLabel.textContent = "Run demo again";
   } else {
     els.demoTitle.textContent = "See a verified result in about a minute";
-    els.demoSummary.textContent = "Run the real harness on a temporary practice project with a scripted worker. It uses no AI model or API key, and it never touches the project shown above.";
+    els.demoSummary.textContent = managedOverlay
+      ? "Run the real harness on a temporary practice project with a scripted worker. It uses no AI model or API key, and it never changes the connected managed workspace or its current task."
+      : "Run the real harness on a temporary practice project with a scripted worker. It uses no AI model or API key, and it never touches the project shown above.";
     els.demoButtonLabel.textContent = "Try safe demo";
   }
   els.demoButton.disabled = state.busy || active;
   els.setupDemoButton.disabled = state.busy || active;
-  els.setupDemoButton.textContent = verified ? "Run safe demo again" : active ? "Demo running…" : "Try safe demo instead";
+  els.demoSetupButton.hidden = managedOverlay ? !isDemo || active : false;
+  els.demoSetupButton.textContent = managedOverlay
+    ? "Return to real workspace"
+    : "Connect real work";
+  els.setupDemoButton.textContent = verified
+    ? "Run safe demo again"
+    : active
+      ? "Demo running…"
+      : "Try safe demo instead";
 }
 
 function renderSetup(setup) {
@@ -1183,6 +1196,20 @@ async function startDemo() {
       body: JSON.stringify({}),
     });
     if (els.setupDialog.open) els.setupDialog.close();
+    state.pendingStartObjective = "";
+    state.viewingHistoryId = "";
+    state.liveTask = task;
+    renderTask(task);
+    await Promise.all([refreshHistory(), refreshSetup()]);
+  });
+}
+
+async function dismissDemo() {
+  await runAction(async () => {
+    const task = await api("/api/demo/dismiss", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
     state.pendingStartObjective = "";
     state.viewingHistoryId = "";
     state.liveTask = task;
@@ -1524,7 +1551,13 @@ els.startButton.addEventListener("click", startWork);
 els.checkButton.addEventListener("click", () => runAction(() => refreshTask(true)));
 els.setupButton.addEventListener("click", () => els.setupDialog.showModal());
 els.demoButton.addEventListener("click", startDemo);
-els.demoSetupButton.addEventListener("click", () => els.setupDialog.showModal());
+els.demoSetupButton.addEventListener("click", () => {
+  if (state.setup?.demo?.managed_overlay === true) {
+    dismissDemo();
+  } else {
+    els.setupDialog.showModal();
+  }
+});
 els.setupDemoButton.addEventListener("click", startDemo);
 els.closeSetupButton.addEventListener("click", () => els.setupDialog.close());
 els.setupForm.addEventListener("submit", saveSetup);

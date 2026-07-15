@@ -93,6 +93,7 @@ _LOCAL_MODEL_PROBES = (
 _DEMO_OBJECTIVE = "Fix the deliberately broken calculator and prove that adding 2 and 3 returns 5."
 _DEMO_CHECK = "from calculator import add; assert add(2, 3) == 5"
 _DEMO_CHECK_LABEL = format_command(["python", "-c", _DEMO_CHECK])
+_ACTIVE_DEMO_STATUSES = frozenset({"starting", "working", "checking", "stopping", "needs_review"})
 _GUI_DEMO_WORKER = '''"""Scripted practice worker for the isolated GUI demo."""
 
 from __future__ import annotations
@@ -215,13 +216,7 @@ class EmbeddedExecutionBackend:
 
     def _readiness_locked(self) -> dict[str, Any]:
         demo_task = self._demo_status()
-        if demo_task is not None and demo_task["status"] in {
-            "starting",
-            "working",
-            "checking",
-            "stopping",
-            "needs_review",
-        }:
+        if demo_task is not None and demo_task["status"] in _ACTIVE_DEMO_STATUSES:
             return {
                 "state": "working",
                 "label": "Safe demo running",
@@ -435,13 +430,7 @@ class EmbeddedExecutionBackend:
 
         with self._config_lock:
             current_demo = self._demo_status()
-            if current_demo is not None and current_demo["status"] in {
-                "starting",
-                "working",
-                "checking",
-                "stopping",
-                "needs_review",
-            }:
+            if current_demo is not None and current_demo["status"] in _ACTIVE_DEMO_STATUSES:
                 return current_demo
             current = self.store.read_current_goal()
             if self._driver_active() or (current is not None and not _durably_terminal(current)):
@@ -499,6 +488,21 @@ class EmbeddedExecutionBackend:
         if self._demo_backend is None:
             return None
         return _tag_demo_task(self._demo_backend.status())
+
+    def demo_status(self) -> dict[str, Any] | None:
+        """Return the isolated practice task without exposing its temporary path."""
+
+        with self._config_lock:
+            return self._demo_status()
+
+    def clear_demo(self) -> None:
+        """Dismiss a terminal practice task and return to the real workspace."""
+
+        with self._config_lock:
+            current = self._demo_status()
+            if current is not None and current.get("status") in _ACTIVE_DEMO_STATUSES:
+                raise ValueError("Wait for the safe demo to finish before returning to real work.")
+            self._dispose_demo()
 
     def _dispose_demo(self) -> None:
         workspace = self._demo_workspace
