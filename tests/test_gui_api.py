@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import tomllib
 import urllib.error
 import urllib.request
@@ -110,9 +111,7 @@ def test_managed_task_explains_hybrid_cloud_planner_and_local_execution() -> Non
     assert task["metadata"]["execution"] == {
         "label": "Hybrid: gpt-5.5 planner + local model",
         "data_location": "cloud_and_local",
-        "detail": (
-            "Planning uses gpt-5.5; execution uses local-node1-vllm through opencode."
-        ),
+        "detail": ("Planning uses gpt-5.5; execution uses local-node1-vllm through opencode."),
     }
     assert task["metadata"]["updated_at"] == "2026-07-15T04:24:54Z"
     assert task["metadata"]["observed_at"] == "2026-07-15T04:45:00Z"
@@ -340,8 +339,7 @@ def test_gui_cards_use_subtle_depth_tokens() -> None:
 
     css = Path("agentic_harness/gui/static/styles.css").read_text(encoding="utf-8")
     token_values = {
-        token: re.search(rf"--{token}-shadow:\s*([^;]+);", css)
-        for token in ("panel", "card")
+        token: re.search(rf"--{token}-shadow:\s*([^;]+);", css) for token in ("panel", "card")
     }
     shadow_pattern = re.compile(
         r"(-?\d+(?:\.\d+)?)(?:px)?\s+(-?\d+(?:\.\d+)?)(?:px)?\s+"
@@ -411,15 +409,15 @@ def test_task_summary_hides_backend_actors_but_preserves_raw_evidence() -> None:
     )
     assert "hermes" not in task["summary"].lower()
     assert "node1" not in task["summary"].lower()
-    assert task["advanced_details"]["payload"]["capabilities"]["current_state"][
-        "recommended_action"
-    ] == backend_summary
+    assert (
+        task["advanced_details"]["payload"]["capabilities"]["current_state"]["recommended_action"]
+        == backend_summary
+    )
 
 
 def test_ready_summary_hides_backend_control_language() -> None:
     backend_summary = (
-        "No local goal is running. Hermes may start one only on explicit "
-        "operator/Codex request."
+        "No local goal is running. Hermes may start one only on explicit operator/Codex request."
     )
     result = CommandResult(
         args=("local-goal", "status", "--json"),
@@ -441,9 +439,10 @@ def test_ready_summary_hides_backend_control_language() -> None:
     assert task["summary"] == "The assistant is ready for a new task."
     for term in ("local goal", "hermes", "operator", "codex"):
         assert term not in task["summary"].lower()
-    assert task["advanced_details"]["payload"]["capabilities"]["current_state"][
-        "recommended_action"
-    ] == backend_summary
+    assert (
+        task["advanced_details"]["payload"]["capabilities"]["current_state"]["recommended_action"]
+        == backend_summary
+    )
 
 
 def test_task_summary_hides_internal_generated_objective() -> None:
@@ -539,9 +538,7 @@ def test_external_acceptance_receipt_must_match_active_run() -> None:
                     "run_id": "different-run",
                     "candidate_digest": "a" * 64,
                     "validation": {"level": "harness_verified"},
-                    "verification": [
-                        {"command": "pytest -q", "returncode": 0, "passed": True}
-                    ],
+                    "verification": [{"command": "pytest -q", "returncode": 0, "passed": True}],
                 },
             }
         ),
@@ -568,9 +565,7 @@ def test_matching_harness_acceptance_receipt_is_done() -> None:
                     "run_id": "run-1",
                     "candidate_digest": "a" * 64,
                     "validation": {"level": "harness_verified"},
-                    "verification": [
-                        {"command": "pytest -q", "returncode": 0, "passed": True}
-                    ],
+                    "verification": [{"command": "pytest -q", "returncode": 0, "passed": True}],
                 },
             }
         ),
@@ -598,9 +593,7 @@ def test_acceptance_receipt_rejects_boolean_returncode() -> None:
                     "run_id": "run-1",
                     "candidate_digest": "a" * 64,
                     "validation": {"level": "harness_verified"},
-                    "verification": [
-                        {"command": "pytest -q", "returncode": False, "passed": True}
-                    ],
+                    "verification": [{"command": "pytest -q", "returncode": False, "passed": True}],
                 },
             }
         ),
@@ -960,7 +953,9 @@ def test_gui_server_unknown_api_route_returns_json_404() -> None:
     assert payload == {"ok": False, "error": "not found"}
 
 
-def test_gui_console_entrypoint_forwards_launch_options_without_opening(monkeypatch, tmp_path) -> None:
+def test_gui_console_entrypoint_forwards_launch_options_without_opening(
+    monkeypatch, tmp_path
+) -> None:
     from agentic_harness.gui import cli as gui_cli
 
     calls: list[dict[str, object]] = []
@@ -1166,6 +1161,41 @@ def test_gui_rejects_session_key_on_connection_test_from_non_loopback_client(tmp
 
     assert result.code == 400
     assert "loopback" in str(result.payload["error"]).lower()
+
+
+def test_embedded_gui_exposes_safe_demo_and_local_model_detection_routes(tmp_path) -> None:
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with gui_server(backend) as base_url:  # type: ignore[arg-type]
+        setup = get_json(base_url, "/api/setup")
+        detection = get_json(base_url, "/api/setup/local-models")
+        started = post_json(base_url, "/api/demo", {})
+        deadline = time.monotonic() + 5
+        finished = started
+        while time.monotonic() < deadline:
+            finished = get_json(base_url, "/api/tasks/current")
+            if finished.get("status") in {"done", "blocked", "failed"}:
+                break
+            time.sleep(0.02)
+
+    assert setup["demo"]["available"] is True  # type: ignore[index]
+    assert detection["status"] in {"found", "not_found"}
+    assert started["metadata"]["demo"]["model_used"] is False  # type: ignore[index]
+    assert finished["status"] == "done"
+    assert finished["result_category"] == "verified_done"
+
+
+def test_managed_gui_rejects_self_hosted_demo_route() -> None:
+    with gui_server(FakeBridge()) as base_url:
+        result = post_error(
+            base_url,
+            "/api/demo",
+            b"{}",
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 400
+    assert "self-hosted workspace" in str(result.payload["error"])
 
 
 def test_gui_frontend_plumbs_token_without_persisting_or_exporting_it() -> None:
@@ -1386,7 +1416,19 @@ def test_gui_server_post_task_workflow_routes() -> None:
     assert accepted["status"] == "done"
     assert stopped["status"] == "stopped"
     assert bridge.commands == [
-        ["enqueue", "--harness-contract", "agentic_harness.external_candidate.v1", "--planner", "gpt-5.5", "--executor", "opencode", "--executor-worker", "opencode-kimi-build", "--goal", "GOAL_CONTENT"],
+        [
+            "enqueue",
+            "--harness-contract",
+            "agentic_harness.external_candidate.v1",
+            "--planner",
+            "gpt-5.5",
+            "--executor",
+            "opencode",
+            "--executor-worker",
+            "opencode-kimi-build",
+            "--goal",
+            "GOAL_CONTENT",
+        ],
         ["monitor", "--auto-continue", "--auto-dispatch", "--auto-commit-owned", "--json"],
         ["continue", "--feedback", "keep going"],
         ["accept"],
@@ -1468,7 +1510,7 @@ def test_gui_history_selection_survives_live_updates_and_previews_its_own_eviden
     assert "goal_id" in app
     assert "if (force || !state.viewingHistoryId)" in app
     assert "state.viewingHistoryId = task.id" in app
-    assert "state.viewingHistoryId = \"\"" in app
+    assert 'state.viewingHistoryId = ""' in app
 
 
 def test_gui_server_rejects_non_json_task_post() -> None:
@@ -1641,7 +1683,6 @@ def test_gui_server_rejects_cross_origin_websocket() -> None:
     assert b"cross-origin request rejected" in response
 
 
-
 class FakeBridge:
     local_goal = Path("/tmp/local-goal")
     doc_root = Path("/tmp/docs")
@@ -1675,8 +1716,7 @@ class FakeBridge:
                 args[0],
                 0,
                 (
-                    '{"external_candidate_contracts":'
-                    '["agentic_harness.external_candidate.v1"]}'
+                    '{"external_candidate_contracts":["agentic_harness.external_candidate.v1"]}'
                     if args[0][-2:] == ["capabilities", "--json"]
                     else "queued\n"
                 ),
@@ -1695,14 +1735,24 @@ class FakeBridge:
         return CommandResult(result.args, 0, "queued\n", "")
 
     def status(self, *, json_output: bool = False) -> CommandResult:
-        return CommandResult(("local-goal", "status"), 0, '{"active_goal": {"status": "running", "objective": "test task"}}', "")
+        return CommandResult(
+            ("local-goal", "status"),
+            0,
+            '{"active_goal": {"status": "running", "objective": "test task"}}',
+            "",
+        )
 
     def monitor(self, *, json_output: bool = False) -> CommandResult:
         command = ["monitor", "--auto-continue", "--auto-dispatch", "--auto-commit-owned"]
         if json_output:
             command.append("--json")
         self.commands.append(command)
-        return CommandResult(tuple(command), 0, '{"active_goal": {"status": "running", "objective": "test task"}}', "")
+        return CommandResult(
+            tuple(command),
+            0,
+            '{"active_goal": {"status": "running", "objective": "test task"}}',
+            "",
+        )
 
     def run(self, args: list[str]) -> CommandResult:
         self.commands.append(args)
@@ -1731,8 +1781,9 @@ class FakeBridge:
             )
         if args == ["stop"]:
             return CommandResult(tuple(args), 0, '{"status": "stopped"}', "")
-        return CommandResult(tuple(args), 0, '{"active_goal": {"status": "running", "objective": "test task"}}', "")
-
+        return CommandResult(
+            tuple(args), 0, '{"active_goal": {"status": "running", "objective": "test task"}}', ""
+        )
 
 
 class ReviewBridge(FakeBridge):
@@ -1849,7 +1900,6 @@ def post_error(
         payload = json.loads(exc.read().decode("utf-8"))
         return HttpErrorResult(exc.code, payload)
     raise AssertionError("request should have failed")
-
 
 
 def _busy_port_with_free_successor() -> socket.socket:

@@ -22,6 +22,12 @@ def test_gui_exposes_setup_goal_progress_and_result_without_machine_specific_cop
         'id="testConnectionButton"',
         'id="connectionResult"',
         'id="workspacePath"',
+        'id="demoCallout"',
+        'id="demoButton"',
+        'id="demoSetupButton"',
+        'id="setupDemoButton"',
+        'id="localModelDetection"',
+        'id="useDetectedModelButton"',
         'id="starterCreate"',
         'id="starterFix"',
         'id="starterAudit"',
@@ -58,16 +64,37 @@ def test_gui_exposes_setup_goal_progress_and_result_without_machine_specific_cop
         assert machine_specific.lower() not in html.lower()
 
 
+def test_gui_offers_an_explicitly_scripted_first_success_before_real_setup() -> None:
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    javascript = (STATIC / "app.js").read_text(encoding="utf-8")
+    styles = (STATIC / "styles.css").read_text(encoding="utf-8")
+
+    assert "No setup required" in html
+    assert "It uses no AI model or API key" in html
+    assert "Practice run" in html
+    assert "never touches the project shown above" in html
+    assert 'api("/api/demo"' in javascript
+    assert 'api("/api/setup/local-models"' in javascript
+    assert "setup.demo?.available !== true" in javascript
+    assert "document.body.dataset.demo = String(" in javascript
+    assert "state.currentTask?.metadata?.demo?.enabled === true" in javascript
+    assert 'workerClaim.label || "Scripted worker report (not AI)"' in javascript
+    assert "(detected)" in javascript
+    assert "template.key === previous" in javascript
+    assert ".first-success-card" in styles
+    assert ".local-model-detection" in styles
+
+
 def test_gui_never_persists_provider_key_or_puts_gui_token_in_websocket_url() -> None:
     javascript = (STATIC / "app.js").read_text(encoding="utf-8")
 
     assert 'api("/api/setup"' in javascript
     assert 'api("/api/setup/credential"' in javascript
     assert 'api("/api/setup/test"' in javascript
-    assert "providerApiKey.value = \"\"" in javascript
+    assert 'providerApiKey.value = ""' in javascript
     assert "api_key: els.providerApiKey.value" in javascript
-    assert "localStorage.setItem(\"api" not in javascript
-    assert "sessionStorage.setItem(\"api" not in javascript
+    assert 'localStorage.setItem("api' not in javascript
+    assert 'sessionStorage.setItem("api' not in javascript
     assert "encodeURIComponent(token)" not in javascript
     assert "tokenQuery" not in javascript
 

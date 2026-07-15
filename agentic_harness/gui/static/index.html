@@ -270,6 +270,22 @@
         <span id="executionSummary">Execution setup not loaded</span>
       </div>
 
+      <section id="demoCallout" class="first-success-card" aria-labelledby="demoTitle" hidden>
+        <div>
+          <p class="eyebrow">No setup required</p>
+          <h2 id="demoTitle">See a verified result in about a minute</h2>
+          <p id="demoSummary">Run the real harness on a temporary practice project with a scripted worker. It uses no AI model or API key, and it never touches the project shown above.</p>
+          <p class="first-success-note">Practice run — this demonstrates the workflow and evidence, not model quality.</p>
+        </div>
+        <div class="first-success-actions">
+          <button type="button" class="primary" id="demoButton">
+            <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>
+            <span id="demoButtonLabel">Try safe demo</span>
+          </button>
+          <button type="button" id="demoSetupButton">Connect real work</button>
+        </div>
+      </section>
+
       <section class="workbench">
         <div class="start-panel">
           <div class="section-heading">
@@ -512,6 +528,11 @@
           </select>
           <p class="help-text" id="providerPresetHelp">Templates only pre-fill editable values. Your provider account controls model and entitlement availability.</p>
           <p class="help-text local-model-requirement" id="localModelRequirement" hidden>A compatible model server must already be running. Agentic Harness controls the work and verification; it does not download or host a model for you.</p>
+          <div class="local-model-detection" id="localModelDetectionRow" role="status" hidden>
+            <span id="localModelDetection">Checking this computer for Ollama and LM Studio…</span>
+            <button type="button" id="useDetectedModelButton" hidden>Use detected local model</button>
+            <button type="button" id="checkLocalModelsButton">Check again</button>
+          </div>
           <label class="field-label" for="providerEndpoint">Chat completions endpoint</label>
           <input id="providerEndpoint" type="url" placeholder="http://127.0.0.1:8000/v1/chat/completions" />
           <label class="field-label" for="providerModel">Model ID</label>
@@ -528,8 +549,8 @@
         </div>
         <aside class="demo-callout">
           <strong>No model or cloud account yet?</strong>
-          <p>Try the controlled offline mechanics demo from a terminal. It uses a mock coding agent so you can see failure, repair, and independent verification without sending project data anywhere.</p>
-          <code>agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force</code>
+          <p>Try a controlled practice run in the GUI. A scripted worker makes an intentional mistake, repairs it, and must pass an independent check. No AI model, API key, or selected-project access is used.</p>
+          <button type="button" id="setupDemoButton">Try safe demo instead</button>
         </aside>
         <label class="field-label" for="verificationCommand">Default verification command for this workspace</label>
         <input id="verificationCommand" type="text" placeholder="python -m pytest -q" required />

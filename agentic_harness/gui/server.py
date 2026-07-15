@@ -187,6 +187,17 @@ def make_handler(
                 self._json(service.readiness() if embedded else readiness_payload(bridge))
             elif route == "/api/setup":
                 self._json(service.setup() if embedded else setup_payload(bridge))
+            elif route == "/api/setup/local-models":
+                if embedded:
+                    self._json(service.detect_local_models())
+                else:
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "Local model detection is available only in a self-hosted workspace.",
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
             elif route == "/api/tasks":
                 if embedded:
                     current = service.status()
@@ -265,7 +276,24 @@ def make_handler(
             body = self._read_json()
             if body is None:
                 return
-            if route == "/api/tasks":
+            if route == "/api/demo":
+                if not embedded:
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "The safe demo is available only in a self-hosted workspace.",
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                try:
+                    self._json(service.start_demo())
+                except (ValueError, OSError, HarnessError) as exc:
+                    self._json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+            elif route == "/api/tasks":
                 if embedded:
                     self._json(service.start(body))
                 else:

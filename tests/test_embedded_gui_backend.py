@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from agentic_harness.gui import backend as gui_backend_module
 from agentic_harness.cli import write_goal_report
 from agentic_harness.core.artifacts import ArtifactStore
 from agentic_harness.core.autonomy import AutonomousRunner
@@ -148,9 +149,7 @@ def test_bounded_experiment_rejects_unenforced_installed_agent_scope(tmp_path) -
     )
 
     assert task["status"] == "blocked"
-    assert task["allowed_actions"] == [
-        {"action": "edit_strategy", "enabled": True}
-    ]
+    assert task["allowed_actions"] == [{"action": "edit_strategy", "enabled": True}]
     assert "built-in model worker" in task["summary"]
 
 
@@ -193,9 +192,7 @@ def test_terminal_state_waits_for_the_driver_to_quiesce(tmp_path) -> None:
     try:
         visible = backend.status()
         readiness = backend.readiness()
-        current_history = next(
-            row for row in backend.history() if row["id"] == visible["id"]
-        )
+        current_history = next(row for row in backend.history() if row["id"] == visible["id"])
     finally:
         release.set()
         active_driver.join(timeout=5)
@@ -253,14 +250,20 @@ def test_terminal_history_keeps_each_goals_original_changed_files(tmp_path) -> N
     assert "b.txt" not in first_paths
     assert "b.txt" in second_paths
     first_report = next(path for path in first.artifacts if Path(path).name == "report.md")
-    assert "Result: Verified done" in EmbeddedExecutionBackend(tmp_path).preview_artifact(
-        first_report,
-        goal_id=first.id,
-    )["content"]
-    assert EmbeddedExecutionBackend(tmp_path).preview_file(
-        "a.txt",
-        goal_id=first.id,
-    )["content"] == "a\n"
+    assert (
+        "Result: Verified done"
+        in EmbeddedExecutionBackend(tmp_path).preview_artifact(
+            first_report,
+            goal_id=first.id,
+        )["content"]
+    )
+    assert (
+        EmbeddedExecutionBackend(tmp_path).preview_file(
+            "a.txt",
+            goal_id=first.id,
+        )["content"]
+        == "a\n"
+    )
     with pytest.raises(ValueError, match="changed file"):
         EmbeddedExecutionBackend(tmp_path).preview_file("b.txt", goal_id=first.id)
 
@@ -367,6 +370,102 @@ def test_embedded_backend_reports_setup_needed_without_project_config(tmp_path) 
     assert task["allowed_actions"][0]["action"] == "setup"
 
 
+def test_safe_demo_runs_without_setup_credentials_or_selected_workspace_access(tmp_path) -> None:
+    selected_project_file = tmp_path / "keep-me.txt"
+    selected_project_file.write_text("untouched\n", encoding="utf-8")
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    setup = backend.setup()
+    started = backend.start_demo()
+    finished = _wait_for_terminal(backend)
+
+    assert setup["configured"] is False
+    assert setup["demo"] == {
+        "available": True,
+        "kind": "scripted_practice",
+        "model_used": False,
+        "workspace": "isolated_temporary",
+        "summary": (
+            "Runs the real harness in a temporary practice project with a scripted "
+            "worker. No API key, model server, or selected-workspace access is used."
+        ),
+        "state": "ready",
+    }
+    assert started["metadata"]["demo"]["model_used"] is False
+    assert started["progress"] == {
+        "determinate": False,
+        "percent": None,
+        "label": "Waiting for independent verification",
+    }
+    assert finished["status"] == "done"
+    assert finished["result_category"] == "verified_done"
+    assert finished["final_result"]["accepted"] is True
+    assert finished["final_result"]["attempts"] == 2
+    assert finished["final_result"]["retries"] == 1
+    assert [row["passed"] for row in finished["final_result"]["review_attempts"]] == [
+        False,
+        True,
+    ]
+    assert finished["final_result"]["worker_claim"]["label"] == ("Scripted worker report (not AI)")
+    assert finished["metadata"]["execution"]["label"] == ("Safe demo · scripted worker")
+    assert finished["changed_files"] == [{"path": "calculator.py", "status": "modified"}]
+    assert finished["final_result"]["verification_commands"] == [
+        "python -c 'from calculator import add; assert add(2, 3) == 5'"
+    ]
+    assert selected_project_file.read_text(encoding="utf-8") == "untouched\n"
+    assert not (tmp_path / "calculator.py").exists()
+    serialized = json.dumps(finished)
+    assert "agentic-harness-safe-demo-" not in serialized
+    assert backend.readiness()["label"] == "Demo complete"
+
+
+def test_local_model_detection_uses_fixed_loopback_probe(tmp_path, monkeypatch) -> None:
+    class ModelsHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            assert self.path == "/v1/models"
+            payload = json.dumps({"data": [{"id": "local/demo-model"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ModelsHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(
+        gui_backend_module,
+        "_LOCAL_MODEL_PROBES",
+        (
+            {
+                "template_key": "ollama_local",
+                "label": "Ollama",
+                "port": server.server_port,
+                "endpoint": (f"http://127.0.0.1:{server.server_port}/v1/chat/completions"),
+            },
+        ),
+    )
+    try:
+        payload = EmbeddedExecutionBackend(tmp_path).detect_local_models()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert payload["status"] == "found"
+    assert payload["detected"] == [
+        {
+            "template_key": "ollama_local",
+            "label": "Ollama",
+            "endpoint": f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
+            "model": "local/demo-model",
+        }
+    ]
+
+
 def test_embedded_backend_rejects_blank_goal_before_starting_thread(tmp_path) -> None:
     _configure_scripted_agent(tmp_path)
     backend = EmbeddedExecutionBackend(tmp_path)
@@ -453,9 +552,7 @@ def test_embedded_backend_local_model_edits_checks_and_finishes_end_to_end(tmp_p
                 "status": "complete",
                 "summary": "Updated and verified the value.",
                 "plan": [{"step": "Update value", "status": "completed"}],
-                "requirements": [
-                    {"id": "R1", "status": "satisfied", "evidence": ["event:3"]}
-                ],
+                "requirements": [{"id": "R1", "status": "satisfied", "evidence": ["event:3"]}],
                 "current_subgoal": "final verification complete",
                 "checkpoint": "verified",
                 "blockers": [],
@@ -470,7 +567,7 @@ def test_embedded_backend_local_model_edits_checks_and_finishes_end_to_end(tmp_p
                 "endpoint": endpoint,
                 "model": "arbitrary-local-model-id",
                 "verification_command": (
-                    f"{sys.executable} -c \"from pathlib import Path; "
+                    f'{sys.executable} -c "from pathlib import Path; '
                     "assert Path('src/value.txt').read_text() == 'after'\""
                 ),
             }
@@ -504,9 +601,7 @@ def test_terminal_payload_waits_for_its_durable_report(tmp_path, monkeypatch) ->
     backend = EmbeddedExecutionBackend(tmp_path)
     backend.start({"objective": "Create a result with terminal evidence"})
     finished = _wait_for_terminal(backend)
-    report_path = next(
-        row["path"] for row in finished["artifacts"] if row["name"] == "report.md"
-    )
+    report_path = next(row["path"] for row in finished["artifacts"] if row["name"] == "report.md")
     (tmp_path / report_path).unlink()
     with backend.store.locked():
         goal = backend.store.read_current_goal()
@@ -527,9 +622,7 @@ def test_terminal_report_hash_uses_the_persisted_file_bytes(tmp_path, monkeypatc
     backend = EmbeddedExecutionBackend(tmp_path)
     backend.start({"objective": "Create a report with platform newlines"})
     finished = _wait_for_terminal(backend)
-    report_path = next(
-        row["path"] for row in finished["artifacts"] if row["name"] == "report.md"
-    )
+    report_path = next(row["path"] for row in finished["artifacts"] if row["name"] == "report.md")
     (tmp_path / report_path).unlink()
     with backend.store.locked():
         goal = backend.store.read_current_goal()
@@ -631,9 +724,7 @@ def test_terminal_report_is_refreshed_after_blocked_goal_recovers(tmp_path) -> N
     assert blocked["status"] == "blocked"
     assert blocked["summary"] != "Created and verified result.txt."
     assert blocked["summary"] == "independent command failed with exit code 1"
-    report_path = next(
-        row["path"] for row in blocked["artifacts"] if row["name"] == "report.md"
-    )
+    report_path = next(row["path"] for row in blocked["artifacts"] if row["name"] == "report.md")
     blocked_report = backend.preview_artifact(report_path)["content"]
     assert "Accepted: no" in blocked_report
 
