@@ -167,7 +167,7 @@ def test_managed_acceptance_becomes_verified_gui_result_only_with_matching_last_
         "review_status": "accepted",
         "run_dir": run_dir,
         "prompt_path": f"{run_dir}/prompt.md",
-        "complete_source": "global",
+        "complete_source": "run-local",
         "summary": "Installed capability: created the requested note.",
         "owned_file_count": 1,
         "owned_files_sample": ["reports/quick-task-test.md"],
