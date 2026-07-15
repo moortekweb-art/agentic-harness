@@ -89,6 +89,27 @@ def test_gui_api_exposes_only_state_appropriate_human_actions() -> None:
     assert ready["allowed_actions"] == []
 
 
+def test_managed_task_explains_hybrid_cloud_planner_and_local_execution() -> None:
+    payload = {
+        "classification": "working",
+        "active_goal": {"planner": "gpt-5.5", "executor": "opencode"},
+        "runtime": {"loop_state": {"model": "local-node1-vllm"}},
+    }
+
+    task = task_from_command_result(
+        CommandResult(("status",), 0, json.dumps(payload), ""),
+        fallback_status="working",
+    )
+
+    assert task["metadata"]["execution"] == {
+        "label": "Hybrid: gpt-5.5 planner + local model",
+        "data_location": "cloud_and_local",
+        "detail": (
+            "Planning uses gpt-5.5; execution uses local-node1-vllm through opencode."
+        ),
+    }
+
+
 def test_managed_acceptance_becomes_verified_gui_result_only_with_matching_last_run() -> None:
     run_dir = "/tmp/reports/runs/goal-1"
     status_payload = {
@@ -875,7 +896,12 @@ def test_gui_server_get_api_routes_return_json() -> None:
         "worker": {
             "type": "local_goal",
             "label": "Existing local-goal runtime",
+            "data_location": "managed_per_goal",
         },
+        "execution_summary": (
+            "Managed runtime. The active task shows whether its planner and executor are "
+            "local, cloud, or mixed."
+        ),
     }
     assert health["no_babysitting"]["enabled"] is True
     assert health["readiness"]["agent_loop"]["stage"] == "Act"

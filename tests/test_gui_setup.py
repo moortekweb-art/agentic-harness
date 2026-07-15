@@ -939,6 +939,12 @@ def test_setup_exposes_editable_provider_templates_without_secrets(tmp_path: Pat
         "summary": "One trusted user and one workspace on this computer.",
     }
     assert templates["custom"]["endpoint"] == ""
+    assert templates["ollama_local"]["endpoint"] == (
+        "http://127.0.0.1:11434/v1/chat/completions"
+    )
+    assert templates["lm_studio_local"]["data_location"] == "local"
+    assert templates["vllm_local"]["data_location"] == "local"
     assert templates["zai_api"]["endpoint"].endswith("/paas/v4/chat/completions")
+    assert templates["zai_api"]["data_location"] == "cloud"
     assert templates["zai_coding_plan"]["model"] == "glm-5.2"
     assert all("api_key" not in row for row in setup["provider_templates"])

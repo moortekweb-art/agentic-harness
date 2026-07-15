@@ -26,6 +26,7 @@ class ProviderTemplate:
     model: str = ""
     api_key_env: str = ""
     entitlement_note: str = ""
+    data_location: str = "both"
 
     def to_public_dict(self) -> dict[str, str]:
         return {
@@ -36,6 +37,7 @@ class ProviderTemplate:
             "model": self.model,
             "api_key_env": self.api_key_env,
             "entitlement_note": self.entitlement_note,
+            "data_location": self.data_location,
         }
 
 
@@ -46,12 +48,43 @@ PROVIDER_TEMPLATES: tuple[ProviderTemplate, ...] = (
         description="Enter any compatible endpoint and model ID.",
     ),
     ProviderTemplate(
+        key="ollama_local",
+        label="Ollama on this computer",
+        description=(
+            "Connect to Ollama's OpenAI-compatible endpoint. Enter the name of a model "
+            "you have already downloaded in Ollama."
+        ),
+        endpoint="http://127.0.0.1:11434/v1/chat/completions",
+        data_location="local",
+    ),
+    ProviderTemplate(
+        key="lm_studio_local",
+        label="LM Studio on this computer",
+        description=(
+            "Connect to the LM Studio local server. Start the server in LM Studio, then "
+            "enter the loaded model ID."
+        ),
+        endpoint="http://127.0.0.1:1234/v1/chat/completions",
+        data_location="local",
+    ),
+    ProviderTemplate(
+        key="vllm_local",
+        label="vLLM or another local server",
+        description=(
+            "Connect to a local OpenAI-compatible server. Change the port if your server "
+            "does not use 8000."
+        ),
+        endpoint="http://127.0.0.1:8000/v1/chat/completions",
+        data_location="local",
+    ),
+    ProviderTemplate(
         key="zai_api",
         label="Z.ai API",
         description="Start with Z.ai's general OpenAI-compatible endpoint.",
         endpoint="https://api.z.ai/api/paas/v4/chat/completions",
         model="glm-5.1",
         api_key_env="ZAI_API_KEY",
+        data_location="cloud",
     ),
     ProviderTemplate(
         key="zai_coding_plan",
@@ -64,6 +97,7 @@ PROVIDER_TEMPLATES: tuple[ProviderTemplate, ...] = (
             "Z.ai limits the Coding Plan endpoint to supported coding tools; confirm that your "
             "account and client are eligible before using this template."
         ),
+        data_location="cloud",
     ),
 )
 
