@@ -71,6 +71,19 @@ def setup_payload(bridge: LocalGoalBridge) -> dict[str, Any]:
             "Managed runtime. The active task shows whether its planner and executor are "
             "local, cloud, or mixed."
         ),
+        "management": {
+            "mode": "managed",
+            "editable": False,
+            "summary": (
+                "AI routing and verification are managed by this installation. "
+                "You can review the active configuration in Settings."
+            ),
+        },
+        "verification": {
+            "mode": "managed_automatic",
+            "label": "Automatic evidence checks",
+            "technical_command": "",
+        },
     }
 
 

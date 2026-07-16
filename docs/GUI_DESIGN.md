@@ -17,29 +17,50 @@ script, prompt, or internal agent transcript:
 The browser app is a human layer over the same durable engine used by the CLI.
 It simplifies language; it does not weaken review or invent progress.
 
-## Setup and work approach
+## Predictable product structure
 
-The first-run dialog asks for three setup decisions:
+The application has four permanent top-level views:
+
+1. **Home** — one plain-language task field, concise run mode, and collapsed
+   Checks and Access options.
+2. **Tasks** — current progress, plan, evidence, verification, and recovery.
+3. **History** — searchable durable task records and export.
+4. **Settings** — project-scoped AI connection, project checks, and advanced
+   limits.
+
+Settings asks for three decisions:
 
 1. **Execution method** — an installed coding agent, a local
    OpenAI-compatible model, or a cloud OpenAI-compatible model.
-2. **Provider and credential** — an editable provider template or custom
-   endpoint and model ID, with no key, an environment-variable name, or a key held
-   only for this GUI process.
-3. **Independent check** — a command that can prove the result outside the
-   worker's own claim.
+2. **Provider and credential** — local-AI detection or an editable provider,
+   with technical endpoint and model fields under **Manual connection**. A key
+   can come from an environment variable or remain only in this GUI process.
+3. **Independent check** — automatically detected project tests when possible,
+   with the raw command under **Technical check**.
 
-The goal screen separately asks how the assistant should work: Quick task, Plan
-first, Keep working, or Bounded experiment. These are execution strategies, not
+The Home view separately asks how the assistant should work: Quick, Standard,
+Thorough, or the advanced Experiment mode. These are execution strategies, not
 provider modes. The selected strategy remains visible while the task runs.
-Bounded experiment explains and enforces its built-in-worker and explicit-scope
+Experiment explains and enforces its built-in-worker and explicit-access
 requirements before Start is enabled.
+
+The interface does not ask users to classify a task as Create, Fix, Check, or
+Explain because those choices do not alter execution. One ordinary sentence is
+the primary input.
 
 Remote model setup explicitly states that selected file excerpts and tool
 results may leave the computer. Saving is disabled until the user confirms
 that boundary. The interface never offers to save a plaintext API key.
 
-The setup dialog also exposes bounded cycle, elapsed-time, token, provider-call,
+Local-AI discovery probes only the fixed loopback ports for Ollama, LM Studio,
+vLLM, and llama.cpp. It lists every bounded model ID returned by those servers,
+then requires a successful structured-action test. It never scans the LAN.
+
+Managed installations keep Settings visible and show Project, AI connection,
+and Checks as read-only values. An invalid existing project configuration is
+also read-only: the GUI explains the error and refuses to replace the file.
+
+Settings also exposes bounded cycle, elapsed-time, token, provider-call,
 and tool-call limits. Reaching a limit produces `Blocked with reason` or
 `Failed with evidence`, according to the recorded terminal condition.
 
@@ -48,13 +69,14 @@ and tool-call limits. Reaching a limit produces `Blocked with reason` or
 ### Ready
 
 - Show the selected workspace and execution method.
-- Accept one complete goal in ordinary language.
-- Let the user narrow safe areas or checks.
+- Accept one complete task in ordinary language.
+- Show **Checks · Automatic** and **Access · Entire project** by default.
+- Let advanced users override the technical check or limit access.
 - Disable Start until setup, objective, and independent verification are valid.
 
 ### Working
 
-- Put the active goal above the new-goal form, including on narrow screens.
+- Switch to the Tasks view as soon as a task is submitted.
 - Show the current subgoal, checkpoint, and cycle.
 - Render the persisted plan and requirements.
 - Stream sanitized, ordered activity events.
@@ -95,7 +117,7 @@ and tool-call limits. Reaching a limit produces `Blocked with reason` or
 
 ## Language boundary
 
-The default surface uses goal, plan, current step, activity, check, changed
+The default surface uses task, plan, current step, activity, check, changed
 file, evidence, result, `Verified done`, `Blocked with reason`, and `Failed with
 evidence`. It hides model prompts, raw JSON, shell output, provider payloads,
 queue internals, and worker identities.
@@ -130,18 +152,20 @@ defined by the packaged static assets and browser tests.
 
 - Use semantic headings, forms, labels, buttons, details, and dialogs.
 - Keep all controls keyboard reachable with visible focus.
+- Implement Left/Right/Home/End keyboard movement across the four tabs.
 - Accompany color with status text.
 - Clear password fields immediately after submission.
 - Wrap long objectives and paths.
 - Keep the layout free of horizontal overflow at mobile widths.
 - Respect reduced-motion preferences.
-- Move active status ahead of the start form on a narrow screen so current work
-  is never hidden below input controls.
+- Keep each top-level view independent on narrow screens so active work is never
+  buried beneath the task form.
 
 ## Decision record
 
 - One distribution and shared engine, with CLI and browser interfaces.
 - One visible goal per workspace.
+- Four predictable top-level views; Settings is always discoverable.
 - Provider-neutral setup based on capability, not model brand.
 - Provider, execution method, work approach, and verification are independent.
 - Real durable events instead of cosmetic progress.

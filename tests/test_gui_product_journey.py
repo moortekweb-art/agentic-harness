@@ -6,12 +6,18 @@ from pathlib import Path
 STATIC = Path("agentic_harness/gui/static")
 
 
-def test_gui_exposes_setup_goal_progress_and_result_without_machine_specific_copy() -> None:
+def test_gui_exposes_predictable_views_setup_progress_and_result_without_machine_specific_copy() -> None:
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
     for required in (
         'id="setupButton"',
-        'id="setupDialog"',
+        'id="homeTab"',
+        'id="tasksTab"',
+        'id="historyTab"',
+        'id="homeView"',
+        'id="tasksView"',
+        'id="historyView"',
+        'id="settingsView"',
         'id="executionChoice"',
         'id="providerEndpoint"',
         'id="providerModel"',
@@ -19,7 +25,7 @@ def test_gui_exposes_setup_goal_progress_and_result_without_machine_specific_cop
         'id="providerPresetHelp"',
         'id="providerApiKey" type="password"',
         'id="verificationCommand"',
-        'id="testConnectionButton"',
+        'id="saveSetupButton"',
         'id="connectionResult"',
         'id="workspacePath"',
         'id="demoCallout"',
@@ -27,11 +33,11 @@ def test_gui_exposes_setup_goal_progress_and_result_without_machine_specific_cop
         'id="demoSetupButton"',
         'id="setupDemoButton"',
         'id="localModelDetection"',
+        'id="detectedModelChoice"',
         'id="useDetectedModelButton"',
-        'id="starterCreate"',
-        'id="starterFix"',
-        'id="starterAudit"',
-        'id="starterDocument"',
+        'id="manualConnectionDetails"',
+        'id="automaticCheckLabel"',
+        'id="managedSettings"',
         'id="modeSection"',
         'id="modeSelect"',
         'id="modes"',
@@ -51,6 +57,8 @@ def test_gui_exposes_setup_goal_progress_and_result_without_machine_specific_cop
         'id="previewContent"',
     ):
         assert required in html
+    assert 'id="setupDialog"' not in html
+    assert 'id="starterCreate"' not in html
     for machine_specific in (
         "GLM",
         "Jarvis",
@@ -95,7 +103,8 @@ def test_gui_never_persists_provider_key_or_puts_gui_token_in_websocket_url() ->
     assert 'api("/api/setup/credential"' in javascript
     assert 'api("/api/setup/test"' in javascript
     assert 'providerApiKey.value = ""' in javascript
-    assert "api_key: els.providerApiKey.value" in javascript
+    assert "api_key: apiKey" in javascript
+    assert 'api_key_env: apiKey ? "" : els.providerApiKeyEnv.value.trim()' in javascript
     assert 'localStorage.setItem("api' not in javascript
     assert 'sessionStorage.setItem("api' not in javascript
     assert "encodeURIComponent(token)" not in javascript
@@ -156,26 +165,27 @@ def test_gui_status_stream_advances_managed_work_without_babysitting() -> None:
     assert "next_monitor_at = time.monotonic() + STREAM_MONITOR_INTERVAL_SECONDS" in server
 
 
-def test_gui_primary_form_puts_mode_and_verification_before_optional_scope() -> None:
+def test_gui_primary_form_uses_plain_language_and_progressive_disclosure() -> None:
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     javascript = (STATIC / "app.js").read_text(encoding="utf-8")
 
     objective = html.index('id="objective"')
     modes = html.index('id="modes"')
     verification = html.index('id="checks"')
-    optional_scope = html.index('class="boundaries"')
+    access = html.index('class="boundaries"')
     safe_areas = html.index('id="safeAreas"')
 
-    assert "Describe the result you want" in html[:optional_scope]
-    assert "Verification command for this goal" in html[:optional_scope]
-    assert "Pre-filled from Setup. Edit it here to override the default for this run." in html
-    assert "Default verification command for this workspace" in html
-    assert "No special prompt format is required" in html
-    assert "What kind of help do you need?" in html
-    assert "Optional: add your own success check" in javascript
-    assert "question that only needs an answer" in html
-    assert objective < modes < verification < optional_scope < safe_areas
+    assert "What would you like done?" in html[:access]
+    assert "Checks · Automatic" in html[:access]
+    assert "Access · Entire project" in html
+    assert "Technical check for this task" in javascript
+    assert 'id="manualConnectionDetails" class="manual-connection"' in html
+    assert "MODE_PRESENTATION" in javascript
+    assert 'label: "Standard"' in javascript
+    assert objective < modes < verification < access < safe_areas
     assert "Add scope and checks" not in html
+    assert "Optional scope" not in html
+    assert 'id="starterCreate"' not in html
     assert 'id="startHelp" role="status"' in html
 
 
@@ -183,9 +193,9 @@ def test_gui_explains_why_start_is_disabled() -> None:
     javascript = (STATIC / "app.js").read_text(encoding="utf-8")
 
     assert 'startHelp: byId("startHelp")' in javascript
-    assert "Add the verification command that will prove this goal is complete" in javascript
+    assert "No automatic project check was found. Add one in Settings" in javascript
     assert "Describe the outcome you want before starting." in javascript
-    assert "Ready to start this verified goal." in javascript
+    assert "Ready to start this verified task." in javascript
     assert "The assistant will choose checks and show the evidence" in javascript
     assert "mode: usesHumanModes() ? state.mode : undefined" in javascript
     assert "strategy: usesHumanModes() ? undefined : state.mode" in javascript
@@ -199,13 +209,29 @@ def test_gui_compacts_mobile_intake_and_collapses_previous_evidence() -> None:
     styles = (STATIC / "styles.css").read_text(encoding="utf-8")
 
     assert '<select id="modeSelect" class="mode-select"' in html
-    assert "View evidence from the previous goal" in html
+    assert "View evidence from the previous task" in html
     assert "Assistant report" in html
     assert "els.completedDetails.hidden = !terminal" in javascript
     assert "els.artifactsEvidence.hidden = receipt.terminal" in javascript
-    assert ".mode-grid {\n    display: none;" in styles
+    assert "#modes {\n    display: none;" in styles
+    assert ".advanced-mode-details {\n    display: none;" in styles
     assert ".mode-select {\n    display: block;" in styles
-    assert ".goal-starter-grid" in styles
+    assert ".primary-nav" in styles
+    assert "flex: 1 1 0" in styles
+    assert ".settings-summary" in styles
+    assert ".goal-starter-grid" not in styles
+
+
+def test_gui_guides_first_time_local_ai_setup() -> None:
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    javascript = (STATIC / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="localModelGuide"' in html
+    assert "New to local AI? Start with LM Studio." in html
+    assert "https://lmstudio.ai/download" in html
+    assert "open Developer and switch on Start server" in html
+    assert "Agentic Harness will test the model before saving" in html
+    assert "els.localModelGuide.hidden = found" in javascript
 
 
 def test_gui_primary_actions_and_disabled_cursor_match_interaction_state() -> None:

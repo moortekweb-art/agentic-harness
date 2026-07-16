@@ -245,10 +245,6 @@
           </div>
         </div>
         <div class="top-actions">
-          <button id="setupButton" title="Choose workspace execution and model settings">
-            <svg class="icon" aria-hidden="true"><use href="#icon-braces"></use></svg>
-            <span>Setup</span>
-          </button>
           <button id="themeButton" title="Use dark theme">
             <svg class="icon" aria-hidden="true"><use id="themeIcon" href="#icon-moon"></use></svg>
             <span>Theme</span>
@@ -264,10 +260,21 @@
         </div>
       </header>
 
+      <nav class="primary-nav" aria-label="Primary navigation" role="tablist">
+        <button id="homeTab" class="nav-tab" type="button" role="tab" aria-selected="true" aria-controls="homeView">Home</button>
+        <button id="tasksTab" class="nav-tab" type="button" role="tab" aria-selected="false" aria-controls="tasksView">Tasks</button>
+        <button id="historyTab" class="nav-tab" type="button" role="tab" aria-selected="false" aria-controls="historyView">History</button>
+        <button id="setupButton" class="nav-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsView" title="Open application settings">
+          <svg class="icon" aria-hidden="true"><use href="#icon-braces"></use></svg>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <section id="homeView" class="app-view" role="tabpanel" aria-labelledby="homeTab">
       <div class="workspace-strip">
         <span>Project</span>
         <strong id="workspacePath">Loading…</strong>
-        <span id="executionSummary">Execution setup not loaded</span>
+        <span id="executionSummary">AI connection loading…</span>
       </div>
 
       <section id="demoCallout" class="first-success-card" aria-labelledby="demoTitle" hidden>
@@ -286,73 +293,55 @@
         </div>
       </section>
 
-      <section class="workbench">
+      <section class="home-layout" id="home">
         <div class="start-panel">
           <div class="section-heading">
-            <p class="eyebrow">New goal</p>
-            <h2>What outcome do you want?</h2>
-            <p class="help-text">Choose a starting point, then describe the result in your own words. No special prompt format is required.</p>
-            <p class="help-text task-fit">The assistant will plan the work, show progress, and only call it done when the evidence passes. For a question that only needs an answer, use your normal assistant chat.</p>
+            <p class="eyebrow">New task</p>
+            <h2>What would you like done?</h2>
+            <p class="help-text">Describe the result in your own words. The assistant will plan, work, and show evidence before calling it done.</p>
           </div>
 
-          <fieldset class="goal-starters">
-            <legend>What kind of help do you need?</legend>
-            <div class="goal-starter-grid">
-              <button type="button" id="starterCreate" class="goal-starter" data-goal-kind="create" aria-pressed="false">
-                <strong>Create or improve</strong>
-                <small>Build something new or make it better</small>
-              </button>
-              <button type="button" id="starterFix" class="goal-starter" data-goal-kind="fix" aria-pressed="false">
-                <strong>Fix a problem</strong>
-                <small>Find the cause and repair it</small>
-              </button>
-              <button type="button" id="starterAudit" class="goal-starter" data-goal-kind="audit" aria-pressed="false">
-                <strong>Audit or check</strong>
-                <small>Inspect something and report or repair issues</small>
-              </button>
-              <button type="button" id="starterDocument" class="goal-starter" data-goal-kind="document" aria-pressed="false">
-                <strong>Explain or document</strong>
-                <small>Make something easier to understand</small>
-              </button>
-            </div>
-          </fieldset>
-
-          <label class="field-label" id="objectiveLabel" for="objective">Describe the result you want</label>
+          <label class="field-label" id="objectiveLabel" for="objective">Task</label>
           <textarea
             id="objective"
             rows="5"
             placeholder="Example: Add a CSV download to the reports page and show me what changed."
           ></textarea>
-          <p class="help-text objective-hint" id="objectiveHint">A normal sentence is enough. Include any limit that matters to you.</p>
+          <p class="help-text objective-hint" id="objectiveHint">A normal sentence is enough.</p>
 
           <section id="modeSection" class="mode-section">
             <div class="mode-heading">
-              <span class="field-label">How should the assistant work?</span>
-              <span class="mode-recommendation">Plan first is a good default.</span>
+              <span class="field-label">Run mode</span>
+              <span class="mode-recommendation">Standard is recommended.</span>
             </div>
-            <label class="visually-hidden" for="modeSelect">Work approach</label>
-            <select id="modeSelect" class="mode-select" aria-label="Work approach"></select>
-            <div class="mode-grid" id="modes" role="group" aria-label="Work approach"></div>
+            <label class="visually-hidden" for="modeSelect">Run mode</label>
+            <select id="modeSelect" class="mode-select" aria-label="Run mode"></select>
+            <div class="mode-grid" id="modes" role="group" aria-label="Run mode"></div>
+            <p class="help-text mode-help" id="modeHelp">Standard plans the work and verifies the result.</p>
+            <details class="advanced-mode-details">
+              <summary>Experimental mode</summary>
+              <div class="mode-grid advanced-mode-grid" id="advancedModes" role="group" aria-label="Experimental run mode"></div>
+            </details>
           </section>
 
-          <details id="verificationDetails" class="verification-details" open>
-            <summary id="verificationSummary">Required: add a success check</summary>
-            <label class="field-label" id="verificationLabel" for="checks">Verification command for this goal</label>
-            <textarea id="checks" rows="2" required placeholder="Example: python -m pytest -q"></textarea>
-            <p class="help-text" id="verificationHelp">Pre-filled from Setup. Edit it here to override the default for this run. This check runs independently, and the task is never verified done unless it passes.</p>
+          <details id="verificationDetails" class="verification-details">
+            <summary id="verificationSummary">Checks · Automatic</summary>
+            <label class="field-label" id="verificationLabel" for="checks">Technical check</label>
+            <textarea id="checks" rows="2" required placeholder="Configured automatically when the project has tests"></textarea>
+            <p class="help-text" id="verificationHelp">Agentic Harness runs this independently. Technical commands remain available here for advanced users.</p>
           </details>
 
-          <details class="boundaries">
-            <summary>Optional scope</summary>
-            <p class="help-text" id="scopeHelp">Paths are enforced by the built-in model agent. Installed coding-agent CLIs receive them as guidance.</p>
-            <label class="field-label" for="safeAreas">Allowed files or folders</label>
-            <textarea id="safeAreas" rows="3" placeholder="One workspace-relative path per line; blank means the whole workspace"></textarea>
+          <details class="boundaries" id="accessDetails">
+            <summary id="accessSummary">Access · Entire project</summary>
+            <p class="help-text" id="scopeHelp">Leave this blank to allow the whole project, or limit the task to specific project folders.</p>
+            <label class="field-label" for="safeAreas">Limit access</label>
+            <textarea id="safeAreas" rows="3" placeholder="Example: docs or src/components — one per line"></textarea>
           </details>
 
           <div class="actions">
-            <button class="primary" id="startButton" title="Start this verified goal" disabled>
+            <button class="primary" id="startButton" title="Start this verified task" disabled>
               <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>
-              <span>Start goal</span>
+              <span>Start task</span>
             </button>
             <button id="checkButton" title="Refresh the visible task status">
               <svg class="icon" aria-hidden="true"><use href="#icon-refresh-cw"></use></svg>
@@ -361,11 +350,18 @@
           </div>
           <p class="help-text" id="startHelp" role="status">Describe the outcome you want. The app will explain anything else it needs.</p>
         </div>
+      </section>
+      </section>
 
-        <aside class="status-panel" aria-live="polite">
+      <section id="tasksView" class="app-view" role="tabpanel" aria-labelledby="tasksTab" tabindex="-1" hidden>
+        <div id="taskContext" class="task-context" hidden>
+          <span>Viewing a previous task</span>
+          <button type="button" id="returnToCurrentButton">Back to current task</button>
+        </div>
+        <aside class="status-panel" id="currentTask" aria-live="polite">
           <div class="status-head">
             <div>
-              <p class="eyebrow">Current work</p>
+              <p class="eyebrow">Current task</p>
               <h2 id="statusLabel">Ready</h2>
             </div>
             <span class="status-indicator ready" id="statusIndicator" role="img" aria-label="Ready" title="Ready">
@@ -385,10 +381,10 @@
           </div>
 
           <section class="current-card" id="currentCard">
-            <div><span>Working on now</span><strong id="currentSubgoal">Waiting for a goal</strong></div>
+            <div><span>Working on now</span><strong id="currentSubgoal">Waiting for a task</strong></div>
             <div><span>Stage</span><strong id="checkpoint">Not started</strong></div>
-            <div><span>Work approach</span><strong id="workApproachValue">Plan first</strong></div>
-            <div><span>Agent passes</span><strong id="attemptsValue">0</strong></div>
+            <div><span>Run mode</span><strong id="workApproachValue">Standard</strong></div>
+            <div><span>Attempts</span><strong id="attemptsValue">0</strong></div>
           </section>
 
           <div class="quick-actions">
@@ -423,7 +419,7 @@
           </section>
 
           <details id="completedDetails" class="completed-details" hidden>
-            <summary>View evidence from the previous goal</summary>
+            <summary>View evidence from the previous task</summary>
             <section id="finalResult" class="final-result" hidden>
               <p class="eyebrow">Evidence-backed result</p>
               <h3 id="finalLabel">Result</h3>
@@ -459,16 +455,6 @@
             </section>
           </div>
 
-          <details class="history-tools">
-            <summary>Previous goals</summary>
-            <label class="field-label" for="historySearch">Search</label>
-            <input id="historySearch" type="search" placeholder="Search previous goals" />
-            <div class="actions compact">
-              <button id="exportButton" title="Copy durable task history"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg><span id="exportButtonLabel">Copy history</span></button>
-            </div>
-            <ul class="history-list" id="historyList"></ul>
-          </details>
-
           <details class="advanced">
             <summary><svg class="icon" aria-hidden="true"><use href="#icon-braces"></use></svg><span>Technical metadata</span></summary>
             <pre id="advancedDetails">{}</pre>
@@ -478,6 +464,142 @@
             <span><svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg><span id="statusUpdated">No progress recorded yet</span></span>
           </footer>
         </aside>
+      </section>
+
+      <section id="historyView" class="app-view" role="tabpanel" aria-labelledby="historyTab" hidden>
+        <div class="history-panel" id="historyTools">
+          <div class="section-heading">
+            <p class="eyebrow">Task history</p>
+            <h2>Previous tasks</h2>
+            <p class="help-text">Review completed work and the evidence saved with each task.</p>
+          </div>
+          <label class="field-label" for="historySearch">Search tasks</label>
+          <input id="historySearch" type="search" placeholder="Search by task or status" />
+          <div class="actions compact">
+            <button id="exportButton" title="Copy durable task history"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg><span id="exportButtonLabel">Copy history</span></button>
+          </div>
+          <ul class="history-list" id="historyList"></ul>
+        </div>
+      </section>
+
+      <section id="settingsView" class="app-view" role="tabpanel" aria-labelledby="setupButton" tabindex="-1" hidden>
+        <form id="setupForm" class="settings-panel">
+          <div class="settings-heading">
+            <div><p class="eyebrow">Settings</p><h2>Project and AI</h2></div>
+            <button type="button" id="closeSetupButton">Back to Home</button>
+          </div>
+          <p class="help-text">Configure this project once. API keys entered here last only until the app closes and are never written to the project.</p>
+
+          <div id="managedSettings" class="managed-settings" hidden>
+            <span class="managed-badge">Managed by this installation</span>
+            <p id="managedSettingsSummary">AI routing and verification are managed for this workspace.</p>
+            <dl class="settings-summary">
+              <div><dt>Project</dt><dd id="managedWorkspace">Current project</dd></div>
+              <div><dt>AI connection</dt><dd id="managedExecution">Managed automatically</dd></div>
+              <div><dt>Checks</dt><dd id="managedVerification">Automatic evidence checks</dd></div>
+            </dl>
+          </div>
+
+          <div id="configurationError" class="configuration-error" role="alert" hidden>
+            <strong>Existing settings need repair</strong>
+            <p id="configurationErrorText"></p>
+            <p>Agentic Harness will not replace this file from the browser. Repair or move <code>.agentic-harness/config.yml</code>, then refresh.</p>
+          </div>
+
+          <div id="editableSettings">
+            <section class="settings-group">
+              <h3>AI connection</h3>
+              <label class="field-label" for="executionChoice">Use</label>
+              <select id="executionChoice" required>
+                <option value="coding_agent">An installed coding app</option>
+                <option value="local_model">AI running on my computer</option>
+                <option value="cloud_model">A cloud AI provider</option>
+              </select>
+              <div id="executionDisclosure" class="execution-disclosure" role="note"></div>
+              <div id="codingAgentFields">
+                <label class="field-label" for="codingAgentChoice">Coding app</label>
+                <select id="codingAgentChoice"><option value="codex">Codex</option><option value="opencode">OpenCode</option><option value="aider">Aider</option><option value="codewhale">CodeWhale</option></select>
+                <p class="connection-status" id="codingAgentConnectionResult" role="status"></p>
+              </div>
+              <div id="providerFields" hidden>
+                <label class="field-label" for="providerPreset">AI provider</label>
+                <select id="providerPreset">
+                  <option value="custom">Custom OpenAI-compatible provider</option>
+                </select>
+                <p class="help-text" id="providerPresetHelp">Choose a provider. Technical connection details are available below if needed.</p>
+                <p class="help-text local-model-requirement" id="localModelRequirement" hidden>Start your local AI server, then let Agentic Harness find it.</p>
+                <div class="local-model-detection" id="localModelDetectionRow" hidden>
+                  <span id="localModelDetection" role="status">Looking for Ollama, LM Studio, vLLM, and llama.cpp…</span>
+                  <select id="detectedModelChoice" aria-label="Detected local AI model" hidden></select>
+                  <button type="button" class="primary" id="useDetectedModelButton" hidden>Use this AI</button>
+                  <button type="button" id="checkLocalModelsButton">Find local AI</button>
+                </div>
+                <div class="local-model-guide" id="localModelGuide" hidden>
+                  <strong>New to local AI? Start with LM Studio.</strong>
+                  <ol>
+                    <li><a href="https://lmstudio.ai/download" target="_blank" rel="noreferrer">Install LM Studio</a>.</li>
+                    <li>In Discover, download a chat model that supports tool use or function calling.</li>
+                    <li>Load the model, then open Developer and switch on Start server.</li>
+                    <li>Return here and choose Find local AI. Agentic Harness will test the model before saving.</li>
+                  </ol>
+                  <details>
+                    <summary>Other local servers</summary>
+                    <p>Ollama, vLLM, and llama.cpp also work through their OpenAI-compatible servers. Use Manual connection when they run on a different port or another computer on your private network.</p>
+                  </details>
+                </div>
+                <details id="manualConnectionDetails" class="manual-connection">
+                  <summary>Manual connection</summary>
+                  <label class="field-label" for="providerEndpoint">Chat endpoint</label>
+                  <input id="providerEndpoint" type="url" placeholder="http://127.0.0.1:8000/v1/chat/completions" />
+                  <label class="field-label" for="providerModel">Model name</label>
+                  <input id="providerModel" type="text" placeholder="The model ID reported by your server" />
+                  <label class="field-label" for="providerApiKeyEnv">API key environment variable (optional)</label>
+                  <input id="providerApiKeyEnv" type="text" placeholder="OPENAI_API_KEY" autocomplete="off" />
+                </details>
+                <label class="field-label" for="providerApiKey">API key for this app session (optional)</label>
+                <input id="providerApiKey" type="password" autocomplete="new-password" spellcheck="false" />
+                <p class="help-text">A key entered here is used only for this app session and overrides the preset environment variable.</p>
+                <p class="connection-status" id="connectionResult" role="status"></p>
+                <label class="confirm-row" id="remoteDataRow" hidden><input id="confirmRemoteData" type="checkbox" /><span>I understand selected file excerpts and tool results will be sent to this remote model endpoint.</span></label>
+              </div>
+            </section>
+
+            <section class="settings-group">
+              <h3>Project checks</h3>
+              <div class="automatic-check-card">
+                <strong id="automaticCheckLabel">Automatic project checks</strong>
+                <p id="automaticCheckDetail">Agentic Harness will detect this project's tests and run them independently.</p>
+              </div>
+              <details id="technicalCheckDetails">
+                <summary>Technical check</summary>
+                <label class="field-label" for="verificationCommand">Command</label>
+                <input id="verificationCommand" type="text" placeholder="python -m pytest -q" required />
+              </details>
+            </section>
+
+            <aside class="demo-callout">
+              <strong>No AI connected yet?</strong>
+              <p>Try a safe practice task. It runs in a temporary project, uses no model or API key, and proves how independent checking works.</p>
+              <button type="button" id="setupDemoButton">Try safe demo</button>
+            </aside>
+
+            <details>
+              <summary>Advanced limits</summary>
+              <p class="help-text">These limits pause unfinished work for review; they never turn it into success.</p>
+              <div class="limit-grid">
+                <label>Attempts<input id="maxCycles" type="number" min="1" value="100" /></label>
+                <label>Minutes<input id="maxMinutes" type="number" min="1" value="120" /></label>
+                <label>Total tokens<input id="maxTokens" type="number" min="1" value="500000" /></label>
+                <label>Provider calls<input id="maxProviderCalls" type="number" min="1" value="200" /></label>
+                <label>Tool calls<input id="maxToolCalls" type="number" min="1" value="1000" /></label>
+              </div>
+            </details>
+            <p class="form-error" id="setupError" role="alert"></p>
+            <div class="actions">
+              <button class="primary" type="submit" id="saveSetupButton">Save and test settings</button>
+            </div>
+          </div>
+        </form>
       </section>
     </main>
     <dialog id="shortcutsDialog">
@@ -499,81 +621,9 @@
         </dl>
       </form>
     </dialog>
-    <dialog id="setupDialog">
-      <form id="setupForm">
-        <div class="dialog-head">
-          <div><p class="eyebrow">Workspace setup</p><h2>Choose how work runs</h2></div>
-          <button type="button" id="closeSetupButton" title="Close setup"><svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg><span>Close</span></button>
-        </div>
-        <p class="help-text">This is a local, self-hosted workspace for one trusted user. Settings are saved in this workspace. API key values are never saved; a key entered here lasts only until this app process closes.</p>
-        <label class="field-label" for="executionChoice">Execution method</label>
-        <select id="executionChoice" required>
-          <option value="coding_agent">Installed coding agent</option>
-          <option value="local_model">Local OpenAI-compatible model</option>
-          <option value="cloud_model">Cloud OpenAI-compatible model</option>
-        </select>
-        <div id="executionDisclosure" class="execution-disclosure" role="note"></div>
-        <div id="codingAgentFields">
-          <label class="field-label" for="codingAgentChoice">Coding agent</label>
-          <select id="codingAgentChoice"><option value="codex">Codex</option><option value="opencode">OpenCode</option><option value="aider">Aider</option><option value="codewhale">CodeWhale</option></select>
-          <div class="actions compact">
-            <button type="button" id="testCodingAgentButton">Test coding agent</button>
-            <span id="codingAgentConnectionResult" role="status"></span>
-          </div>
-        </div>
-        <div id="providerFields" hidden>
-          <label class="field-label" for="providerPreset">Provider template (optional)</label>
-          <select id="providerPreset">
-            <option value="custom">Custom OpenAI-compatible provider</option>
-          </select>
-          <p class="help-text" id="providerPresetHelp">Templates only pre-fill editable values. Your provider account controls model and entitlement availability.</p>
-          <p class="help-text local-model-requirement" id="localModelRequirement" hidden>A compatible model server must already be running. Agentic Harness controls the work and verification; it does not download or host a model for you.</p>
-          <div class="local-model-detection" id="localModelDetectionRow" role="status" hidden>
-            <span id="localModelDetection">Checking this computer for Ollama and LM Studio…</span>
-            <button type="button" id="useDetectedModelButton" hidden>Use detected local model</button>
-            <button type="button" id="checkLocalModelsButton">Check again</button>
-          </div>
-          <label class="field-label" for="providerEndpoint">Chat completions endpoint</label>
-          <input id="providerEndpoint" type="url" placeholder="http://127.0.0.1:8000/v1/chat/completions" />
-          <label class="field-label" for="providerModel">Model ID</label>
-          <input id="providerModel" type="text" placeholder="Qwen/Qwen3-9B-Coder or your cloud model ID" />
-          <label class="field-label" for="providerApiKeyEnv">API key environment variable (optional)</label>
-          <input id="providerApiKeyEnv" type="text" placeholder="OPENAI_API_KEY" autocomplete="off" />
-          <label class="field-label" for="providerApiKey">Or enter an API key for this app session</label>
-          <input id="providerApiKey" type="password" autocomplete="new-password" spellcheck="false" />
-          <div class="actions compact">
-            <button type="button" id="testConnectionButton">Test model connection</button>
-            <span id="connectionResult" role="status"></span>
-          </div>
-          <label class="confirm-row" id="remoteDataRow" hidden><input id="confirmRemoteData" type="checkbox" /><span>I understand selected file excerpts and tool results will be sent to this remote model endpoint.</span></label>
-        </div>
-        <aside class="demo-callout">
-          <strong>No model or cloud account yet?</strong>
-          <p>Try a controlled practice run in the GUI. A scripted worker makes an intentional mistake, repairs it, and must pass an independent check. No AI model, API key, or selected-project access is used.</p>
-          <button type="button" id="setupDemoButton">Try safe demo instead</button>
-        </aside>
-        <label class="field-label" for="verificationCommand">Default verification command for this workspace</label>
-        <input id="verificationCommand" type="text" placeholder="python -m pytest -q" required />
-        <details>
-          <summary>Goal limits</summary>
-          <p class="help-text">These limits stop a goal for review; they never turn unfinished work into success.</p>
-          <div class="limit-grid">
-            <label>Cycles<input id="maxCycles" type="number" min="1" value="100" /></label>
-            <label>Minutes<input id="maxMinutes" type="number" min="1" value="120" /></label>
-            <label>Total tokens<input id="maxTokens" type="number" min="1" value="500000" /></label>
-            <label>Provider calls<input id="maxProviderCalls" type="number" min="1" value="200" /></label>
-            <label>Tool calls<input id="maxToolCalls" type="number" min="1" value="1000" /></label>
-          </div>
-        </details>
-        <p class="form-error" id="setupError" role="alert"></p>
-        <div class="actions">
-          <button class="primary" type="submit" id="saveSetupButton">Save setup</button>
-        </div>
-      </form>
-    </dialog>
     <dialog id="continueDialog">
       <form id="continueForm">
-        <div class="dialog-head"><h2>Continue this goal</h2><button type="button" id="closeContinueButton"><span>Close</span></button></div>
+        <div class="dialog-head"><h2>Continue this task</h2><button type="button" id="closeContinueButton"><span>Close</span></button></div>
         <label class="field-label" for="continueFeedback">What should change or be tried next?</label>
         <textarea id="continueFeedback" rows="4" placeholder="Example: keep the current approach, but cover the empty-file case"></textarea>
         <div class="actions"><button class="primary" type="submit">Continue</button></div>

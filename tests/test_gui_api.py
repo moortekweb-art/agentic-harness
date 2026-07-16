@@ -62,7 +62,7 @@ def test_default_gui_surface_has_no_manual_babysitting_control() -> None:
     assert "Move forward" not in html
     assert "Ctrl M" not in html
     assert "watchButton.addEventListener" not in javascript
-    assert 'id="startButton" title="Start this verified goal" disabled' in html
+    assert 'id="startButton" title="Start this verified task" disabled' in html
     assert 'id="continueButton" hidden' in html
     assert 'id="acceptButton" hidden' in html
 
@@ -283,14 +283,16 @@ def test_gui_keeps_the_desktop_form_compact_and_mobile_form_full_width() -> None
     css = (static_root / "styles.css").read_text(encoding="utf-8")
 
     assert 'id="objective"' in html
-    assert ".workbench {" in css
+    assert ".home-layout {" in css
+    assert ".primary-nav {" in css
+    assert ".settings-panel {" in css
     assert "align-self: start" in css
     assert "align-self: stretch" in css
     assert "#objective" in css
     assert "flex: 1 1 150px" in css
     assert "min-height: 150px" in css
     assert 'id="modeSelect"' in html
-    assert ".goal-starter-grid" in css
+    assert ".goal-starter-grid" not in css
 
 
 def test_gui_status_encodings_are_labeled_and_idle_progress_is_hidden() -> None:
@@ -904,6 +906,19 @@ def test_gui_server_get_api_routes_return_json() -> None:
             "Managed runtime. The active task shows whether its planner and executor are "
             "local, cloud, or mixed."
         ),
+        "management": {
+            "mode": "managed",
+            "editable": False,
+            "summary": (
+                "AI routing and verification are managed by this installation. "
+                "You can review the active configuration in Settings."
+            ),
+        },
+        "verification": {
+            "mode": "managed_automatic",
+            "label": "Automatic evidence checks",
+            "technical_command": "",
+        },
         "demo": {
             "available": True,
             "kind": "scripted_practice",
@@ -1173,6 +1188,66 @@ def test_gui_rejects_session_key_on_connection_test_from_non_loopback_client(tmp
 
     assert result.code == 400
     assert "loopback" in str(result.payload["error"]).lower()
+
+
+@pytest.mark.parametrize(
+    ("payload", "error_text"),
+    [
+        (
+            {
+                "endpoint": "http://api.example.test/v1/chat/completions",
+                "model": "chosen-model",
+            },
+            "https",
+        ),
+        (
+            {
+                "endpoint": "https://api.example.test/v1/chat/completions",
+                "model": "chosen-model",
+                "api_key_env": "AGENTIC_HARNESS_MISSING_TEST_KEY",
+            },
+            "not set",
+        ),
+    ],
+)
+def test_setup_connection_test_returns_json_400_for_configuration_errors(
+    tmp_path,
+    monkeypatch,
+    payload,
+    error_text,
+) -> None:
+    monkeypatch.delenv("AGENTIC_HARNESS_MISSING_TEST_KEY", raising=False)
+    with gui_server(EmbeddedExecutionBackend(tmp_path)) as base_url:  # type: ignore[arg-type]
+        result = post_error(
+            base_url,
+            "/api/setup/test",
+            json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 400
+    assert error_text in str(result.payload["error"]).lower()
+
+
+def test_setup_returns_json_400_for_malformed_numeric_setting(tmp_path) -> None:
+    payload = {
+        "execution": "local_model",
+        "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+        "model": "local-model",
+        "verification_command": "python -m pytest -q",
+        "max_cycles": {},
+    }
+
+    with gui_server(EmbeddedExecutionBackend(tmp_path)) as base_url:  # type: ignore[arg-type]
+        result = post_error(
+            base_url,
+            "/api/setup",
+            json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 400
+    assert "whole number" in str(result.payload["error"]).lower()
 
 
 def test_embedded_gui_exposes_safe_demo_and_local_model_detection_routes(tmp_path) -> None:

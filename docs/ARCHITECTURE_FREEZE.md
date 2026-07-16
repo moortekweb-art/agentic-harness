@@ -22,3 +22,14 @@ the GLM provider idea was mistaken for a product mode. The change does not add a
 worker adapter or provider transport: it exposes four bounded policies over the
 existing engine, adds editable non-secret provider templates, and preserves the
 same independent completion gate.
+
+## Approved exception: predictable novice interface
+
+Observed first-use testing showed that the setup modal, path-oriented scope,
+raw verification command, hidden managed settings, and sentence-length mode
+names required programming knowledge and obscured ordinary task creation. The
+approved response is a presentation and onboarding correction: four permanent
+Home, Tasks, History, and Settings views; concise aliases over the existing
+strategy keys; automatic deterministic-check detection; local-model discovery;
+and progressive disclosure for technical values. It adds no worker, provider
+transport, orchestration mode, hosted service, or weaker completion path.

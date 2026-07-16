@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 import json
+import os
 import sys
 from typing import Any
 
@@ -131,6 +132,7 @@ ALLOWED_WORKERS = {
     "github_actions",
 }
 LIST_KEYS = {"shell_command", "coding_agent_command", "review_command"}
+_IS_WINDOWS = os.name == "nt"
 
 
 @dataclass
@@ -359,15 +361,52 @@ def detect_review_command(project_dir: str | Path) -> list[str]:
         except (OSError, json.JSONDecodeError):
             payload = {}
         scripts = payload.get("scripts") if isinstance(payload, dict) else None
-        if isinstance(scripts, dict) and isinstance(scripts.get("test"), str):
+        test_script = scripts.get("test") if isinstance(scripts, dict) else None
+        if (
+            isinstance(test_script, str)
+            and test_script.strip()
+            and "no test specified" not in test_script.lower()
+        ):
+            if (root / "pnpm-lock.yaml").exists():
+                return ["pnpm", "test"]
+            if (root / "yarn.lock").exists():
+                return ["yarn", "test"]
+            if (root / "bun.lock").exists() or (root / "bun.lockb").exists():
+                return ["bun", "test"]
             return ["npm", "test"]
     if (root / "Cargo.toml").exists():
         return ["cargo", "test"]
     if (root / "go.mod").exists():
         return ["go", "test", "./..."]
-    if (root / "pyproject.toml").exists() or (root / "tests").is_dir():
+    if (root / "pom.xml").exists():
+        wrapper = _build_wrapper(root, unix_name="mvnw", windows_names=("mvnw.cmd", "mvnw.bat"))
+        return [wrapper, "test"] if wrapper else ["mvn", "test"]
+    if (root / "build.gradle").exists() or (root / "build.gradle.kts").exists():
+        wrapper = _build_wrapper(
+            root,
+            unix_name="gradlew",
+            windows_names=("gradlew.bat", "gradlew.cmd"),
+        )
+        return [wrapper, "test"] if wrapper else ["gradle", "test"]
+    if any(root.glob("*.sln")) or any(root.glob("*.csproj")):
+        return ["dotnet", "test"]
+    if (root / "Gemfile").exists() and (root / "spec").is_dir():
+        return ["bundle", "exec", "rspec"]
+    if (root / "tests").is_dir() or (root / "pytest.ini").is_file():
         return ["python", "-m", "pytest", "-q"]
     return []
+
+
+def _build_wrapper(
+    root: Path,
+    *,
+    unix_name: str,
+    windows_names: tuple[str, ...],
+) -> str:
+    if _IS_WINDOWS:
+        return next((name for name in windows_names if (root / name).is_file()), "")
+    path = root / unix_name
+    return f"./{unix_name}" if path.is_file() and os.access(path, os.X_OK) else ""
 
 
 def demo_shell_config(*, python_executable: str | None = None) -> str:

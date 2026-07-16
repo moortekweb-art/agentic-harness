@@ -408,7 +408,7 @@ def make_handler(
                     return
                 try:
                     self._json(service.test_connection(body))
-                except (ValueError, OSError, RuntimeError) as exc:
+                except (ValueError, OSError, RuntimeError, HarnessError) as exc:
                     self._json(
                         {"ok": False, "error": str(exc)},
                         status=HTTPStatus.BAD_REQUEST,

@@ -78,6 +78,16 @@ PROVIDER_TEMPLATES: tuple[ProviderTemplate, ...] = (
         data_location="local",
     ),
     ProviderTemplate(
+        key="llamacpp_local",
+        label="llama.cpp on this computer",
+        description=(
+            "Connect to llama.cpp's OpenAI-compatible server. Start the server, then "
+            "choose the model it reports."
+        ),
+        endpoint="http://127.0.0.1:8080/v1/chat/completions",
+        data_location="local",
+    ),
+    ProviderTemplate(
         key="zai_api",
         label="Z.ai API",
         description="Start with Z.ai's general OpenAI-compatible endpoint.",
@@ -137,8 +147,22 @@ class ProviderProfile:
 
     @property
     def data_location(self) -> str:
-        hostname = urlparse(self.endpoint).hostname or ""
-        return "local" if _is_local_hostname(hostname) else "cloud"
+        return "cloud" if self.network_scope == "remote" else "local"
+
+    @property
+    def network_scope(self) -> str:
+        hostname = (urlparse(self.endpoint).hostname or "").strip().strip("[]").lower()
+        if hostname in {"localhost", "host.docker.internal"}:
+            return "device"
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            return "private_network" if hostname.endswith(".local") else "remote"
+        if address.is_loopback:
+            return "device"
+        if address.is_private or address.is_link_local:
+            return "private_network"
+        return "remote"
 
     def to_public_dict(self) -> dict[str, str]:
         return {
@@ -147,6 +171,7 @@ class ProviderProfile:
             "model": self.model,
             "api_key_env": self.api_key_env,
             "data_location": self.data_location,
+            "network_scope": self.network_scope,
         }
 
 

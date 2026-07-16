@@ -12,10 +12,12 @@ from pathlib import Path
 import pytest
 import yaml
 
+from agentic_harness.gui import backend as gui_backend_module
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.adapters.model_agent import ProviderResponse
 from agentic_harness.core.config import load_config
 from agentic_harness.core.factory import build_supervisor
+from agentic_harness.core.providers import ProviderProfile
 from agentic_harness.core.safety import (
     command_uses_windows_shell,
     format_command,
@@ -78,11 +80,32 @@ def test_setup_detects_project_specific_check_without_assuming_pytest(tmp_path: 
 
     assert setup["configured"] is False
     assert setup["suggested_check"] == "npm test"
+    assert setup["verification"] == {
+        "mode": "automatic",
+        "label": "Project tests (npm)",
+        "technical_command": "npm test",
+    }
+    assert setup["management"] == {
+        "mode": "workspace",
+        "editable": True,
+        "summary": "Settings for this project.",
+    }
     assert setup["workspace"] == str(tmp_path)
     assert {option["key"] for option in setup["execution_options"]} == {
         "coding_agent",
         "local_model",
         "cloud_model",
+    }
+
+
+def test_unknown_project_does_not_claim_automatic_verification(tmp_path: Path) -> None:
+    setup = EmbeddedExecutionBackend(tmp_path).setup()
+
+    assert setup["suggested_check"] == ""
+    assert setup["verification"] == {
+        "mode": "setup_needed",
+        "label": "No automatic project check found",
+        "technical_command": "",
     }
 
 
@@ -615,6 +638,181 @@ def test_model_setup_refuses_preexisting_config_symlink(tmp_path: Path) -> None:
     assert outside.read_text(encoding="utf-8") == "do not overwrite\n"
 
 
+def test_invalid_existing_config_is_reported_and_never_overwritten(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    config_path = config_dir / "config.yml"
+    original = "version: [invalid\napi_key: sk-example-secret\n"
+    config_path.write_text(original, encoding="utf-8")
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    setup = backend.setup()
+
+    assert setup["configured"] is False
+    assert setup["editable"] is False
+    assert setup["configuration_error"]["code"] == "invalid_existing_configuration"
+    assert "sk-example-secret" not in json.dumps(setup)
+    with pytest.raises(ValueError, match="was not changed"):
+        backend.configure(
+            {
+                "execution": "local_model",
+                "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+                "model": "local-model",
+                "verification_command": f"{sys.executable} -c \"print('verified')\"",
+            }
+        )
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_existing_configuration_directory_file_is_reported_read_only(tmp_path: Path) -> None:
+    config_path = tmp_path / ".agentic-harness"
+    config_path.write_text("not a directory\n", encoding="utf-8")
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    setup = backend.setup()
+
+    assert setup["configured"] is False
+    assert setup["editable"] is False
+    assert setup["configuration_error"] == {
+        "code": "unsafe_configuration_path",
+        "summary": "The existing configuration path is not a directory.",
+    }
+    with pytest.raises(ValueError, match="was not changed"):
+        backend.configure(
+            {
+                "execution": "local_model",
+                "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+                "model": "local-model",
+                "verification_command": "python -m pytest -q",
+            }
+        )
+    assert config_path.read_text(encoding="utf-8") == "not a directory\n"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO paths require POSIX")
+def test_existing_configuration_fifo_is_rejected_without_reading(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    config_path = config_dir / "config.yml"
+    os.mkfifo(config_path)
+    backend = EmbeddedExecutionBackend(tmp_path)
+    observed: dict[str, object] = {}
+
+    thread = threading.Thread(
+        target=lambda: observed.update(setup=backend.setup()),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=1)
+
+    assert thread.is_alive() is False
+    setup = observed["setup"]
+    assert isinstance(setup, dict)
+    assert setup["editable"] is False
+    assert setup["configuration_error"] == {
+        "code": "unsafe_configuration_path",
+        "summary": "The existing configuration file path is not a regular file.",
+    }
+
+
+def test_first_gui_save_preserves_existing_noop_review_gates(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: noop",
+                "allow_noop_success: true",
+                "review_command: [python, -m, pytest, -q]",
+                "review_artifact: reports/result.json",
+                "review_file_changed: src/result.py",
+                "review_git_clean: true",
+                "goal_max_cycles: 17",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    setup = backend.setup()
+    assert setup["configured"] is False
+    assert setup["editable"] is True
+    assert setup["verification_command"] == "python -m pytest -q"
+    assert setup["limits"]["max_cycles"] == 17
+
+    backend.configure(
+        {
+            "execution": "local_model",
+            "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+            "model": "local-model",
+        }
+    )
+
+    config = load_config(tmp_path)
+    assert config.allow_noop_success is True
+    assert config.review_artifact == "reports/result.json"
+    assert config.review_file_changed == "src/result.py"
+    assert config.review_git_clean is True
+    assert config.review_command == ["python", "-m", "pytest", "-q"]
+    assert config.goal_max_cycles == 17
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("max_cycles", {}, "whole number"),
+        ("max_elapsed_seconds", True, "whole number"),
+        ("retries", 1.5, "whole number"),
+        ("retry_delay", float("inf"), "finite number"),
+    ],
+)
+def test_gui_setup_rejects_malformed_numeric_settings(
+    tmp_path: Path,
+    field,
+    value,
+    message,
+) -> None:
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with pytest.raises(ValueError, match=message):
+        backend.configure(
+            {
+                "execution": "local_model",
+                "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+                "model": "local-model",
+                "verification_command": "python -m pytest -q",
+                field: value,
+            }
+        )
+
+    assert not (tmp_path / ".agentic-harness" / "config.yml").exists()
+
+
+def test_unsupported_existing_config_version_is_read_only(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    config_path = config_dir / "config.yml"
+    original = "version: 99\nworker: noop\n"
+    config_path.write_text(original, encoding="utf-8")
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    setup = backend.setup()
+
+    assert setup["editable"] is False
+    assert "unsupported config version" in setup["configuration_error"]["summary"]
+    with pytest.raises(ValueError, match="was not changed"):
+        backend.configure(
+            {
+                "execution": "coding_agent",
+                "agent": "codex",
+                "verification_command": "python -m pytest -q",
+            }
+        )
+    assert config_path.read_text(encoding="utf-8") == original
+
+
 def test_session_only_cloud_key_must_be_reentered_after_restart(tmp_path: Path) -> None:
     first = EmbeddedExecutionBackend(tmp_path)
     first.configure(
@@ -645,18 +843,29 @@ def test_editing_model_limits_preserves_the_existing_session_credential(
         "confirm_remote_data": True,
         "verification_command": f"{sys.executable} -c \"print('verified')\"",
     }
-    backend.configure({**body, "api_key": "temporary-secret"})
+    backend.configure(
+        {
+            **body,
+            "api_key": "temporary-secret",
+            "max_total_tokens": 12_345,
+            "max_provider_calls": 17,
+            "max_tool_calls": 89,
+        }
+    )
 
     backend.configure({**body, "max_cycles": 12})
 
     config = load_config(tmp_path)
     assert config.llm_credential_source == "session"
     assert backend.api_key == "temporary-secret"
+    assert config.goal_max_total_tokens == 12_345
+    assert config.goal_max_provider_calls == 17
+    assert config.goal_max_tool_calls == 89
     assert backend.setup()["credential"] == {
         "source": "session",
         "configured": True,
     }
-    assert backend.readiness()["state"] == "ready"
+    assert backend.readiness()["state"] == "connection_test_required"
 
 
 def test_editing_after_restart_keeps_missing_session_key_explicit(
@@ -715,6 +924,23 @@ def test_reentering_session_key_resumes_orphaned_goal(
         "_start_thread",
         lambda commands, policy: started.append(commands),
     )
+    with pytest.raises(ValueError, match="Test this AI connection"):
+        restarted.set_session_credential("replacement-secret")
+    profile = ProviderProfile(
+        endpoint=config.llm_endpoint,
+        model=config.llm_model,
+        api_key_env=config.llm_api_key_env,
+    )
+    restarted._execution_validation = {
+        "verified": True,
+        "kind": "model_agent",
+        "credential_source": "session",
+        "fingerprint": gui_backend_module._model_connection_fingerprint(
+            profile,
+            credential_source="session",
+            credential_value="replacement-secret",
+        ),
+    }
 
     result = restarted.set_session_credential("replacement-secret")
 
@@ -829,7 +1055,13 @@ def test_setup_connection_test_proves_structured_model_response_without_echoing_
         def complete(self, messages):
             captured["messages"] = messages
             return ProviderResponse(
-                content={"action": "report_outcome", "arguments": {"status": "progress"}},
+                content={
+                    "action": "report_outcome",
+                    "arguments": {
+                        "status": "progress",
+                        "summary": "Connection test passed.",
+                    },
+                },
                 usage={"total_tokens": 3},
             )
 
@@ -850,11 +1082,196 @@ def test_setup_connection_test_proves_structured_model_response_without_echoing_
     assert result == {
         "reachable": True,
         "structured_actions": True,
+        "verified": True,
         "model": "user-model",
         "data_location": "cloud",
+        "summary": "The AI connection and structured actions are working.",
     }
     assert captured["api_key"] == "connection-test-secret"
     assert "connection-test-secret" not in json.dumps(result)
+
+    backend.configure(
+        {
+            "execution": "cloud_model",
+            "endpoint": "https://api.example.test/v1/chat/completions",
+            "model": "user-model",
+            "confirm_remote_data": True,
+            "verification_command": f"{sys.executable} -c \"print('verified')\"",
+        }
+    )
+    assert backend.setup()["execution_validation"]["verified"] is False
+
+    backend.configure(
+        {
+            "execution": "cloud_model",
+            "endpoint": "https://api.example.test/v1/chat/completions",
+            "model": "user-model",
+            "api_key": "connection-test-secret",
+            "confirm_remote_data": True,
+            "verification_command": f"{sys.executable} -c \"print('verified')\"",
+        }
+    )
+    assert backend.setup()["execution_validation"]["verified"] is True
+    assert backend.readiness()["state"] == "ready"
+
+    backend.configure(
+        {
+            "execution": "cloud_model",
+            "endpoint": "https://api.example.test/v1/chat/completions",
+            "model": "different-model",
+            "api_key": "connection-test-secret",
+            "confirm_remote_data": True,
+            "verification_command": f"{sys.executable} -c \"print('verified')\"",
+        }
+    )
+    assert backend.setup()["execution_validation"]["verified"] is False
+    assert backend.readiness()["state"] == "connection_test_required"
+
+    backend.test_connection(
+        {
+            "endpoint": "https://different-provider.example/v1/chat/completions",
+            "model": "different-provider-model",
+        }
+    )
+    assert captured["api_key"] == ""
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        {"action": "report_outcome", "arguments": "not-an-object"},
+        {"action": "report_outcome", "arguments": {"status": "progress"}},
+        {
+            "action": "report_outcome",
+            "arguments": {"status": "unexpected", "summary": "Wrong status."},
+        },
+    ],
+)
+def test_model_connection_rejects_malformed_report_outcome(
+    tmp_path: Path,
+    monkeypatch,
+    content,
+) -> None:
+    class FakeProvider:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def complete(self, messages):
+            return ProviderResponse(content=content, usage={"total_tokens": 1})
+
+    monkeypatch.setattr(
+        "agentic_harness.gui.backend.OpenAICompatibleProvider",
+        FakeProvider,
+    )
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with pytest.raises(ValueError, match="structured action protocol"):
+        backend.test_connection(
+            {
+                "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+                "model": "local-model",
+            }
+        )
+
+    assert backend._execution_validation == {}
+
+
+def test_replacing_session_key_invalidates_model_connection_validation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeProvider:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def complete(self, messages):
+            return ProviderResponse(
+                content={
+                    "action": "report_outcome",
+                    "arguments": {"status": "progress", "summary": "Connection passed."},
+                },
+                usage={"total_tokens": 1},
+            )
+
+    monkeypatch.setattr(
+        "agentic_harness.gui.backend.OpenAICompatibleProvider",
+        FakeProvider,
+    )
+    backend = EmbeddedExecutionBackend(tmp_path)
+    body = {
+        "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+        "model": "local-model",
+        "api_key": "tested-secret",
+    }
+    backend.test_connection(body)
+    backend.configure(
+        {
+            **body,
+            "execution": "local_model",
+            "verification_command": "python -m pytest -q",
+        }
+    )
+    assert backend.readiness()["state"] == "ready"
+
+    backend.set_session_credential("replacement-secret")
+
+    assert backend.setup()["execution_validation"]["verified"] is False
+    assert backend.readiness()["state"] == "connection_test_required"
+
+
+def test_changing_env_credential_name_or_value_invalidates_model_validation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeProvider:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def complete(self, messages):
+            return ProviderResponse(
+                content={
+                    "action": "report_outcome",
+                    "arguments": {"status": "progress", "summary": "Connection passed."},
+                },
+                usage={"total_tokens": 1},
+            )
+
+    monkeypatch.setattr(
+        "agentic_harness.gui.backend.OpenAICompatibleProvider",
+        FakeProvider,
+    )
+    monkeypatch.setenv("MODEL_KEY_A", "tested-secret")
+    backend = EmbeddedExecutionBackend(tmp_path)
+    connection = {
+        "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+        "model": "local-model",
+        "api_key_env": "MODEL_KEY_A",
+    }
+    backend.test_connection(connection)
+    backend.configure(
+        {
+            **connection,
+            "execution": "local_model",
+            "verification_command": "python -m pytest -q",
+        }
+    )
+    assert backend.readiness()["state"] == "ready"
+
+    monkeypatch.setenv("MODEL_KEY_A", "replacement-secret")
+    assert backend.readiness()["state"] == "connection_test_required"
+
+    backend.test_connection(connection)
+    assert backend.readiness()["state"] == "ready"
+    monkeypatch.setenv("MODEL_KEY_B", "replacement-secret")
+    backend.configure(
+        {
+            **connection,
+            "api_key_env": "MODEL_KEY_B",
+            "execution": "local_model",
+            "verification_command": "python -m pytest -q",
+        }
+    )
+    assert backend.setup()["execution_validation"]["verified"] is False
 
 
 def test_codex_connection_test_runs_the_configured_model_in_read_only_mode(

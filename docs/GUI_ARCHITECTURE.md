@@ -50,12 +50,16 @@ Four product decisions remain independent:
 | --- | --- | --- |
 | Execution method | installed coding agent, built-in model worker | worker configuration |
 | Provider | local endpoint, custom cloud endpoint, editable Z.ai template | non-secret provider profile |
-| Work approach | Quick task, Plan first, Keep working, Bounded experiment | goal execution strategy |
+| Run mode | Quick, Standard, Thorough, Experiment | goal execution strategy |
 | Verification | tests, lint, build, or another deterministic command | goal review command |
+
+The concise names are frontend presentation aliases. The stable backend keys
+remain `quick`, `plan`, `persistent`, and `experiment` so CLI and API routing do
+not change.
 
 An execution strategy supplies plain-language guidance and can only tighten the
 workspace autonomy limits. It cannot enlarge configured cycles, elapsed time,
-tokens, provider calls, or tool calls. `Bounded experiment` additionally fails
+tokens, provider calls, or tool calls. `Experiment` additionally fails
 closed unless the built-in worker and at least one explicit allowed path are
 selected. Provider templates never select or alter a strategy.
 
@@ -91,6 +95,16 @@ results may leave the computer.
 Provider templates are public, non-secret form defaults. Their endpoint, model,
 and environment-variable fields remain editable, and availability is always
 proved by the connection test rather than inferred from the template label.
+
+`ProviderProfile.network_scope` distinguishes `device`, `private_network`, and
+`remote`. This prevents the interface from describing plaintext private-LAN
+traffic as staying on the same computer.
+
+Model discovery probes only fixed loopback ports and reads a bounded
+`/v1/models` response. It can return several model IDs for an explicit user
+choice. Discovery is not readiness: a non-secret endpoint-and-model fingerprint
+is marked verified only after one structured-action generation test succeeds in
+the current app session. Changing either field invalidates that result.
 
 ### Bounded model agent
 
@@ -129,10 +143,11 @@ records and never invents activity.
 ### Local server and browser client
 
 `agentic_harness/gui/server.py` serves the package resources and JSON API using
-the Python standard library. `agentic_harness/gui/static/` presents setup,
-current goal, plan, requirements, measured progress, timeline, verification,
-changed files, artifacts, recovery actions, and durable history in plain
-language.
+the Python standard library. `agentic_harness/gui/static/` presents four
+predictable views: Home, Tasks, History, and Settings. Technical checks,
+connection fields, access paths, and limits use progressive disclosure while
+progress, verification, changed files, artifacts, and recovery remain visible
+on the Tasks view.
 
 ## Public API
 
@@ -164,6 +179,13 @@ its separate managed-route vocabulary. `GET /api/setup` declares the embedded
 deployment as `local_self_hosted` and `multi_user: false`; clients must not
 mistake that process for a shared hosted control plane.
 
+Embedded setup is explicitly workspace-scoped through
+`management.mode = "workspace"`. Managed compatibility deployments use
+`management.mode = "managed"` and remain visible but read-only. If an existing
+configuration is invalid or its path is a symlink, setup returns a redacted
+`configuration_error`, sets `editable: false`, and all browser saves fail closed
+without changing the original bytes.
+
 ## Progress and completion
 
 Progress is determinate only when a persisted plan or requirement set supplies
@@ -194,6 +216,8 @@ worker-authored completion claim can select one of these trusted categories.
   explicitly listed in `AGENTIC_HARNESS_GUI_ALLOWED_HOSTS`.
 - State-changing requests must be same-origin JSON and are size- and
   rate-limited.
+- Automatic model discovery is fixed-loopback only and never scans a LAN or
+  follows a user-supplied discovery URL.
 - Session-key entry is accepted only from a loopback client.
 - API responses are redacted, non-cacheable JSON. Static and API responses set
   content-security, framing, MIME-sniffing, referrer, and permissions headers.
@@ -212,12 +236,15 @@ A GUI release must prove:
   optional external backend;
 - arbitrary local and cloud-compatible model IDs work through a scripted
   OpenAI-compatible provider;
+- a model profile cannot become ready until its structured-action connection
+  test passes in the current app session;
+- malformed and symlinked existing configurations are reported and preserved;
 - keys do not enter configuration, URLs, events, history, exports, transcripts,
   or API responses;
 - interruption, restart, continuation, budget exhaustion, repeated blockers,
   and failed review map to `Blocked with reason` or `Failed with evidence`;
 - successful independent review maps to `Verified done`;
-- desktop and narrow layouts expose setup, progress, evidence, and recovery
+- desktop and narrow layouts expose all four views, progress, evidence, and recovery
   without overflow; and
 - wheel and source distributions contain both entry points and all browser
   assets.

@@ -11,9 +11,11 @@ from pathlib import Path
 
 import pytest
 
+from agentic_harness.core import config as config_module
 from agentic_harness.core.config import (
     ConfigError,
     HarnessConfig,
+    detect_review_command,
     load_config,
     write_default_config,
     write_tool_config,
@@ -605,6 +607,81 @@ def test_write_tool_config_detects_rust_review_command(tmp_path) -> None:
     write_tool_config(tmp_path, tool="aider")
 
     assert load_config(tmp_path).review_command == ["cargo", "test"]
+
+
+def test_detect_review_command_ignores_placeholder_npm_and_bare_pyproject(tmp_path) -> None:
+    (tmp_path / "package.json").write_text(
+        '{"scripts":{"test":"echo \\"Error: no test specified\\" && exit 1"}}',
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+
+    assert detect_review_command(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("marker", "expected"),
+    [
+        ("mvnw", ["./mvnw", "test"]),
+        ("gradlew", ["./gradlew", "test"]),
+    ],
+)
+def test_detect_review_command_prefers_project_build_wrappers(
+    tmp_path,
+    marker,
+    expected,
+) -> None:
+    if marker == "mvnw":
+        (tmp_path / "pom.xml").write_text("<project />", encoding="utf-8")
+    else:
+        (tmp_path / "build.gradle").write_text("plugins {}", encoding="utf-8")
+    wrapper = tmp_path / marker
+    wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+    wrapper.chmod(0o755)
+
+    assert detect_review_command(tmp_path) == expected
+
+
+@pytest.mark.parametrize(
+    ("project_marker", "wrapper", "fallback"),
+    [
+        ("pom.xml", "mvnw", ["mvn", "test"]),
+        ("build.gradle", "gradlew", ["gradle", "test"]),
+    ],
+)
+def test_detect_review_command_ignores_non_executable_unix_wrapper(
+    tmp_path,
+    project_marker,
+    wrapper,
+    fallback,
+) -> None:
+    (tmp_path / project_marker).write_text("project", encoding="utf-8")
+    (tmp_path / wrapper).write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert detect_review_command(tmp_path) == fallback
+
+
+@pytest.mark.parametrize(
+    ("project_marker", "unix_wrapper", "windows_wrapper", "expected"),
+    [
+        ("pom.xml", "mvnw", "mvnw.cmd", ["mvnw.cmd", "test"]),
+        ("build.gradle", "gradlew", "gradlew.bat", ["gradlew.bat", "test"]),
+    ],
+)
+def test_detect_review_command_prefers_windows_wrapper_on_windows(
+    tmp_path,
+    monkeypatch,
+    project_marker,
+    unix_wrapper,
+    windows_wrapper,
+    expected,
+) -> None:
+    monkeypatch.setattr(config_module, "_IS_WINDOWS", True)
+    (tmp_path / project_marker).write_text("project", encoding="utf-8")
+    (tmp_path / unix_wrapper).write_text("unix wrapper", encoding="utf-8")
+    (tmp_path / windows_wrapper).write_text("windows wrapper", encoding="utf-8")
+
+    assert detect_review_command(tmp_path) == expected
 
 
 def test_write_tool_config_leaves_review_unconfigured_when_project_has_no_known_check(

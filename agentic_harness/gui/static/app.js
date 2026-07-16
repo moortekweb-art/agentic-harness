@@ -8,23 +8,15 @@ const START_TIMEOUT_MS = 90000;
 const DEFAULT_PUBLIC_STRATEGY = "plan";
 const DEFAULT_MANAGED_MODE = "guided";
 
-const GOAL_STARTERS = Object.freeze({
-  create: {
-    placeholder: "Example: Add a CSV download to the reports page and show me what changed.",
-    hint: "Say what you want created or improved and any boundary that matters.",
-  },
-  fix: {
-    placeholder: "Example: The Save button does nothing on iPhone. Find the cause and fix it.",
-    hint: "Describe what is going wrong and what should happen instead.",
-  },
-  audit: {
-    placeholder: "Example: Check this project for broken links and repair the ones you can verify.",
-    hint: "Name what should be checked. The assistant will record findings and evidence.",
-  },
-  document: {
-    placeholder: "Example: Write a setup guide that a new teammate can follow without help.",
-    hint: "Say who the explanation is for and what they should understand or accomplish.",
-  },
+const MODE_PRESENTATION = Object.freeze({
+  quick: { label: "Quick", description: "Best for small, focused changes." },
+  local: { label: "Quick", description: "Best for small, focused changes." },
+  plan: { label: "Standard", description: "Plans the work, makes changes, and verifies the result." },
+  guided: { label: "Standard", description: "Plans the work, makes changes, and verifies the result." },
+  persistent: { label: "Thorough", description: "Keeps working through larger or multi-step tasks." },
+  cloud: { label: "Thorough", description: "Keeps working through larger or multi-step tasks." },
+  experiment: { label: "Experiment", description: "A tightly limited trial for uncertain ideas." },
+  experimental: { label: "Experiment", description: "A tightly limited trial for uncertain ideas." },
 });
 
 const STATUS_ICONS = Object.freeze({
@@ -42,9 +34,10 @@ const STATUS_ICONS = Object.freeze({
 const state = {
   mode: DEFAULT_PUBLIC_STRATEGY,
   modeDefault: DEFAULT_PUBLIC_STRATEGY,
-  goalKind: "",
+  activeView: "home",
   modes: [],
   busy: false,
+  setupBusy: false,
   authToken: "",
   authPromptPromise: null,
   setupPrompted: false,
@@ -69,6 +62,13 @@ const state = {
 
 const byId = (id) => document.getElementById(id);
 const els = {
+  homeTab: byId("homeTab"),
+  tasksTab: byId("tasksTab"),
+  historyTab: byId("historyTab"),
+  homeView: byId("homeView"),
+  tasksView: byId("tasksView"),
+  historyView: byId("historyView"),
+  settingsView: byId("settingsView"),
   health: byId("health"),
   healthText: byId("healthText"),
   healthIcon: byId("healthIcon"),
@@ -84,17 +84,16 @@ const els = {
   demoButton: byId("demoButton"),
   demoButtonLabel: byId("demoButtonLabel"),
   demoSetupButton: byId("demoSetupButton"),
-  starterCreate: byId("starterCreate"),
-  starterFix: byId("starterFix"),
-  starterAudit: byId("starterAudit"),
-  starterDocument: byId("starterDocument"),
   objectiveLabel: byId("objectiveLabel"),
   objectiveHint: byId("objectiveHint"),
   objective: byId("objective"),
   modeSection: byId("modeSection"),
   modeSelect: byId("modeSelect"),
   modes: byId("modes"),
+  advancedModes: byId("advancedModes"),
+  modeHelp: byId("modeHelp"),
   safeAreas: byId("safeAreas"),
+  accessSummary: byId("accessSummary"),
   checks: byId("checks"),
   verificationDetails: byId("verificationDetails"),
   verificationSummary: byId("verificationSummary"),
@@ -115,6 +114,8 @@ const els = {
   checkpoint: byId("checkpoint"),
   workApproachValue: byId("workApproachValue"),
   attemptsValue: byId("attemptsValue"),
+  taskContext: byId("taskContext"),
+  returnToCurrentButton: byId("returnToCurrentButton"),
   currentCard: byId("currentCard"),
   continueButton: byId("continueButton"),
   acceptButton: byId("acceptButton"),
@@ -148,14 +149,21 @@ const els = {
   advancedDetails: byId("advancedDetails"),
   statusUpdated: byId("statusUpdated"),
   shortcutsDialog: byId("shortcutsDialog"),
-  setupDialog: byId("setupDialog"),
   setupForm: byId("setupForm"),
   closeSetupButton: byId("closeSetupButton"),
+  saveSetupButton: byId("saveSetupButton"),
+  managedSettings: byId("managedSettings"),
+  managedSettingsSummary: byId("managedSettingsSummary"),
+  managedWorkspace: byId("managedWorkspace"),
+  managedExecution: byId("managedExecution"),
+  managedVerification: byId("managedVerification"),
+  configurationError: byId("configurationError"),
+  configurationErrorText: byId("configurationErrorText"),
+  editableSettings: byId("editableSettings"),
   executionChoice: byId("executionChoice"),
   executionDisclosure: byId("executionDisclosure"),
   codingAgentFields: byId("codingAgentFields"),
   codingAgentChoice: byId("codingAgentChoice"),
-  testCodingAgentButton: byId("testCodingAgentButton"),
   codingAgentConnectionResult: byId("codingAgentConnectionResult"),
   providerFields: byId("providerFields"),
   providerPreset: byId("providerPreset"),
@@ -163,17 +171,21 @@ const els = {
   localModelRequirement: byId("localModelRequirement"),
   localModelDetectionRow: byId("localModelDetectionRow"),
   localModelDetection: byId("localModelDetection"),
+  localModelGuide: byId("localModelGuide"),
+  detectedModelChoice: byId("detectedModelChoice"),
   useDetectedModelButton: byId("useDetectedModelButton"),
   checkLocalModelsButton: byId("checkLocalModelsButton"),
   providerEndpoint: byId("providerEndpoint"),
   providerModel: byId("providerModel"),
   providerApiKeyEnv: byId("providerApiKeyEnv"),
   providerApiKey: byId("providerApiKey"),
-  testConnectionButton: byId("testConnectionButton"),
+  manualConnectionDetails: byId("manualConnectionDetails"),
   connectionResult: byId("connectionResult"),
   remoteDataRow: byId("remoteDataRow"),
   confirmRemoteData: byId("confirmRemoteData"),
   verificationCommand: byId("verificationCommand"),
+  automaticCheckLabel: byId("automaticCheckLabel"),
+  automaticCheckDetail: byId("automaticCheckDetail"),
   maxCycles: byId("maxCycles"),
   maxMinutes: byId("maxMinutes"),
   maxTokens: byId("maxTokens"),
@@ -288,32 +300,63 @@ function linesFrom(field) {
   return field.value.split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
-function starterButtons() {
-  return [
-    { button: els.starterCreate, kind: "create" },
-    { button: els.starterFix, kind: "fix" },
-    { button: els.starterAudit, kind: "audit" },
-    { button: els.starterDocument, kind: "document" },
+function showView(view, { focus = false } = {}) {
+  const requested = ["home", "tasks", "history", "settings"].includes(view) ? view : "home";
+  state.activeView = requested;
+  const rows = [
+    { name: "home", tab: els.homeTab, panel: els.homeView },
+    { name: "tasks", tab: els.tasksTab, panel: els.tasksView },
+    { name: "history", tab: els.historyTab, panel: els.historyView },
+    { name: "settings", tab: els.setupButton, panel: els.settingsView },
   ];
+  rows.forEach(({ name, tab, panel }) => {
+    const active = name === requested;
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    panel.hidden = !active;
+  });
+  if (focus) {
+    const target = requested === "home"
+      ? els.objective
+      : requested === "history"
+        ? els.historySearch
+        : rows.find((row) => row.name === requested)?.panel;
+    if (target && typeof target.focus === "function") target.focus();
+  }
 }
 
-function selectGoalStarter(kind, { focus = false, persist = true } = {}) {
-  state.goalKind = GOAL_STARTERS[kind] ? kind : "";
-  starterButtons().forEach(({ button, kind: buttonKind }) => {
-    button.setAttribute("aria-pressed", String(buttonKind === state.goalKind));
-  });
-  const starter = GOAL_STARTERS[state.goalKind];
-  els.objective.placeholder = starter
-    ? starter.placeholder
-    : "Example: Add a CSV download to the reports page and show me what changed.";
-  els.objectiveHint.textContent = starter
-    ? starter.hint
-    : "A normal sentence is enough. Include any limit that matters to you.";
-  if (focus) els.objective.focus();
-  if (persist) {
-    pushUndo();
-    persistForm();
-  }
+function handlePrimaryTabKeydown(event) {
+  const tabs = [
+    { name: "home", tab: els.homeTab },
+    { name: "tasks", tab: els.tasksTab },
+    { name: "history", tab: els.historyTab },
+    { name: "settings", tab: els.setupButton },
+  ];
+  const current = tabs.findIndex(({ tab }) => tab === event.currentTarget);
+  if (current < 0) return;
+  let next = current;
+  if (event.key === "ArrowRight") next = (current + 1) % tabs.length;
+  else if (event.key === "ArrowLeft") next = (current - 1 + tabs.length) % tabs.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = tabs.length - 1;
+  else return;
+  event.preventDefault();
+  showView(tabs[next].name);
+  tabs[next].tab.focus();
+}
+
+function modePresentation(mode) {
+  return MODE_PRESENTATION[mode?.key] || {
+    label: mode?.label || "Mode",
+    description: mode?.best_for || "Uses the configured task workflow.",
+  };
+}
+
+function updateAccessSummary() {
+  const count = linesFrom(els.safeAreas).length;
+  els.accessSummary.textContent = count
+    ? `Access · Limited to ${count} ${count === 1 ? "area" : "areas"}`
+    : "Access · Entire project";
 }
 
 function formSnapshot() {
@@ -322,8 +365,7 @@ function formSnapshot() {
     safeAreas: els.safeAreas.value,
     checks: els.checks.value,
     mode: state.mode,
-    goalKind: state.goalKind,
-    draftVersion: 2,
+    draftVersion: 3,
   };
 }
 
@@ -332,8 +374,8 @@ function applyFormSnapshot(snapshot) {
   els.safeAreas.value = snapshot.safeAreas || "";
   els.checks.value = snapshot.checks || "";
   state.mode = snapshot.mode || state.modeDefault;
-  selectGoalStarter(snapshot.goalKind || "", { persist: false });
   renderModes(state.modes);
+  updateAccessSummary();
   updateStartButton();
 }
 
@@ -342,11 +384,10 @@ function resetNewGoalForm() {
   els.safeAreas.value = "";
   if (usesHumanModes()) els.checks.value = "";
   state.mode = state.modeDefault;
-  state.goalKind = "";
-  selectGoalStarter("", { persist: false });
   renderModes(state.modes);
+  updateAccessSummary();
   sessionStorage.removeItem(STORAGE_KEY);
-  state.restoredDraftVersion = 2;
+  state.restoredDraftVersion = 3;
   state.undoStack = [];
   state.redoStack = [];
   pushUndo();
@@ -378,21 +419,22 @@ function renderModes(modes, defaultMode = state.modeDefault) {
       : state.modes[0]?.key || state.modeDefault;
   }
   els.modes.replaceChildren();
+  els.advancedModes.replaceChildren();
   els.modeSelect.replaceChildren();
   state.modes.forEach((mode) => {
+    const presentation = modePresentation(mode);
+    const experimental = ["experiment", "experimental"].includes(mode.key);
     const card = document.createElement("button");
     card.type = "button";
     card.className = "mode-card";
     card.setAttribute("aria-pressed", String(mode.key === state.mode));
-    card.setAttribute("aria-label", `${mode.label}. ${mode.best_for}`);
+    card.setAttribute("aria-label", `${presentation.label}. ${presentation.description}`);
 
     const title = document.createElement("strong");
-    title.textContent = mode.label;
+    title.textContent = presentation.label;
     const description = document.createElement("span");
-    description.textContent = mode.best_for;
-    const note = document.createElement("small");
-    note.textContent = mode.caution;
-    card.append(title, description, note);
+    description.textContent = presentation.description;
+    card.append(title, description);
     card.addEventListener("click", () => {
       state.mode = mode.key;
       renderModes(state.modes);
@@ -400,15 +442,17 @@ function renderModes(modes, defaultMode = state.modeDefault) {
       persistForm();
       updateStartButton();
     });
-    els.modes.append(card);
+    (experimental ? els.advancedModes : els.modes).append(card);
 
     const option = document.createElement("option");
     option.value = mode.key;
-    option.textContent = `${mode.label} — ${mode.best_for}`;
+    option.textContent = presentation.label;
     option.selected = mode.key === state.mode;
     els.modeSelect.append(option);
   });
   if (state.modes.some((mode) => mode.key === state.mode)) els.modeSelect.value = state.mode;
+  const selected = modePresentation(state.modes.find((mode) => mode.key === state.mode));
+  els.modeHelp.textContent = `${selected.label}: ${selected.description}`;
 }
 
 function pushUndo() {
@@ -468,16 +512,17 @@ function updateStartButton() {
   const hasObjective = Boolean(els.objective.value.trim());
   const hasVerification = Boolean(els.checks.value.trim());
   const verificationRequired = !usesHumanModes();
-  const experimentNeedsModel = state.mode === "experiment"
+  const experimentMode = state.mode === "experiment";
+  const experimentNeedsModel = experimentMode
     && state.setup?.worker?.type !== "model_agent";
-  const experimentNeedsScope = state.mode === "experiment"
+  const experimentNeedsScope = experimentMode
     && !els.safeAreas.value.trim();
   els.startButton.disabled = state.busy || !canStart || !hasObjective
     || (verificationRequired && !hasVerification)
     || experimentNeedsModel
     || experimentNeedsScope;
   if (state.busy) {
-    els.startHelp.textContent = "Sending the goal. Planning can take up to a minute; this page will reconnect if your phone sleeps.";
+    els.startHelp.textContent = "Sending the task. Planning can take up to a minute; this page will reconnect if your phone sleeps.";
   } else if (!canStart) {
     els.startHelp.textContent = state.readiness.next_action
       || state.readiness.summary
@@ -485,24 +530,29 @@ function updateStartButton() {
   } else if (!hasObjective) {
     els.startHelp.textContent = "Describe the outcome you want before starting.";
   } else if (verificationRequired && !hasVerification) {
-    els.startHelp.textContent = "Add the verification command that will prove this goal is complete to enable Start.";
+    els.startHelp.textContent = "No automatic project check was found. Add one in Settings, then return here.";
   } else if (experimentNeedsModel) {
-    els.startHelp.textContent = "Bounded experiment requires a local or cloud model in Setup so the selected file boundary can be enforced.";
+    els.startHelp.textContent = "Experiment requires a local or cloud AI connection in Settings so its file limit can be enforced.";
   } else if (experimentNeedsScope) {
-    els.startHelp.textContent = "Add at least one allowed file or folder under Optional scope for a bounded experiment.";
+    els.startHelp.textContent = "Open Access and select at least one file or folder for Experiment mode.";
   } else if (!hasVerification) {
     els.startHelp.textContent = "Ready. The assistant will choose checks and show the evidence before calling this done.";
   } else {
-    els.startHelp.textContent = "Ready to start this verified goal.";
+    els.startHelp.textContent = "Ready to start this verified task.";
   }
 }
 
 function renderHealth(health) {
   state.readiness = health.readiness || {};
   const ready = state.readiness.can_start === true;
-  const needsSetup = ["setup_required", "credential_required", "verification_required"]
+  const needsSetup = [
+    "setup_required",
+    "credential_required",
+    "verification_required",
+    "connection_test_required",
+  ]
     .includes(state.readiness.state);
-  const blocked = state.readiness.state === "blocked";
+  const blocked = ["blocked", "configuration_error"].includes(state.readiness.state);
   const label = ready ? "Ready" : needsSetup ? "Setup needed" : blocked ? "Needs attention" : "Task active";
   els.healthText.textContent = label;
   els.health.className = ready ? "health ok" : needsSetup || blocked ? "health blocked" : "health";
@@ -686,6 +736,7 @@ function renderFinalReceipt(task, receipt) {
 
 function renderTask(task) {
   state.currentTask = task;
+  els.taskContext.hidden = !state.viewingHistoryId;
   const status = task.status || "ready";
   const receipt = receiptContext(task);
   reconcileCompletedDraft(task, receipt);
@@ -759,12 +810,19 @@ function renderTask(task) {
     Number.isFinite(receipt.final.attempts) ? receipt.final.attempts : current.cycle || 0,
   );
   const strategy = task.metadata?.strategy;
-  els.workApproachValue.textContent = strategy?.label
-    || (usesHumanModes() ? "Managed route" : "Plan first");
+  const strategyKey = strategy?.key || task.metadata?.mode || task.metadata?.strategy_key;
+  const selectedMode = state.modes.find((mode) => mode.key === strategyKey);
+  els.workApproachValue.textContent = selectedMode
+    ? modePresentation(selectedMode).label
+    : usesHumanModes() ? "Managed route" : "Standard";
   const execution = task.metadata?.execution;
   if (execution?.label) {
-    const location = execution.data_location === "local"
-      ? "Data stays local"
+    const location = execution.network_scope === "device"
+      ? "Runs on this computer"
+      : execution.network_scope === "private_network"
+        ? "Uses your private network"
+        : execution.data_location === "local"
+      ? "Local AI"
       : execution.data_location === "cloud_and_local"
         ? "Cloud planning + local execution"
         : "Managed data route";
@@ -779,7 +837,7 @@ function renderTask(task) {
   textList(els.requirementsList, task.requirements, (row) => ({
     text: `${row.status || "pending"}: ${row.text || row.id || "Requirement"}`,
     className: String(row.status || "pending").toLowerCase(),
-  }), "Requirements will appear as the goal is understood.");
+  }), "Requirements will appear as the task is understood.");
   textList(els.eventTimeline, task.events, (row) => ({
     text: `${row.summary || "Progress recorded"}${row.checkpoint ? ` — ${row.checkpoint}` : ""}`,
     className: row.stage || "act",
@@ -869,10 +927,12 @@ function renderHistory(tasks) {
       if (state.liveTask && state.liveTask.id === task.id) {
         state.viewingHistoryId = "";
         renderTask(state.liveTask);
+        showView("tasks", { focus: true });
         return;
       }
       state.viewingHistoryId = task.id;
       renderTask(task);
+      showView("tasks", { focus: true });
     });
     item.append(button);
     els.historyList.append(item);
@@ -949,27 +1009,42 @@ function renderSetup(setup) {
   state.setup = setup;
   updateDemoCallout(state.currentTask);
   const humanModes = setup.editable === false && setup.worker?.type === "local_goal";
+  const readOnly = setup.editable === false;
+  const configurationError = setup.configuration_error || null;
   els.modeSection.hidden = false;
   els.checks.required = !humanModes;
-  els.verificationDetails.className = humanModes
-    ? "verification-details optional"
-    : "verification-details required";
-  els.verificationDetails.open = !humanModes;
-  els.verificationSummary.textContent = humanModes
-    ? "Optional: add your own success check"
-    : "Required: add a success check";
-  els.verificationLabel.textContent = humanModes
-    ? "How should the result be checked? (optional)"
-    : "Verification command for this goal";
+  els.verificationDetails.className = "verification-details";
+  els.verificationDetails.open = false;
+  const verification = setup.verification || {};
+  const hasCheck = Boolean(
+    setup.verification_command || setup.suggested_check || verification.technical_command,
+  );
+  els.verificationSummary.textContent = hasCheck || humanModes
+    ? "Checks · Automatic"
+    : "Checks · Setup needed";
+  els.verificationLabel.textContent = "Technical check for this task";
   els.verificationHelp.textContent = humanModes
-    ? "Leave this blank if you do not know. The assistant must still record its checks and evidence before the result can be accepted."
-    : "Pre-filled from Setup. Edit it here to override the default for this run. This check runs independently, and the task is never verified done unless it passes.";
-  els.setupButton.hidden = setup.editable === false;
+    ? "The managed reviewer checks every result. Add another check here only when this task needs one."
+    : "Agentic Harness runs this independently. Change it only when this task needs a different project check.";
+  els.setupButton.hidden = false;
   const workspace = setup.workspace || "";
   const workspaceName = workspace.split(/[\\/]/).filter(Boolean).at(-1) || "Current workspace";
   els.workspacePath.textContent = workspaceName.replaceAll("-", " ").replaceAll("_", " ");
   els.workspacePath.title = workspace || "Workspace path unavailable";
   const worker = setup.worker || {};
+  els.managedSettings.hidden = !readOnly || Boolean(configurationError);
+  els.editableSettings.hidden = readOnly;
+  els.configurationError.hidden = !configurationError;
+  els.configurationErrorText.textContent = configurationError?.summary || configurationError?.message || "The existing configuration is invalid.";
+  els.managedSettingsSummary.textContent = setup.management?.summary
+    || "These settings are controlled by this installation and are shown here for reference.";
+  els.managedWorkspace.textContent = workspaceName.replaceAll("-", " ").replaceAll("_", " ");
+  els.managedExecution.textContent = worker.label || setup.execution_summary || "Managed automatically";
+  els.managedVerification.textContent = verification.label || "Automatic evidence checks";
+  els.automaticCheckLabel.textContent = verification.label || (hasCheck ? "Automatic project check" : "Project check needed");
+  els.automaticCheckDetail.textContent = hasCheck
+    ? "This project check runs independently before a task can be marked verified."
+    : "Agentic Harness could not identify a trustworthy project test. Add a technical check below.";
   renderDetectedAgents(setup, worker);
   const executionValidation = setup.execution_validation || {};
   const currentExecution = state.currentTask?.metadata?.execution;
@@ -979,13 +1054,17 @@ function renderSetup(setup) {
   } else {
     els.executionSummary.textContent = setup.configured
       ? worker.type === "model_agent"
-        ? `${worker.model || "Model"} · ${worker.data_location === "local" ? "data stays local" : "cloud endpoint"}`
+        ? `${worker.model || "Model"} · ${worker.network_scope === "device"
+          ? "runs on this computer"
+          : worker.network_scope === "private_network"
+            ? "uses your private network"
+            : "uses a cloud provider"}`
           : worker.type === "local_goal"
           ? setup.execution_summary || "Managed runtime · route shown on active task"
           : executionValidation.verified
-            ? `${worker.label || "Coding agent"} connection verified · model location set in agent`
-            : `${worker.label || "Coding agent"} installed · connection not tested · model location set in agent`
-      : "Setup required";
+            ? `${worker.label || "Coding app"} · connection verified`
+            : `${worker.label || "AI connection"} · connection not tested`
+      : configurationError ? "Settings need repair" : "Settings required";
   }
   const previousCheck = previousSetup
     ? previousSetup.verification_command || previousSetup.suggested_check || ""
@@ -1017,20 +1096,21 @@ function renderSetup(setup) {
   }
   updateSetupFields();
   updateStartButton();
-  if (setup.local_model_detection && state.localModelDetection === null) {
+  if (!readOnly && setup.local_model_detection && state.localModelDetection === null) {
     refreshLocalModelDetection().catch(() => {});
   } else {
     renderLocalModelDetection(state.localModelDetection || setup.local_model_detection);
   }
   if (
-    setup.configured === false
-    && setup.editable !== false
-    && setup.demo?.available !== true
+    (configurationError || (
+      setup.configured === false
+      && setup.editable !== false
+      && setup.demo?.available !== true
+    ))
     && !state.setupPrompted
-    && !els.setupDialog.open
   ) {
     state.setupPrompted = true;
-    els.setupDialog.showModal();
+    showView("settings", { focus: true });
   }
 }
 
@@ -1116,10 +1196,10 @@ function updateSetupFields({ resetProvider = false } = {}) {
   els.localModelDetectionRow.hidden = execution !== "local_model";
   renderLocalModelDetection(state.localModelDetection || state.setup?.local_model_detection);
   els.executionDisclosure.textContent = execution === "local_model"
-    ? "No cloud account is required. Work stays on this computer or your private LAN, but you must start a compatible local model server first."
+    ? "No cloud account is required. Connect AI already running on this computer or your private network."
     : execution === "cloud_model"
       ? "The selected file excerpts and tool results may be sent to your provider. You supply and control that account."
-      : "The selected coding agent owns its own sign-in, model, and local-or-cloud routing. Agentic Harness adds the workflow and independent verification.";
+      : "Use a coding app already installed and signed in on this computer. Agentic Harness adds the workflow and independent checking.";
   if (model) refreshProviderPresets();
 }
 
@@ -1136,20 +1216,31 @@ async function refreshSetup() {
 function renderLocalModelDetection(payload) {
   const result = payload && typeof payload === "object"
     ? payload
-    : { status: "not_checked", detected: [], summary: "Check this computer for Ollama and LM Studio." };
+    : { status: "not_checked", detected: [], summary: "Find Ollama, LM Studio, vLLM, or llama.cpp on this computer." };
   const detected = Array.isArray(result.detected) ? result.detected : [];
   els.localModelDetection.textContent = result.status === "checking"
-    ? "Checking this computer for Ollama and LM Studio…"
+    ? "Looking for Ollama, LM Studio, vLLM, and llama.cpp…"
     : result.summary || "No supported local model server was detected.";
+  els.detectedModelChoice.replaceChildren();
+  detected.forEach((server, serverIndex) => {
+    const models = Array.isArray(server.models) && server.models.length
+      ? server.models
+      : [server.model || ""];
+    models.forEach((model, modelIndex) => {
+      const option = document.createElement("option");
+      option.value = `${serverIndex}:${modelIndex}`;
+      option.textContent = `${server.label}${model ? ` · ${model}` : " · enter model manually"}`;
+      els.detectedModelChoice.append(option);
+    });
+  });
+  els.detectedModelChoice.hidden = detected.length === 0;
   els.useDetectedModelButton.hidden = detected.length === 0;
-  if (detected.length) {
-    const first = detected[0];
-    els.useDetectedModelButton.textContent = `Use ${first.label}${first.model ? ` · ${first.model}` : ""}`;
-  }
+  els.useDetectedModelButton.textContent = "Use this AI";
   const found = detected.length > 0;
+  els.localModelGuide.hidden = found || els.executionChoice.value !== "local_model";
   els.localModelRequirement.textContent = found
-    ? "A compatible local model server is running. Review the detected endpoint and model ID before saving."
-    : "A compatible model server must already be running. Agentic Harness controls the work and verification; it does not download or host a model for you.";
+    ? "Local AI found. Use it, test the connection, and save your settings."
+    : "No ready local AI was found. Follow the beginner steps below, then choose Find local AI.";
 }
 
 async function refreshLocalModelDetection() {
@@ -1157,7 +1248,7 @@ async function refreshLocalModelDetection() {
     state.localModelDetection = {
       status: "checking",
       detected: [],
-      summary: "Checking this computer for Ollama and LM Studio…",
+      summary: "Looking for Ollama, LM Studio, vLLM, and llama.cpp…",
     };
     renderLocalModelDetection(state.localModelDetection);
     try {
@@ -1178,15 +1269,23 @@ async function refreshLocalModelDetection() {
 
 function useDetectedLocalModel() {
   const detected = state.localModelDetection?.detected;
-  const first = Array.isArray(detected) ? detected[0] : null;
-  if (!first) return;
+  if (!Array.isArray(detected) || !detected.length) return;
+  const [serverValue, modelValue] = String(els.detectedModelChoice.value || "0:0").split(":");
+  const serverIndex = Number(serverValue) || 0;
+  const modelIndex = Number(modelValue) || 0;
+  const first = detected[serverIndex] || detected[0];
+  const models = Array.isArray(first.models) && first.models.length
+    ? first.models
+    : [first.model || ""];
+  const selectedModel = models[modelIndex] || models[0] || "";
   els.executionChoice.value = "local_model";
   updateSetupFields();
   if (first.template_key) els.providerPreset.value = first.template_key;
   applyProviderTemplate();
   els.providerEndpoint.value = first.endpoint || els.providerEndpoint.value;
-  els.providerModel.value = first.model || els.providerModel.value;
-  els.connectionResult.textContent = `${first.label} was detected on this computer. Test the connection before saving.`;
+  els.providerModel.value = selectedModel || els.providerModel.value;
+  if (!selectedModel) els.manualConnectionDetails.open = true;
+  els.connectionResult.textContent = `${first.label}${selectedModel ? ` · ${selectedModel}` : ""} is selected. Choose Save and test settings.`;
 }
 
 async function startDemo() {
@@ -1195,11 +1294,11 @@ async function startDemo() {
       method: "POST",
       body: JSON.stringify({}),
     });
-    if (els.setupDialog.open) els.setupDialog.close();
     state.pendingStartObjective = "";
     state.viewingHistoryId = "";
     state.liveTask = task;
     renderTask(task);
+    showView("tasks", { focus: true });
     await Promise.all([refreshHistory(), refreshSetup()]);
   });
 }
@@ -1214,6 +1313,7 @@ async function dismissDemo() {
     state.viewingHistoryId = "";
     state.liveTask = task;
     renderTask(task);
+    showView("tasks", { focus: true });
     await Promise.all([refreshHistory(), refreshSetup()]);
   });
 }
@@ -1280,7 +1380,7 @@ async function startWork() {
       status: "starting",
       status_label: "Starting",
       result_category: "in_progress",
-      summary: "Your goal was sent. The assistant is preparing it; you can safely return to this page if the connection changes.",
+      summary: "Your task was sent. The assistant is preparing it; you can safely return to this page if the connection changes.",
       progress: { determinate: false, percent: null, label: "Starting" },
       current: {
         cycle: 0,
@@ -1294,12 +1394,13 @@ async function startWork() {
         { status: "pending", step: "Verify the result" },
       ],
       requirements: [{ status: "active", text: `Requested outcome: ${objective}` }],
-      events: [{ stage: "act", summary: "Goal sent to the assistant", checkpoint: "Starting" }],
+      events: [{ stage: "act", summary: "Task sent to the assistant", checkpoint: "Starting" }],
       allowed_actions: [],
       metadata: { updated_at: submittedAt },
     };
     state.liveTask = pendingTask;
     renderTask(pendingTask);
+    showView("tasks", { focus: true });
     let task;
     try {
       task = await api("/api/tasks", {
@@ -1327,7 +1428,7 @@ async function startWork() {
         state.pendingStartObjective = "";
         throw startError;
       }
-      recovered.summary = "Your goal was accepted and is running. This page reconnected to the current task.";
+      recovered.summary = "Your task was accepted and is running. This page reconnected to the current task.";
       task = recovered;
     }
     if (task.metadata?.start_accepted === false) {
@@ -1342,7 +1443,7 @@ async function startWork() {
     }
     if (!taskMatchesPendingStart(task)) {
       state.pendingStartObjective = "";
-      throw new Error("The new goal was not confirmed. Your draft is still here; review the current task and try again.");
+      throw new Error("The new task was not confirmed. Your draft is still here; review the current task and try again.");
     }
     adoptLiveTask(task, { force: true });
     resetNewGoalForm();
@@ -1356,21 +1457,28 @@ async function postAction(path, body = {}) {
     state.viewingHistoryId = "";
     state.liveTask = task;
     renderTask(task);
+    showView("tasks", { focus: true });
     await refreshHistory();
   });
 }
 
 async function saveSetup(event) {
   event.preventDefault();
+  if (state.setupBusy) return;
+  state.setupBusy = true;
+  els.saveSetupButton.disabled = true;
+  els.saveSetupButton.setAttribute("aria-busy", "true");
+  const saveLabel = els.saveSetupButton.textContent;
+  els.saveSetupButton.textContent = "Testing settings…";
   els.setupError.textContent = "";
-  const apiKey = els.providerApiKey.value;
+  const apiKey = els.providerApiKey.value.trim();
   const payload = {
     execution: els.executionChoice.value,
     agent: els.codingAgentChoice.value,
     endpoint: els.providerEndpoint.value.trim(),
     model: els.providerModel.value.trim(),
-    api_key_env: els.providerApiKeyEnv.value.trim(),
-    api_key: els.providerApiKey.value,
+    api_key_env: apiKey ? "" : els.providerApiKeyEnv.value.trim(),
+    api_key: apiKey,
     confirm_remote_data: els.confirmRemoteData.checked,
     verification_command: els.verificationCommand.value.trim(),
     max_cycles: Number(els.maxCycles.value),
@@ -1379,7 +1487,50 @@ async function saveSetup(event) {
     max_provider_calls: Number(els.maxProviderCalls.value),
     max_tool_calls: Number(els.maxToolCalls.value),
   };
+  const recoveringSessionCredential = Boolean(
+    apiKey
+    && state.readiness.state === "credential_required"
+    && state.setup?.worker?.type === "model_agent"
+    && state.setup?.credential?.source === "session"
+    && payload.endpoint === state.setup?.provider?.endpoint
+    && payload.model === state.setup?.provider?.model
+    && !payload.api_key_env,
+  );
   try {
+    if (payload.execution === "coding_agent") {
+      els.codingAgentConnectionResult.textContent = "Testing…";
+      const tested = await api("/api/setup/test", {
+        method: "POST",
+        body: JSON.stringify({ execution: "coding_agent", agent: payload.agent }),
+      }, true, START_TIMEOUT_MS);
+      els.codingAgentConnectionResult.textContent = tested.summary || "Coding app connection checked.";
+    } else {
+      els.connectionResult.textContent = "Testing…";
+      const tested = await api("/api/setup/test", {
+        method: "POST",
+        body: JSON.stringify({
+          execution: payload.execution,
+          endpoint: payload.endpoint,
+          model: payload.model,
+          api_key_env: payload.api_key_env,
+          api_key: payload.api_key,
+        }),
+      }, true, START_TIMEOUT_MS);
+      if (tested.structured_actions !== true) {
+        throw new Error("The AI connected but did not pass the structured-action test.");
+      }
+      els.connectionResult.textContent = "AI connection verified.";
+    }
+    if (recoveringSessionCredential) {
+      await api("/api/setup/credential", {
+        method: "POST",
+        body: JSON.stringify({ api_key: apiKey }),
+      });
+      els.providerApiKey.value = "";
+      await Promise.all([refreshSetup(), refreshHealth(), refreshTask(true)]);
+      showView("tasks", { focus: true });
+      return;
+    }
     const configured = await api("/api/setup", { method: "POST", body: JSON.stringify(payload) });
     if (apiKey && configured.credential && configured.credential.source === "session") {
       await api("/api/setup/credential", {
@@ -1389,54 +1540,15 @@ async function saveSetup(event) {
     }
     els.providerApiKey.value = "";
     await Promise.all([refreshSetup(), refreshHealth(), refreshTask(true)]);
-    els.setupDialog.close();
+    showView("home", { focus: true });
   } catch (error) {
     els.providerApiKey.value = "";
     els.setupError.textContent = error instanceof Error ? error.message : String(error);
-  }
-}
-
-async function testConnection() {
-  const apiKey = els.providerApiKey.value;
-  els.connectionResult.textContent = "Testing…";
-  try {
-    const result = await api("/api/setup/test", {
-      method: "POST",
-      body: JSON.stringify({
-        endpoint: els.providerEndpoint.value.trim(),
-        model: els.providerModel.value.trim(),
-        api_key_env: els.providerApiKeyEnv.value.trim(),
-        api_key: apiKey,
-      }),
-    });
-    els.connectionResult.textContent = result.structured_actions
-      ? "Connected; structured actions work."
-      : "Connected, but autonomous actions are unavailable.";
-  } catch (error) {
-    els.connectionResult.textContent = error instanceof Error ? error.message : String(error);
   } finally {
-    els.providerApiKey.value = "";
-  }
-}
-
-async function testCodingAgent() {
-  els.codingAgentConnectionResult.textContent = "Testing without file access…";
-  try {
-    const result = await api("/api/setup/test", {
-      method: "POST",
-      body: JSON.stringify({
-        execution: "coding_agent",
-        agent: els.codingAgentChoice.value,
-      }),
-    }, true, START_TIMEOUT_MS);
-    els.codingAgentConnectionResult.textContent = result.summary || (
-      result.verified ? "Connection and model verified." : "Executable found."
-    );
-    await Promise.all([refreshSetup(), refreshHealth()]);
-  } catch (error) {
-    els.codingAgentConnectionResult.textContent = error instanceof Error
-      ? error.message
-      : String(error);
+    state.setupBusy = false;
+    els.saveSetupButton.disabled = false;
+    els.saveSetupButton.removeAttribute("aria-busy");
+    els.saveSetupButton.textContent = saveLabel;
   }
 }
 
@@ -1534,7 +1646,7 @@ function handleShortcut(event) {
     runAction(refreshTask);
   } else if (event.key.toLowerCase() === "k") {
     event.preventDefault();
-    els.historySearch.focus();
+    showView("history", { focus: true });
   } else if (event.key === "/") {
     event.preventDefault();
     els.shortcutsDialog.showModal();
@@ -1549,24 +1661,28 @@ function handleShortcut(event) {
 
 els.startButton.addEventListener("click", startWork);
 els.checkButton.addEventListener("click", () => runAction(() => refreshTask(true)));
-els.setupButton.addEventListener("click", () => els.setupDialog.showModal());
+els.homeTab.addEventListener("click", () => showView("home"));
+els.tasksTab.addEventListener("click", () => showView("tasks"));
+els.historyTab.addEventListener("click", () => showView("history"));
+els.setupButton.addEventListener("click", () => showView("settings"));
+[els.homeTab, els.tasksTab, els.historyTab, els.setupButton].forEach((tab) => {
+  tab.addEventListener("keydown", handlePrimaryTabKeydown);
+});
 els.demoButton.addEventListener("click", startDemo);
 els.demoSetupButton.addEventListener("click", () => {
   if (state.setup?.demo?.managed_overlay === true) {
     dismissDemo();
   } else {
-    els.setupDialog.showModal();
+    showView("settings", { focus: true });
   }
 });
 els.setupDemoButton.addEventListener("click", startDemo);
-els.closeSetupButton.addEventListener("click", () => els.setupDialog.close());
+els.closeSetupButton.addEventListener("click", () => showView("home", { focus: true }));
 els.setupForm.addEventListener("submit", saveSetup);
 els.executionChoice.addEventListener("change", () => updateSetupFields({ resetProvider: true }));
 els.providerPreset.addEventListener("change", applyProviderTemplate);
 els.useDetectedModelButton.addEventListener("click", useDetectedLocalModel);
 els.checkLocalModelsButton.addEventListener("click", () => refreshLocalModelDetection());
-els.testConnectionButton.addEventListener("click", testConnection);
-els.testCodingAgentButton.addEventListener("click", testCodingAgent);
 els.continueButton.addEventListener("click", () => els.continueDialog.showModal());
 els.closeContinueButton.addEventListener("click", () => els.continueDialog.close());
 els.continueForm.addEventListener("submit", (event) => {
@@ -1581,8 +1697,10 @@ els.stopButton.addEventListener("click", () => {
     postAction("/api/tasks/current/stop");
   }
 });
-starterButtons().forEach(({ button, kind }) => {
-  button.addEventListener("click", () => selectGoalStarter(kind, { focus: true }));
+els.returnToCurrentButton.addEventListener("click", () => {
+  state.viewingHistoryId = "";
+  if (state.liveTask) renderTask(state.liveTask);
+  showView("tasks", { focus: true });
 });
 els.modeSelect.addEventListener("change", () => {
   state.mode = els.modeSelect.value || state.modeDefault;
@@ -1591,17 +1709,13 @@ els.modeSelect.addEventListener("change", () => {
   persistForm();
   updateStartButton();
 });
-els.verificationDetails.addEventListener("toggle", () => {
-  if (!usesHumanModes() && !els.verificationDetails.open) {
-    els.verificationDetails.open = true;
-  }
-});
 els.themeButton.addEventListener("click", toggleTheme);
 els.shortcutsButton.addEventListener("click", () => els.shortcutsDialog.showModal());
 els.historySearch.addEventListener("input", () => refreshHistory().catch(() => {}));
 els.exportButton.addEventListener("click", () => exportSession().catch((error) => window.alert(error.message)));
 [els.objective, els.safeAreas, els.checks].forEach((field) => {
   field.addEventListener("input", () => {
+    if (field === els.safeAreas) updateAccessSummary();
     pushUndo();
     persistForm();
     updateStartButton();
@@ -1614,6 +1728,7 @@ window.addEventListener("online", recoverVisibleSession);
 
 captureTokenFromUrl();
 applyTheme(localStorage.getItem(THEME_KEY) || "light");
+showView("home");
 restoreForm();
 Promise.all([refreshHealth(), refreshSetup(), refreshModes(), refreshTask(), refreshHistory()])
   .then(connectStatusStream)

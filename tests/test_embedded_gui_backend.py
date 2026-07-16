@@ -17,6 +17,7 @@ from agentic_harness.core.artifacts import ArtifactStore
 from agentic_harness.core.autonomy import AutonomousRunner
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.core.factory import build_supervisor
+from agentic_harness.core.providers import ProviderProfile
 from agentic_harness.core.safety import split_command
 from agentic_harness.core.state import Goal, GoalStatus
 
@@ -164,6 +165,20 @@ def test_bounded_experiment_requires_explicit_scope_for_model_worker(tmp_path) -
             "verification_command": f"{sys.executable} -c \"print('verified')\"",
         }
     )
+    profile = ProviderProfile(
+        endpoint="http://127.0.0.1:8000/v1/chat/completions",
+        model="local-model",
+    )
+    backend._execution_validation = {
+        "verified": True,
+        "kind": "model_agent",
+        "fingerprint": gui_backend_module._model_connection_fingerprint(
+            profile,
+            credential_source="none",
+            credential_value="",
+        ),
+        "credential_source": "none",
+    }
 
     task = backend.start(
         {
@@ -428,7 +443,15 @@ def test_local_model_detection_uses_fixed_loopback_probe(tmp_path, monkeypatch) 
     class ModelsHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             assert self.path == "/v1/models"
-            payload = json.dumps({"data": [{"id": "local/demo-model"}]}).encode()
+            payload = json.dumps(
+                {
+                    "data": [
+                        {"id": "local/demo-model"},
+                        {"id": "local/second-model"},
+                        {"id": "local/demo-model"},
+                    ]
+                }
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -467,8 +490,51 @@ def test_local_model_detection_uses_fixed_loopback_probe(tmp_path, monkeypatch) 
             "label": "Ollama",
             "endpoint": f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
             "model": "local/demo-model",
+            "models": ["local/demo-model", "local/second-model"],
         }
     ]
+
+
+def test_local_model_detection_ignores_server_without_model_ids(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class EmptyModelsHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            payload = b'{"data":[{}, {"id":"  "}]}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), EmptyModelsHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(
+        gui_backend_module,
+        "_LOCAL_MODEL_PROBES",
+        (
+            {
+                "template_key": "ollama_local",
+                "label": "Ollama",
+                "port": server.server_port,
+                "endpoint": f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
+            },
+        ),
+    )
+    try:
+        payload = EmbeddedExecutionBackend(tmp_path).detect_local_models()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert payload["status"] == "not_found"
+    assert payload["detected"] == []
 
 
 def test_embedded_backend_rejects_blank_goal_before_starting_thread(tmp_path) -> None:
@@ -523,6 +589,13 @@ def test_embedded_backend_local_model_edits_checks_and_finishes_end_to_end(tmp_p
     (source / "value.txt").write_text("before", encoding="utf-8")
     actions: list[dict[str, object]] = [
         {
+            "action": "report_outcome",
+            "arguments": {
+                "status": "progress",
+                "summary": "Connection test passed.",
+            },
+        },
+        {
             "action": "read_file",
             "arguments": {"path": "src/value.txt"},
             "plan": [{"step": "Update value", "status": "in_progress"}],
@@ -566,6 +639,10 @@ def test_embedded_backend_local_model_edits_checks_and_finishes_end_to_end(tmp_p
     ]
     with scripted_model_server(actions) as endpoint:
         backend = EmbeddedExecutionBackend(tmp_path)
+        tested = backend.test_connection(
+            {"endpoint": endpoint, "model": "arbitrary-local-model-id"}
+        )
+        assert tested["structured_actions"] is True
         backend.configure(
             {
                 "execution": "local_model",

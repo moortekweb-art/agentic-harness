@@ -41,6 +41,7 @@ class Element {
     this.dataset = {};
     this.children = [];
     this.listeners = {};
+    this.focusCount = 0;
   }
 
   appendChild(child) {
@@ -68,7 +69,9 @@ class Element {
     delete this[name];
   }
 
-  focus() {}
+  focus() {
+    this.focusCount += 1;
+  }
 }
 
 class Dialog extends Element {
@@ -388,7 +391,12 @@ async function testLegacySetupContractCompletesBootstrapAndAttachesStatusStream(
   assert.equal(app.elements.get("workspacePath").textContent, "legacy workspace");
   assert.equal(app.elements.get("workspacePath").title, "/tmp/legacy-workspace");
   assert.match(app.elements.get("executionSummary").textContent, /Managed runtime/);
-  assert.equal(app.elements.get("setupButton").hidden, true);
+  assert.equal(app.elements.get("setupButton").hidden, false);
+  assert.equal(app.elements.get("managedSettings").hidden, false);
+  assert.equal(app.elements.get("editableSettings").hidden, true);
+  app.elements.get("setupButton").listeners.click();
+  assert.equal(app.elements.get("settingsView").hidden, false);
+  assert.equal(app.elements.get("homeView").hidden, true);
   assert.deepEqual(app.websocketUrls, ["ws://127.0.0.1:41111/api/tasks/stream"]);
   assert.equal(app.fetchCalls.some((call) => call.url === "/api/setup"), true);
   assert.deepEqual(app.consoleErrors, []);
@@ -416,11 +424,11 @@ async function testFreshSetupOpensOnceAndSelectsTheRecommendedDetectedAgent() {
     ],
   };
   const app = await runApp({ publicAccess: true, setupPayload });
-  const setupDialog = app.elements.get("setupDialog");
+  const settingsView = app.elements.get("settingsView");
   const agentChoice = app.elements.get("codingAgentChoice");
 
-  assert.equal(setupDialog.open, true);
-  assert.equal(setupDialog.showCount, 1);
+  assert.equal(settingsView.hidden, false);
+  assert.equal(app.elements.get("homeView").hidden, true);
   assert.equal(agentChoice.value, "codex");
   assert.equal(agentChoice.children.length, 2);
   assert.equal(agentChoice.children[0].textContent, "Codex (recommended)");
@@ -431,7 +439,7 @@ async function testFreshSetupOpensOnceAndSelectsTheRecommendedDetectedAgent() {
   assert.equal(app.elements.get("verificationCommand").value, "npm test");
 
   await app.context.refreshSetup();
-  assert.equal(setupDialog.showCount, 1);
+  assert.equal(settingsView.hidden, false);
 }
 
 async function testConfiguredVerificationReplacesOnlyThePreviousSuggestion() {
@@ -456,7 +464,7 @@ async function testConfiguredVerificationReplacesOnlyThePreviousSuggestion() {
   assert.equal(app.elements.get("checks").value, "npm run verify");
   assert.equal(
     app.elements.get("executionSummary").textContent,
-    "Codex installed · connection not tested · model location set in agent",
+    "Codex · connection not tested",
   );
 
   app.elements.get("checks").value = "npm run verify:focused";
@@ -470,7 +478,7 @@ async function testConfiguredVerificationReplacesOnlyThePreviousSuggestion() {
   assert.equal(app.elements.get("checks").value, "npm run verify:focused");
 }
 
-async function testCodingAgentConnectionTestReportsLiveValidation() {
+async function testCodingAgentSaveAndTestReportsLiveValidation() {
   const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
   const setupPayload = {
     contract: "agentic_harness.gui_setup.v1",
@@ -510,7 +518,8 @@ async function testCodingAgentConnectionTestReportsLiveValidation() {
     },
   });
 
-  await app.elements.get("testCodingAgentButton").listeners.click();
+  app.elements.get("verificationCommand").value = "npm test";
+  await app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
   await tick();
 
   assert.equal(
@@ -519,7 +528,7 @@ async function testCodingAgentConnectionTestReportsLiveValidation() {
   );
   assert.equal(
     app.elements.get("executionSummary").textContent,
-    "Codex connection verified · model location set in agent",
+    "Codex · connection verified",
   );
   const probe = app.fetchCalls.find((call) => call.url === "/api/setup/test");
   assert.equal(JSON.parse(probe.options.body).agent, "codex");
@@ -541,8 +550,8 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
   const checks = app.elements.get("checks");
   const start = app.elements.get("startButton");
 
-  assert.equal(app.elements.get("verificationDetails").open, true);
-  assert.equal(app.elements.get("verificationSummary").textContent, "Required: add a success check");
+  assert.equal(app.elements.get("verificationDetails").open, false);
+  assert.equal(app.elements.get("verificationSummary").textContent, "Checks · Setup needed");
 
   objective.value = "Fix the regression";
   objective.listeners.input();
@@ -559,8 +568,7 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
       safeAreas: "",
       checks: "python -m pytest -q",
       mode: "plan",
-      goalKind: "",
-      draftVersion: 2,
+      draftVersion: 3,
     },
   );
 }
@@ -581,7 +589,7 @@ async function testPortableUserChoosesProviderIndependentStrategy() {
   const modes = app.elements.get("modes");
 
   assert.equal(app.elements.get("modeSection").hidden, false);
-  assert.equal(modes.children.length, 4);
+  assert.equal(modes.children.length, 3);
   assert.equal(app.elements.get("modeSelect").value, "plan");
   objective.value = "Fix the public first-run flow";
   objective.listeners.input();
@@ -625,6 +633,244 @@ async function testProviderTemplatePrefillsEditableValues() {
   assert.equal(app.elements.get("providerModel").value, "glm-5.2");
   assert.equal(app.elements.get("providerApiKeyEnv").value, "ZAI_API_KEY");
   assert.equal(app.elements.get("connectionResult").textContent, "Confirm client eligibility.");
+}
+
+async function testTypedSessionKeyOverridesTemplateEnvironmentVariable() {
+  const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: false,
+    editable: true,
+    workspace: "/tmp/project",
+    suggested_check: "npm test",
+    provider_templates: [
+      { key: "custom", label: "Custom provider", data_location: "both" },
+      {
+        key: "zai_api",
+        label: "Z.ai API",
+        endpoint: "https://api.z.ai/api/paas/v4/chat/completions",
+        model: "glm-5.1",
+        api_key_env: "ZAI_API_KEY",
+        data_location: "cloud",
+      },
+    ],
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url, options = {}) => {
+      if (url === "/api/setup/test" && options.method === "POST") {
+        return response({ reachable: true, structured_actions: true, verified: true });
+      }
+      if (url === "/api/setup" && options.method === "POST") {
+        return response({ configured: true, credential: { source: "session" } });
+      }
+      if (url === "/api/setup/credential") return response({ configured: true });
+      return response(okPayloadFor(url, setupPayload));
+    },
+  });
+  app.elements.get("executionChoice").value = "cloud_model";
+  app.elements.get("executionChoice").listeners.change();
+  app.elements.get("providerPreset").value = "zai_api";
+  app.elements.get("providerPreset").listeners.change();
+  app.elements.get("providerApiKey").value = "typed-session-secret";
+  app.elements.get("verificationCommand").value = "npm test";
+  app.elements.get("confirmRemoteData").checked = true;
+
+  await app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
+
+  const posts = app.fetchCalls.filter((call) => (
+    ["/api/setup/test", "/api/setup"].includes(call.url) && call.options.method === "POST"
+  ));
+  assert.equal(posts.length, 2);
+  posts.forEach((call) => {
+    const body = JSON.parse(call.options.body);
+    assert.equal(body.api_key_env, "");
+    assert.equal(body.api_key, "typed-session-secret");
+  });
+  assert.equal(app.elements.get("providerApiKey").value, "");
+}
+
+async function testSlowSettingsSaveCannotBeSubmittedTwice() {
+  const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
+  let releaseProbe;
+  const probe = new Promise((resolve) => { releaseProbe = resolve; });
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: false,
+    editable: true,
+    workspace: "/tmp/project",
+    suggested_check: "npm test",
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url, options = {}) => {
+      if (url === "/api/setup/test" && options.method === "POST") return probe;
+      if (url === "/api/setup" && options.method === "POST") {
+        return response({ configured: true });
+      }
+      return response(okPayloadFor(url, setupPayload));
+    },
+  });
+  app.elements.get("executionChoice").value = "local_model";
+  app.elements.get("providerEndpoint").value = "http://127.0.0.1:8000/v1/chat/completions";
+  app.elements.get("providerModel").value = "local-model";
+  app.elements.get("verificationCommand").value = "npm test";
+  app.elements.get("saveSetupButton").textContent = "Save and test settings";
+
+  const first = app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
+  const second = app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
+  await tick();
+  assert.equal(app.fetchCalls.filter((call) => call.url === "/api/setup/test").length, 1);
+  assert.equal(app.elements.get("saveSetupButton").disabled, true);
+  assert.equal(app.elements.get("saveSetupButton")["aria-busy"], "true");
+
+  releaseProbe(response({ reachable: true, structured_actions: true, verified: true }));
+  await Promise.all([first, second]);
+  assert.equal(app.fetchCalls.filter((call) => (
+    call.url === "/api/setup" && call.options.method === "POST"
+  )).length, 1);
+  assert.equal(app.elements.get("saveSetupButton").disabled, false);
+  assert.equal(app.elements.get("saveSetupButton")["aria-busy"], undefined);
+  assert.equal(app.elements.get("saveSetupButton").textContent, "Save and test settings");
+}
+
+async function testReenteredSessionKeyResumesActiveTaskWithoutRewritingSetup() {
+  const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
+  const taskPayload = {
+    id: "orphaned-task",
+    objective: "Finish the interrupted task",
+    status: "working",
+    status_label: "Working",
+    result_category: "in_progress",
+    summary: "Waiting for the session key.",
+    current: { cycle: 2, checkpoint: "Recovering", current_subgoal: "Resume safely" },
+  };
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: true,
+    workspace: "/tmp/project",
+    worker: {
+      type: "model_agent",
+      label: "Local model",
+      model: "local-model",
+      credential_source: "session",
+    },
+    credential: { source: "session", configured: false },
+    provider: {
+      endpoint: "http://127.0.0.1:8000/v1/chat/completions",
+      model: "local-model",
+      api_key_env: "",
+      data_location: "local",
+    },
+    verification_command: "npm test",
+  };
+  const healthPayload = {
+    ok: false,
+    local_goal_available: true,
+    readiness: { state: "credential_required", can_start: false },
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    taskPayload,
+    healthPayload,
+    fetchOverride: async (url, options = {}) => {
+      if (url === "/api/setup/test" && options.method === "POST") {
+        return response({ reachable: true, structured_actions: true, verified: true });
+      }
+      if (url === "/api/setup/credential" && options.method === "POST") {
+        return response({ ok: true, credential: { source: "session", configured: true } });
+      }
+      if (url === "/api/setup" && options.method === "POST") {
+        throw new Error("Active-task recovery must not rewrite setup.");
+      }
+      return response(okPayloadFor(url, setupPayload, taskPayload, healthPayload));
+    },
+  });
+  app.elements.get("providerApiKey").value = "reentered-session-secret";
+
+  await app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
+
+  const writes = app.fetchCalls.filter((call) => call.options.method === "POST");
+  assert.deepEqual(writes.map((call) => call.url), [
+    "/api/setup/test",
+    "/api/setup/credential",
+  ]);
+  assert.equal(app.elements.get("tasksView").hidden, false);
+  assert.equal(app.elements.get("tasksView").focusCount > 0, true);
+  assert.equal(app.elements.get("providerApiKey").value, "");
+}
+
+async function testDetectedLocalAiListsEveryModelWithoutOpeningManualConnection() {
+  const app = await runApp({ publicAccess: true });
+  const detection = {
+    status: "found",
+    summary: "Local AI found.",
+    detected: [
+      {
+        template_key: "ollama_local",
+        label: "Ollama",
+        endpoint: "http://127.0.0.1:11434/v1/chat/completions",
+        model: "coder-small",
+        models: ["coder-small", "coder-large"],
+      },
+    ],
+  };
+  vm.runInContext(`state.localModelDetection = ${JSON.stringify(detection)}`, app.context);
+  app.context.renderLocalModelDetection(detection);
+
+  const choices = app.elements.get("detectedModelChoice");
+  assert.deepEqual(choices.children.map((option) => option.textContent), [
+    "Ollama · coder-small",
+    "Ollama · coder-large",
+  ]);
+  choices.value = "0:1";
+  app.context.useDetectedLocalModel();
+  assert.equal(app.elements.get("providerEndpoint").value, detection.detected[0].endpoint);
+  assert.equal(app.elements.get("providerModel").value, "coder-large");
+  assert.equal(app.elements.get("manualConnectionDetails").open, false);
+}
+
+async function testSavingModelSettingsTestsStructuredActionsBeforeWritingConfig() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: false,
+    editable: true,
+    workspace: "/tmp/project",
+    suggested_check: "npm test",
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url, options) => ({
+      status: 200,
+      ok: true,
+      json: async () => {
+        if (url === "/api/setup/test" && options.method === "POST") {
+          return { reachable: true, structured_actions: true, verified: true };
+        }
+        if (url === "/api/setup" && options.method === "POST") {
+          return { configured: true };
+        }
+        return okPayloadFor(url, setupPayload);
+      },
+    }),
+  });
+  app.elements.get("executionChoice").value = "local_model";
+  app.elements.get("providerEndpoint").value = "http://127.0.0.1:8000/v1/chat/completions";
+  app.elements.get("providerModel").value = "local-coder";
+  app.elements.get("verificationCommand").value = "npm test";
+
+  await app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
+
+  const writes = app.fetchCalls.filter((call) => (
+    ["/api/setup/test", "/api/setup"].includes(call.url) && call.options.method === "POST"
+  ));
+  assert.deepEqual(writes.map((call) => call.url), ["/api/setup/test", "/api/setup"]);
+  assert.equal(app.elements.get("connectionResult").textContent, "AI connection verified.");
 }
 
 async function testLocalAndCloudProviderChoicesStaySeparate() {
@@ -693,10 +939,10 @@ async function testBoundedExperimentExplainsAndRequiresExplicitScope() {
   const start = app.elements.get("startButton");
   objective.value = "Try a reversible wording change";
   objective.listeners.input();
-  app.elements.get("modes").children[3].listeners.click();
+  app.elements.get("advancedModes").children[0].listeners.click();
 
   assert.equal(start.disabled, true);
-  assert.match(app.elements.get("startHelp").textContent, /allowed file or folder/i);
+  assert.match(app.elements.get("startHelp").textContent, /select at least one file or folder/i);
 
   safeAreas.value = "README.md";
   safeAreas.listeners.input();
@@ -721,19 +967,19 @@ async function testLegacyHumanCanChooseEveryModeWithoutWritingACommand() {
   const modes = app.elements.get("modes");
 
   assert.equal(modeSection.hidden, false);
-  assert.equal(modes.children.length, 4);
+  assert.equal(modes.children.length, 3);
   assert.equal(checks.required, false);
   assert.equal(app.elements.get("verificationDetails").open, false);
   assert.equal(
     app.elements.get("verificationSummary").textContent,
-    "Optional: add your own success check",
+    "Checks · Automatic",
   );
   objective.value = "Please audit my system and give me a simple report.";
   objective.listeners.input();
   assert.equal(start.disabled, false);
   assert.match(app.elements.get("startHelp").textContent, /assistant will choose checks/i);
 
-  for (const card of [...modes.children]) {
+  for (const card of [...modes.children, ...app.elements.get("advancedModes").children]) {
     objective.value = "Please audit my system and give me a simple report.";
     objective.listeners.input();
     card.listeners.click();
@@ -750,7 +996,7 @@ async function testLegacyHumanCanChooseEveryModeWithoutWritingACommand() {
   assert.equal(app.sessionStorage.getItem("agentic-harness-gui-form"), null);
 }
 
-async function testGoalStartersAndCompactModeSelectorKeepPlainLanguageDraftState() {
+async function testPredictableViewsConciseModesAndAccessSummaryKeepDraftState() {
   const app = await runApp({
     publicAccess: true,
     setupPayload: {
@@ -762,27 +1008,37 @@ async function testGoalStartersAndCompactModeSelectorKeepPlainLanguageDraftState
     },
   });
 
-  const fixStarter = app.elements.get("starterFix");
-  fixStarter.listeners.click();
-  assert.equal(fixStarter["aria-pressed"], "true");
-  assert.match(app.elements.get("objective").placeholder, /Save button does nothing on iPhone/);
-  assert.match(app.elements.get("objectiveHint").textContent, /what should happen instead/i);
-
   const modeSelect = app.elements.get("modeSelect");
   assert.equal(modeSelect.children.length, 4);
   assert.equal(modeSelect.value, "guided");
+  assert.deepEqual(modeSelect.children.map((option) => option.textContent), [
+    "Quick", "Standard", "Thorough", "Experiment",
+  ]);
   modeSelect.value = "cloud";
   modeSelect.listeners.change();
   assert.equal(modeSelect.value, "cloud");
+  const safeAreas = app.elements.get("safeAreas");
+  safeAreas.value = "src\ndocs";
+  safeAreas.listeners.input();
+  assert.equal(app.elements.get("accessSummary").textContent, "Access · Limited to 2 areas");
+  app.elements.get("historyTab").listeners.click();
+  assert.equal(app.elements.get("historyView").hidden, false);
+  assert.equal(app.elements.get("homeView").hidden, true);
+  app.elements.get("historyTab").listeners.keydown({
+    key: "ArrowRight",
+    currentTarget: app.elements.get("historyTab"),
+    preventDefault() {},
+  });
+  assert.equal(app.elements.get("settingsView").hidden, false);
+  assert.equal(app.elements.get("setupButton")["aria-selected"], "true");
   assert.deepEqual(
     JSON.parse(app.sessionStorage.getItem("agentic-harness-gui-form")),
     {
       objective: "",
-      safeAreas: "",
+      safeAreas: "src\ndocs",
       checks: "",
       mode: "cloud",
-      goalKind: "fix",
-      draftVersion: 2,
+      draftVersion: 3,
     },
   );
 }
@@ -796,7 +1052,7 @@ async function testCompletedGoalClearsOnlyItsMatchingStaleDraft() {
       safeAreas: "reports",
       checks: "",
       mode: "experimental",
-      goalKind: "audit",
+      draftVersion: 3,
     },
     setupPayload: {
       contract: "agentic_harness.gui_setup.v1",
@@ -821,7 +1077,6 @@ async function testCompletedGoalClearsOnlyItsMatchingStaleDraft() {
   assert.equal(app.elements.get("objective").value, "");
   assert.equal(app.elements.get("safeAreas").value, "");
   assert.equal(app.elements.get("modeSelect").value, "guided");
-  assert.equal(app.elements.get("starterAudit")["aria-pressed"], "false");
   assert.equal(app.sessionStorage.getItem("agentic-harness-gui-form"), null);
 }
 
@@ -834,8 +1089,7 @@ async function testCompletedGoalPreservesASecondGenerationNewDraft() {
       safeAreas: "docs",
       checks: "",
       mode: "guided",
-      goalKind: "create",
-      draftVersion: 2,
+      draftVersion: 3,
     },
     setupPayload: {
       contract: "agentic_harness.gui_setup.v1",
@@ -854,7 +1108,7 @@ async function testCompletedGoalPreservesASecondGenerationNewDraft() {
 
   assert.equal(app.elements.get("objective").value, nextObjective);
   assert.equal(app.elements.get("safeAreas").value, "docs");
-  assert.equal(app.elements.get("starterCreate")["aria-pressed"], "true");
+  assert.equal(app.elements.get("accessSummary").textContent, "Access · Limited to 1 area");
 }
 
 async function testPausedBackgroundAssistantIsNotCalledAnActiveTask() {
@@ -956,7 +1210,7 @@ async function testTerminalReceiptOverridesRawDoneAndRendersTrustedEvidence() {
   assert.equal(app.elements.get("finalRetries").textContent, "1");
   assert.equal(app.elements.get("attemptsValue").textContent, "2");
   assert.equal(app.elements.get("checkpoint").textContent, "claimed done");
-  assert.equal(app.elements.get("workApproachValue").textContent, "Plan first");
+  assert.equal(app.elements.get("workApproachValue").textContent, "Standard");
   assert.equal(app.elements.get("workDetailGrid").hidden, true);
   assert.equal(app.elements.get("activitySection").hidden, true);
   assert.equal(app.elements.get("changedFilesEvidence").hidden, true);
@@ -999,6 +1253,12 @@ async function testRawDoneWithoutTrustedReceiptRemainsUnverified() {
     app.elements.get("historyList").children[0].children[0].textContent,
     "Checking evidence: Legacy completion claim",
   );
+  app.elements.get("historyList").children[0].children[0].listeners.click();
+  assert.equal(app.elements.get("taskContext").hidden, false);
+  assert.equal(app.elements.get("tasksView").focusCount > 0, true);
+  assert.equal(app.elements.get("summary").textContent, "Completion is not verified yet.");
+  app.elements.get("returnToCurrentButton").listeners.click();
+  assert.equal(app.elements.get("taskContext").hidden, true);
 }
 
 async function testManagedWorkingTaskShowsRealPassAndIndeterminateProgress() {
@@ -1225,7 +1485,7 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
   assert.equal(app.elements.get("statusLabel").textContent, "Working");
   assert.equal(
     app.elements.get("summary").textContent,
-    "Your goal was accepted and is running. This page reconnected to the current task.",
+    "Your task was accepted and is running. This page reconnected to the current task.",
   );
   assert.equal(app.elements.get("attemptsValue").textContent, "1");
   assert.equal(objective.value, "");
@@ -1238,14 +1498,19 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
   await testLegacySetupContractCompletesBootstrapAndAttachesStatusStream();
   await testFreshSetupOpensOnceAndSelectsTheRecommendedDetectedAgent();
   await testConfiguredVerificationReplacesOnlyThePreviousSuggestion();
-  await testCodingAgentConnectionTestReportsLiveValidation();
+  await testCodingAgentSaveAndTestReportsLiveValidation();
   await testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDraft();
   await testPortableUserChoosesProviderIndependentStrategy();
   await testProviderTemplatePrefillsEditableValues();
+  await testTypedSessionKeyOverridesTemplateEnvironmentVariable();
+  await testSlowSettingsSaveCannotBeSubmittedTwice();
+  await testReenteredSessionKeyResumesActiveTaskWithoutRewritingSetup();
+  await testDetectedLocalAiListsEveryModelWithoutOpeningManualConnection();
+  await testSavingModelSettingsTestsStructuredActionsBeforeWritingConfig();
   await testLocalAndCloudProviderChoicesStaySeparate();
   await testBoundedExperimentExplainsAndRequiresExplicitScope();
   await testLegacyHumanCanChooseEveryModeWithoutWritingACommand();
-  await testGoalStartersAndCompactModeSelectorKeepPlainLanguageDraftState();
+  await testPredictableViewsConciseModesAndAccessSummaryKeepDraftState();
   await testCompletedGoalClearsOnlyItsMatchingStaleDraft();
   await testCompletedGoalPreservesASecondGenerationNewDraft();
   await testPausedBackgroundAssistantIsNotCalledAnActiveTask();

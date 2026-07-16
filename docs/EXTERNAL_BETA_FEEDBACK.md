@@ -7,6 +7,10 @@
 - Fresh install, upgrade, or existing install:
 - Attempt completed, failed, blocked, or abandoned:
 - Minutes to first terminal result:
+- Browser or terminal path:
+- Reached Home, Tasks, History, and Settings without help? Yes / No
+- Typed a path, command, endpoint, or model ID? Which one and why?
+- Local AI was detected automatically? Yes / No / Not used
 - Final category: Verified done / Blocked with reason / Failed with evidence
 - Independent command used:
 - Attempts and retries:

@@ -32,13 +32,17 @@ Controller, or any maintainer-only service:
 
 - a fresh `pipx install local-agentic-harness` launch;
 - the embedded backend and packaged browser assets;
+- predictable Home, Tasks, History, and Settings views;
 - a plain-language goal with no special prompt grammar;
-- visible Quick task, Plan first, Keep working, and Bounded experiment choices;
+- visible Quick, Standard, Thorough, and advanced Experiment choices;
 - an installed coding agent, a local model, or a bring-your-own
   OpenAI-compatible cloud endpoint;
+- fixed-loopback discovery for Ollama, LM Studio, vLLM, and llama.cpp with an
+  explicit model choice and structured-action connection test;
 - editable provider templates with no bundled credentials;
 - explicit remote-data consent for a cloud model;
-- an independent verification command; and
+- automatic deterministic project-check detection with a technical override;
+- visible read-only Settings for managed installations; and
 - a durable `Verified done`, `Blocked with reason`, or `Failed with evidence`
   result.
 
@@ -98,9 +102,13 @@ Before tagging the self-hosted release:
 - install both wheel and source distribution into clean environments;
 - complete a fresh-workspace browser journey on desktop and narrow mobile
   layouts;
+- prove every primary view and tab-keyboard path is reachable;
 - prove all four strategies are submitted and persisted independently of the
   provider selection;
-- prove Bounded experiment fails closed without enforced explicit scope;
+- prove Experiment fails closed without an enforced explicit access limit;
+- prove malformed and symlinked existing configuration is never overwritten;
+- prove model discovery alone cannot produce Ready and a changed endpoint or
+  model invalidates the session validation;
 - prove no entered credential appears in configuration, API output, history,
   events, transcripts, reports, or built artifacts; and
 - publish screenshots and release notes that describe the self-hosted boundary

@@ -65,6 +65,12 @@ node --check agentic_harness/gui/static/app.js
 node tests/frontend_token_race_test.js
 ```
 
+Then launch a disposable project with
+`agentic-harness-gui --project-dir /path/to/disposable-project --no-open` and
+verify Home, Tasks, History, and Settings by pointer and keyboard at desktop and
+narrow widths. Confirm there is no horizontal overflow and that managed
+Settings is visible but read-only.
+
 For packaging, entry-point, packaged-asset, or release-pipeline changes, run:
 
 ```bash
