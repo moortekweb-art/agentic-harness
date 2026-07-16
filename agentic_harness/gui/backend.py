@@ -6,6 +6,7 @@ from copy import deepcopy
 from http.client import HTTPConnection
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -17,7 +18,10 @@ from typing import Any
 
 import yaml
 
-from agentic_harness.adapters.model_agent import OpenAICompatibleProvider
+from agentic_harness.adapters.model_agent import (
+    OpenAICompatibleProvider,
+    validate_report_outcome,
+)
 from agentic_harness.core.artifacts import ArtifactStore
 from agentic_harness.core.autonomy import AUTONOMY_CONTRACT, AutonomousRunner, AutonomyPolicy
 from agentic_harness.core.config import (
@@ -87,6 +91,18 @@ _LOCAL_MODEL_PROBES = (
         "label": "LM Studio",
         "port": 1234,
         "endpoint": "http://127.0.0.1:1234/v1/chat/completions",
+    },
+    {
+        "template_key": "vllm_local",
+        "label": "vLLM",
+        "port": 8000,
+        "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+    },
+    {
+        "template_key": "llamacpp_local",
+        "label": "llama.cpp",
+        "port": 8080,
+        "endpoint": "http://127.0.0.1:8080/v1/chat/completions",
     },
 )
 
@@ -206,7 +222,7 @@ class EmbeddedExecutionBackend:
             "app": "agentic-harness",
             "backend": "embedded",
             "workspace": str(self.project_dir),
-            "configured": readiness["state"] != "setup_required",
+            "configured": readiness["state"] not in {"setup_required", "configuration_error"},
             "readiness": readiness,
         }
 
@@ -226,9 +242,20 @@ class EmbeddedExecutionBackend:
                 "summary": "The isolated practice task is still running.",
                 "next_action": "Follow the demo progress and its independent verification.",
             }
-        try:
-            config = self._config()
-        except ConfigError as exc:
+        config, configuration_error = self._gui_config_state()
+        if configuration_error is not None:
+            return {
+                "state": "configuration_error",
+                "label": "Settings need repair",
+                "can_start": False,
+                "can_queue": False,
+                "requires_review": True,
+                "summary": str(configuration_error["summary"]),
+                "next_action": (
+                    "Repair or move .agentic-harness/config.yml, then refresh this page."
+                ),
+            }
+        if config is None:
             if demo_task is not None and demo_task.get("result_category") == "verified_done":
                 return {
                     "state": "setup_required",
@@ -237,7 +264,7 @@ class EmbeddedExecutionBackend:
                     "can_queue": False,
                     "requires_review": False,
                     "summary": "The safe demo passed. Connect your own coding agent or model for real work.",
-                    "next_action": "Open Setup and choose how real workspace tasks should run.",
+                    "next_action": "Open Settings and choose how real project tasks should run.",
                 }
             return {
                 "state": "setup_required",
@@ -245,8 +272,8 @@ class EmbeddedExecutionBackend:
                 "can_start": False,
                 "can_queue": False,
                 "requires_review": False,
-                "summary": str(exc),
-                "next_action": "Choose how this workspace should run tasks.",
+                "summary": "This project has not been set up yet.",
+                "next_action": "Open Settings and choose how this project should run tasks.",
             }
         if not config.review_command:
             return {
@@ -256,7 +283,7 @@ class EmbeddedExecutionBackend:
                 "can_queue": False,
                 "requires_review": False,
                 "summary": "Add an independent verification command before starting work.",
-                "next_action": "Open Setup and choose the command that proves the result.",
+                "next_action": "Open Settings and choose the project check that proves the result.",
             }
         credential = self._credential_status(config)
         if credential["configured"] is not True:
@@ -267,7 +294,7 @@ class EmbeddedExecutionBackend:
                 "can_queue": False,
                 "requires_review": False,
                 "summary": "Re-enter the model API key for this app session.",
-                "next_action": "Open Setup and enter the key again.",
+                "next_action": "Open Settings and enter the key again.",
             }
         current = self.store.read_current_goal()
         if self._driver_active() or (current is not None and not _durably_terminal(current)):
@@ -292,6 +319,16 @@ class EmbeddedExecutionBackend:
                     "summary": "The durable terminal report is still being finalized.",
                     "next_action": "Wait for the final evidence report before starting another task.",
                 }
+        if config.worker == "model_agent" and self._model_validation(config)["verified"] is not True:
+            return {
+                "state": "connection_test_required",
+                "label": "AI test needed",
+                "can_start": False,
+                "can_queue": False,
+                "requires_review": False,
+                "summary": "The AI connection has not passed its structured-action test in this app session.",
+                "next_action": "Open Settings and choose Save and test settings.",
+            }
         summary = f"Ready to work with {self._worker_label(config)}."
         if config.worker == "coding_agent":
             validation = self._coding_agent_validation(config.coding_agent_command)
@@ -311,23 +348,40 @@ class EmbeddedExecutionBackend:
             return self._setup_locked()
 
     def _setup_locked(self) -> dict[str, Any]:
-        suggested = _detect_check(self.project_dir)
+        suggested_argv = detect_review_command(self.project_dir)
+        suggested = format_command(suggested_argv)
         demo_task = self._demo_status()
-        try:
-            config = self._config()
-        except ConfigError:
-            config = None
+        config, configuration_error = self._gui_config_state()
+        bootstrap_config: HarnessConfig | None = None
+        config_path = self.project_dir / CONFIG_DIR / CONFIG_NAME
+        if configuration_error is None and config is None and config_path.is_file():
+            candidate = load_config(self.project_dir)
+            if candidate.worker == "noop":
+                bootstrap_config = candidate
         agents, recommended_agent = _coding_agent_options(config)
+        editable = configuration_error is None and (
+            config is None or _gui_setup_editable(config)
+        )
         result: dict[str, Any] = {
             "contract": "agentic_harness.gui_setup.v1",
             "workspace": str(self.project_dir),
             "configured": config is not None,
-            "editable": config is None or _gui_setup_editable(config),
+            "editable": editable,
             "suggested_check": suggested,
+            "verification": {
+                "mode": "automatic" if suggested_argv else "setup_needed",
+                "label": _review_command_label(suggested_argv),
+                "technical_command": suggested,
+            },
             "deployment": {
                 "scope": "local_self_hosted",
                 "multi_user": False,
                 "summary": "One trusted user and one workspace on this computer.",
+            },
+            "management": {
+                "mode": "workspace",
+                "editable": editable,
+                "summary": "Settings for this project.",
             },
             "provider_templates": [template.to_public_dict() for template in PROVIDER_TEMPLATES],
             "demo": {
@@ -346,7 +400,10 @@ class EmbeddedExecutionBackend:
             "local_model_detection": {
                 "status": "not_checked",
                 "detected": [],
-                "summary": "Checking this computer for Ollama and LM Studio is available on demand.",
+                "summary": (
+                    "Automatic detection for Ollama, LM Studio, vLLM, and llama.cpp "
+                    "is available on demand."
+                ),
             },
             "execution_options": [
                 {
@@ -377,10 +434,17 @@ class EmbeddedExecutionBackend:
                 },
             ],
         }
+        if configuration_error is not None:
+            result["configuration_error"] = configuration_error
         if config is not None:
             result["worker"] = self._public_worker()
             result["credential"] = self._credential_status(config)
             result["verification_command"] = format_command(config.review_command)
+            result["verification"] = {
+                "mode": "configured",
+                "label": _review_command_label(config.review_command),
+                "technical_command": format_command(config.review_command),
+            }
             result["limits"] = {
                 "max_cycles": config.goal_max_cycles,
                 "max_elapsed_seconds": config.goal_max_elapsed_seconds,
@@ -394,10 +458,27 @@ class EmbeddedExecutionBackend:
                     model=config.llm_model,
                     api_key_env=config.llm_api_key_env,
                 ).to_public_dict()
+                result["execution_validation"] = self._model_validation(config)
             elif config.worker == "coding_agent":
                 result["execution_validation"] = self._coding_agent_validation(
                     config.coding_agent_command
                 )
+        elif bootstrap_config is not None:
+            result["verification_command"] = format_command(
+                bootstrap_config.review_command
+            )
+            result["verification"] = {
+                "mode": "configured" if bootstrap_config.review_command else "setup_needed",
+                "label": _review_command_label(bootstrap_config.review_command),
+                "technical_command": format_command(bootstrap_config.review_command),
+            }
+            result["limits"] = {
+                "max_cycles": bootstrap_config.goal_max_cycles,
+                "max_elapsed_seconds": bootstrap_config.goal_max_elapsed_seconds,
+                "max_total_tokens": bootstrap_config.goal_max_total_tokens,
+                "max_provider_calls": bootstrap_config.goal_max_provider_calls,
+                "max_tool_calls": bootstrap_config.goal_max_tool_calls,
+            }
         return result
 
     def detect_local_models(self) -> dict[str, Any]:
@@ -416,7 +497,8 @@ class EmbeddedExecutionBackend:
             summary = f"Detected on this computer: {labels}."
         else:
             summary = (
-                "No running Ollama or LM Studio server was detected. You can start one "
+                "No running Ollama, LM Studio, vLLM, or llama.cpp server was detected. "
+                "You can start one "
                 "and check again, or enter another local OpenAI-compatible endpoint."
             )
         return {
@@ -516,15 +598,24 @@ class EmbeddedExecutionBackend:
             return self._configure_locked(body)
 
     def _configure_locked(self, body: dict[str, Any]) -> dict[str, Any]:
-        try:
-            existing = self._config()
-        except ConfigError:
-            existing = None
+        existing, configuration_error = self._gui_config_state()
+        if configuration_error is not None:
+            raise ValueError(
+                f"{configuration_error['summary']} The existing "
+                ".agentic-harness/config.yml was not changed."
+            )
+        config_path = self.project_dir / CONFIG_DIR / CONFIG_NAME
+        if existing is None and config_path.is_file():
+            candidate = load_config(self.project_dir)
+            if candidate.worker == "noop":
+                existing = candidate
         if existing is not None and not _gui_setup_editable(existing):
             raise ValueError(f"The existing {existing.worker} setup is read-only in the GUI.")
         execution = str(body.get("execution") or "").strip()
         verification_text = str(
-            body.get("verification_command") or _detect_check(self.project_dir)
+            body.get("verification_command")
+            or (format_command(existing.review_command) if existing else "")
+            or _detect_check(self.project_dir)
         ).strip()
         verification = split_command(verification_text) if verification_text else []
         if not verification:
@@ -601,7 +692,8 @@ class EmbeddedExecutionBackend:
                     1,
                     3_600,
                 ),
-                "autonomy": _autonomy_settings(body),
+                **_preserved_configuration_settings(existing),
+                "autonomy": _autonomy_settings(body, existing),
             }
             session_key = entered_key or (self.api_key if preserve_session else None)
             self._commit_configuration(payload, session_key)
@@ -649,7 +741,8 @@ class EmbeddedExecutionBackend:
                     1,
                     3_600,
                 ),
-                "autonomy": _autonomy_settings(body),
+                **_preserved_configuration_settings(existing),
+                "autonomy": _autonomy_settings(body, existing),
             }
             fingerprint = _command_fingerprint(command)
             if self._execution_validation.get("fingerprint") != fingerprint:
@@ -671,7 +764,23 @@ class EmbeddedExecutionBackend:
             raise ValueError(
                 "Choose either a session API key or an environment variable, not both."
             )
-        api_key = entered_key or resolve_api_key(profile.api_key_env)
+        saved_session_key = ""
+        if not entered_key and not profile.api_key_env and self.api_key:
+            existing, configuration_error = self._gui_config_state()
+            if (
+                configuration_error is None
+                and existing is not None
+                and existing.worker == "model_agent"
+                and existing.llm_credential_source == "session"
+                and existing.llm_endpoint == profile.endpoint
+                and existing.llm_model == profile.model
+            ):
+                saved_session_key = self.api_key
+        api_key = (
+            resolve_api_key(profile.api_key_env)
+            if profile.api_key_env
+            else entered_key or saved_session_key
+        )
         provider = OpenAICompatibleProvider(
             endpoint=profile.endpoint,
             model=profile.model,
@@ -683,22 +792,54 @@ class EmbeddedExecutionBackend:
             [
                 {
                     "role": "system",
-                    "content": 'Return exactly this JSON object: {"action":"report_outcome","arguments":{"status":"progress"}}',
+                    "content": (
+                        'Return exactly this JSON object: {"action":"report_outcome",'
+                        '"arguments":{"status":"progress","summary":"Connection test passed."}}'
+                    ),
                 },
                 {"role": "user", "content": "Connection and structured-action test."},
             ]
         )
         content = response.content
-        structured = isinstance(content, dict) and content.get("action") == "report_outcome"
-        if not structured:
+        if not isinstance(content, dict) or content.get("action") != "report_outcome":
             raise ValueError(
                 "The model answered, but it did not follow the structured action protocol."
             )
+        arguments = content.get("arguments")
+        if not isinstance(arguments, dict):
+            raise ValueError(
+                "The model answered, but it did not follow the structured action protocol."
+            )
+        try:
+            validate_report_outcome(arguments)
+        except ValueError as exc:
+            raise ValueError(
+                "The model answered, but it did not follow the structured action protocol."
+            ) from exc
+        credential_source = (
+            "env"
+            if profile.api_key_env
+            else "session"
+            if entered_key or saved_session_key
+            else "none"
+        )
+        self._execution_validation = {
+            "fingerprint": _model_connection_fingerprint(
+                profile,
+                credential_source=credential_source,
+                credential_value=api_key,
+            ),
+            "verified": True,
+            "kind": "model_agent",
+            "credential_source": credential_source,
+        }
         return {
             "reachable": True,
             "structured_actions": True,
+            "verified": True,
             "model": profile.model,
             "data_location": profile.data_location,
+            "summary": "The AI connection and structured actions are working.",
         }
 
     def _test_coding_agent(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -796,6 +937,41 @@ class EmbeddedExecutionBackend:
             ),
         }
 
+    def _model_validation(self, config: HarnessConfig) -> dict[str, Any]:
+        profile = ProviderProfile(
+            endpoint=config.llm_endpoint,
+            model=config.llm_model,
+            api_key_env=config.llm_api_key_env,
+        )
+        credential_value = (
+            self.api_key or ""
+            if config.llm_credential_source == "session"
+            else os.environ.get(config.llm_api_key_env, "").strip()
+            if config.llm_credential_source == "env"
+            else ""
+        )
+        verified = (
+            self._execution_validation.get("verified") is True
+            and self._execution_validation.get("kind") == "model_agent"
+            and self._execution_validation.get("fingerprint")
+            == _model_connection_fingerprint(
+                profile,
+                credential_source=config.llm_credential_source,
+                credential_value=credential_value,
+            )
+            and self._execution_validation.get("credential_source")
+            == config.llm_credential_source
+        )
+        return {
+            "verified": verified,
+            "scope": "structured_actions" if verified else "not_tested",
+            "summary": (
+                "The AI connection and structured actions were verified in this app session."
+                if verified
+                else "The AI connection has not been tested in this app session."
+            ),
+        }
+
     def set_session_credential(self, api_key: str) -> dict[str, Any]:
         value = api_key.strip()
         if not value:
@@ -806,6 +982,28 @@ class EmbeddedExecutionBackend:
             config = self._config()
             if config.worker != "model_agent" or config.llm_credential_source != "session":
                 raise ValueError("This setup does not use a session API key")
+            profile = ProviderProfile(
+                endpoint=config.llm_endpoint,
+                model=config.llm_model,
+                api_key_env=config.llm_api_key_env,
+            )
+            expected_fingerprint = _model_connection_fingerprint(
+                profile,
+                credential_source="session",
+                credential_value=value,
+            )
+            validation_matches = (
+                self._execution_validation.get("verified") is True
+                and self._execution_validation.get("kind") == "model_agent"
+                and self._execution_validation.get("fingerprint") == expected_fingerprint
+            )
+            current = self.store.read_current_goal()
+            if current is not None and not _durably_terminal(current) and not validation_matches:
+                raise ValueError(
+                    "Test this AI connection with the session key before resuming the task."
+                )
+            if not validation_matches:
+                self._execution_validation = {}
             self.api_key = value
         self._resume_orphaned_goal()
         return {"source": "session", "configured": True}
@@ -1267,6 +1465,49 @@ class EmbeddedExecutionBackend:
             raise ConfigError("Choose an execution method before starting work.")
         return config
 
+    def _gui_config_state(
+        self,
+    ) -> tuple[HarnessConfig | None, dict[str, str] | None]:
+        """Separate a new/noop project from an invalid existing configuration."""
+
+        config_dir = self.project_dir / CONFIG_DIR
+        path = config_dir / CONFIG_NAME
+        if config_dir.is_symlink() or path.is_symlink():
+            return None, {
+                "code": "unsafe_configuration_path",
+                "summary": "The existing configuration path is a symlink.",
+            }
+        if config_dir.exists() and not config_dir.is_dir():
+            return None, {
+                "code": "unsafe_configuration_path",
+                "summary": "The existing configuration path is not a directory.",
+            }
+        if path.exists() and not path.is_file():
+            return None, {
+                "code": "unsafe_configuration_path",
+                "summary": "The existing configuration file path is not a regular file.",
+            }
+        if not path.exists():
+            return None, None
+        try:
+            config = load_config(self.project_dir)
+        except (ConfigError, OSError, UnicodeError) as exc:
+            raw_message = str(exc).strip()
+            if isinstance(exc, ConfigError) and raw_message.startswith("invalid YAML config:"):
+                message = "The existing configuration is not valid YAML."
+            elif isinstance(exc, (OSError, UnicodeError)):
+                message = "The existing configuration could not be read."
+            else:
+                message = safe_inline_text(raw_message)[:500]
+            message = message or "The existing configuration could not be read."
+            return None, {
+                "code": "invalid_existing_configuration",
+                "summary": message,
+            }
+        if config.worker == "noop":
+            return None, None
+        return config, None
+
     def _task(self, goal: Goal) -> dict[str, Any]:
         autonomy = goal.metadata.get("autonomy")
         if not isinstance(autonomy, dict):
@@ -1593,16 +1834,18 @@ class EmbeddedExecutionBackend:
                 credential_source = f"env:{config.llm_api_key_env}"
             else:
                 credential_source = "none"
+            profile = ProviderProfile(
+                endpoint=config.llm_endpoint,
+                model=config.llm_model,
+                api_key_env=config.llm_api_key_env,
+            )
             worker.update(
                 {
                     "model": config.llm_model,
                     "endpoint": config.llm_endpoint,
                     "credential_source": credential_source,
-                    "data_location": ProviderProfile(
-                        endpoint=config.llm_endpoint,
-                        model=config.llm_model,
-                        api_key_env=config.llm_api_key_env,
-                    ).data_location,
+                    "data_location": profile.data_location,
+                    "network_scope": profile.network_scope,
                 }
             )
         return worker
@@ -2208,6 +2451,33 @@ def _detect_check(project_dir: Path) -> str:
     return format_command(detect_review_command(project_dir))
 
 
+def _review_command_label(command: list[str]) -> str:
+    """Describe a deterministic project check without requiring shell knowledge."""
+
+    if not command:
+        return "No automatic project check found"
+    signatures = {
+        ("npm", "test"): "Project tests (npm)",
+        ("pnpm", "test"): "Project tests (pnpm)",
+        ("yarn", "test"): "Project tests (Yarn)",
+        ("bun", "test"): "Project tests (Bun)",
+        ("cargo", "test"): "Project tests (Rust)",
+        ("go", "test", "./..."): "Project tests (Go)",
+        ("mvn", "test"): "Project tests (Maven)",
+        ("./mvnw", "test"): "Project tests (Maven)",
+        ("mvnw.cmd", "test"): "Project tests (Maven)",
+        ("mvnw.bat", "test"): "Project tests (Maven)",
+        ("gradle", "test"): "Project tests (Gradle)",
+        ("./gradlew", "test"): "Project tests (Gradle)",
+        ("gradlew.bat", "test"): "Project tests (Gradle)",
+        ("gradlew.cmd", "test"): "Project tests (Gradle)",
+        ("dotnet", "test"): "Project tests (.NET)",
+        ("bundle", "exec", "rspec"): "Project tests (RSpec)",
+        ("python", "-m", "pytest", "-q"): "Project tests (pytest)",
+    }
+    return signatures.get(tuple(command), "Configured project check")
+
+
 def _probe_local_model_server(probe: dict[str, Any]) -> dict[str, Any] | None:
     """Return a small public result from one fixed loopback model-server probe."""
 
@@ -2230,18 +2500,21 @@ def _probe_local_model_server(probe: dict[str, Any]) -> dict[str, Any] | None:
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
     rows = payload.get("data") if isinstance(payload, dict) else None
-    model = ""
+    models: list[str] = []
     if isinstance(rows, list):
-        for row in rows:
+        for row in rows[:25]:
             if isinstance(row, dict) and isinstance(row.get("id"), str):
-                model = row["id"].strip()[:300]
-                if model:
-                    break
+                model_id = row["id"].strip()[:300]
+                if model_id and model_id not in models:
+                    models.append(model_id)
+    if not models:
+        return None
     return {
         "template_key": str(probe["template_key"]),
         "label": str(probe["label"]),
         "endpoint": str(probe["endpoint"]),
-        "model": model,
+        "model": models[0] if models else "",
+        "models": models,
     }
 
 
@@ -2319,6 +2592,28 @@ def _coding_agent_command(agent: str, *, executable: str | None = None) -> list[
 
 def _command_fingerprint(command: list[str]) -> str:
     encoded = json.dumps(command, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _model_connection_fingerprint(
+    profile: ProviderProfile,
+    *,
+    credential_source: str,
+    credential_value: str,
+) -> str:
+    credential_digest = hashlib.sha256(credential_value.encode("utf-8")).hexdigest()
+    encoded = json.dumps(
+        {
+            "endpoint": profile.endpoint,
+            "model": profile.model,
+            "credential_source": credential_source,
+            "credential_name": profile.api_key_env if credential_source == "env" else "",
+            "credential_digest": credential_digest,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -2449,7 +2744,14 @@ def _coding_agent_selection(command: list[str]) -> str:
 def _int_setting(value: Any, default: int, minimum: int, maximum: int) -> int:
     if value in (None, ""):
         return default
-    parsed = int(value)
+    if isinstance(value, bool):
+        raise ValueError("setting must be a whole number")
+    if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+        raise ValueError("setting must be a whole number")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("setting must be a whole number") from exc
     if parsed < minimum or parsed > maximum:
         raise ValueError(f"setting must be between {minimum} and {maximum}")
     return parsed
@@ -2463,7 +2765,14 @@ def _float_setting(
 ) -> float:
     if value in (None, ""):
         return default
-    parsed = float(value)
+    if isinstance(value, bool):
+        raise ValueError("setting must be a finite number")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("setting must be a finite number") from exc
+    if not math.isfinite(parsed):
+        raise ValueError("setting must be a finite number")
     if parsed < minimum or parsed > maximum:
         raise ValueError(f"setting must be between {minimum:g} and {maximum:g}")
     return parsed
@@ -2477,14 +2786,59 @@ def _text_setting(value: Any, default: str) -> str:
 
 
 def _gui_setup_editable(config: HarnessConfig) -> bool:
-    return config.worker in {"coding_agent", "model_agent"}
+    return config.worker in {"noop", "coding_agent", "model_agent"}
 
 
-def _autonomy_settings(body: dict[str, Any]) -> dict[str, int]:
+def _autonomy_settings(
+    body: dict[str, Any],
+    existing: HarnessConfig | None = None,
+) -> dict[str, int]:
     return {
-        "max_cycles": _int_setting(body.get("max_cycles"), 100, 1, 10_000),
-        "max_elapsed_seconds": _int_setting(body.get("max_elapsed_seconds"), 7_200, 1, 604_800),
-        "max_total_tokens": _int_setting(body.get("max_total_tokens"), 500_000, 1, 100_000_000),
-        "max_provider_calls": _int_setting(body.get("max_provider_calls"), 200, 1, 100_000),
-        "max_tool_calls": _int_setting(body.get("max_tool_calls"), 1_000, 1, 1_000_000),
+        "max_cycles": _int_setting(
+            body.get("max_cycles"),
+            existing.goal_max_cycles if existing else 100,
+            1,
+            10_000,
+        ),
+        "max_elapsed_seconds": _int_setting(
+            body.get("max_elapsed_seconds"),
+            existing.goal_max_elapsed_seconds if existing else 7_200,
+            1,
+            604_800,
+        ),
+        "max_total_tokens": _int_setting(
+            body.get("max_total_tokens"),
+            existing.goal_max_total_tokens if existing else 500_000,
+            1,
+            100_000_000,
+        ),
+        "max_provider_calls": _int_setting(
+            body.get("max_provider_calls"),
+            existing.goal_max_provider_calls if existing else 200,
+            1,
+            100_000,
+        ),
+        "max_tool_calls": _int_setting(
+            body.get("max_tool_calls"),
+            existing.goal_max_tool_calls if existing else 1_000,
+            1,
+            1_000_000,
+        ),
     }
+
+
+def _preserved_configuration_settings(
+    existing: HarnessConfig | None,
+) -> dict[str, Any]:
+    if existing is None:
+        return {}
+    preserved: dict[str, Any] = {}
+    if existing.allow_noop_success:
+        preserved["allow_noop_success"] = True
+    if existing.review_artifact:
+        preserved["review_artifact"] = existing.review_artifact
+    if existing.review_file_changed:
+        preserved["review_file_changed"] = existing.review_file_changed
+    if existing.review_git_clean:
+        preserved["review_git_clean"] = True
+    return preserved

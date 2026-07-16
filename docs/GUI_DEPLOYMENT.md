@@ -37,11 +37,14 @@ agentic-harness selftest
 
 Prefer an environment-variable reference for a background service. Put the key
 in an owner-readable environment file outside the repository and enter only the
-variable name in GUI setup. Do not place a plaintext key in
+variable name in Settings. Do not place a plaintext key in
 `.agentic-harness/config.yml`, the unit file, command-line arguments, or a URL.
 
 A session key is intentionally memory-only. It disappears on restart and is
 suitable for an interactive loopback launch, not an unattended service.
+Model connection validation is also session-scoped: after a GUI restart,
+Settings must pass the structured-action test before a new model-backed task can
+start.
 
 ## Network boundary
 
@@ -82,7 +85,9 @@ behavior through the private URL.
 5. Update the executable path, reload the unit manager, and restart once.
 6. Verify `GET /api/health`, compatibility `GET /api/status`, readiness, setup,
    history, security headers, and JSON 404 behavior.
-7. Complete a harmless bounded goal and confirm the final independent check and
+7. Open all four views, confirm Settings identifies **This project**, and verify
+   managed deployments render it read-only.
+8. Complete a harmless bounded goal and confirm the final independent check and
    evidence preview.
 
 Rollback by restoring the prior executable path and restarting. Do not delete

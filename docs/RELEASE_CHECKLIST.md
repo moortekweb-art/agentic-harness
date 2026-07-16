@@ -68,7 +68,17 @@ Current candidate: v0.9.1, with notes at `docs/RELEASE_NOTES_0.9.1.md`.
 
 - Run the real browser journey from the candidate:
 
+  - navigate Home, Tasks, History, and Settings by pointer and keyboard;
+  - verify managed Settings remains visible and read-only;
+  - detect multiple fixed-loopback local models and select one without opening
+    Manual connection;
+  - prove discovery is not readiness, then pass the structured-action test;
   - setup with a scripted local OpenAI-compatible provider;
+  - verify a known project shows a friendly automatic check while the raw
+    command stays collapsed;
+  - verify an unknown project fails closed instead of claiming an automatic
+    check;
+  - preserve malformed and symlinked existing configuration bytes;
   - reject a blank goal;
   - start a file-changing goal and observe ordered activity;
   - inspect plan, current subgoal, checkpoint, checks, changed file, artifact,

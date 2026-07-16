@@ -41,6 +41,7 @@ class Element {
     this.dataset = {};
     this.children = [];
     this.listeners = {};
+    this.focusCount = 0;
   }
 
   appendChild(child) {
@@ -68,7 +69,9 @@ class Element {
     delete this[name];
   }
 
-  focus() {}
+  focus() {
+    this.focusCount += 1;
+  }
 }
 
 class Dialog extends Element {
@@ -129,22 +132,70 @@ function okPayloadFor(url, setupPayload = null, taskPayload = null, healthPayloa
   }
   if (url === "/api/modes") {
     const managed = setupPayload?.worker?.type === "local_goal";
-    return {
-      default: managed ? "guided" : "plan",
-      kind: managed ? "managed_route" : "strategy",
-      modes: managed
-        ? [
-          { key: "local", label: "Quick task", best_for: "small work", caution: "" },
-          { key: "guided", label: "Plan first", best_for: "important work", caution: "recommended" },
-          { key: "cloud", label: "Keep working", best_for: "large work", caution: "" },
-          { key: "experimental", label: "Safe experiment", best_for: "tiny trials", caution: "" },
-        ]
-        : [
-          { key: "quick", label: "Quick task", best_for: "small work", caution: "" },
-          { key: "plan", label: "Plan first", best_for: "important work", caution: "recommended" },
-          { key: "persistent", label: "Keep working", best_for: "large work", caution: "" },
-          { key: "experiment", label: "Bounded experiment", best_for: "tiny trials", caution: "" },
+    if (managed) {
+      return {
+        kind: "managed_route",
+        default_route: "mode1",
+        default_effort: "standard",
+        routes: [
+          {
+            key: "mode1", label: "Local build", technical_mode: "Mode 1 local start",
+            best_for: "normal local work", available: true, recommended: true,
+            data_location: "local_node1", network_scope: "local_execution",
+            supports_execution_profiles: true,
+          },
+          {
+            key: "mode2", label: "Local build + Codex review", technical_mode: "Mode 2",
+            available: false, disabled_reason: "supervision policy only",
+            data_location: "mixed_local_cloud", network_scope: "mixed",
+          },
+          {
+            key: "mode3a", label: "Cloud long run", technical_mode: "Mode 3A",
+            best_for: "bounded separate work", available: true, requires_scope: true,
+            data_location: "cloud_provider", network_scope: "cloud",
+          },
+          {
+            key: "mode4", label: "Read-only audit", technical_mode: "Mode 4",
+            available: false, disabled_reason: "audit dispatch unavailable",
+            data_location: "cloud_provider", network_scope: "cloud",
+          },
+          {
+            key: "mode4b", label: "One-file canary", technical_mode: "Mode 4B",
+            available: false, hidden: true, labs: true,
+            disabled_reason: "canary disabled", data_location: "cloud_provider",
+            network_scope: "cloud",
+          },
         ],
+        efforts: [
+          { key: "quick", label: "Quick", available: true },
+          { key: "standard", label: "Standard", available: true, recommended: true },
+          { key: "thorough", label: "Thorough", available: true },
+        ],
+        execution_profiles: [],
+        default_execution_profile: "automatic",
+      };
+    }
+    return {
+      default: "plan",
+      kind: "strategy",
+      modes: [
+        {
+          key: "quick", label: "Quick task", best_for: "small work", caution: "",
+          budget_profile: "small",
+        },
+        {
+          key: "plan", label: "Plan first", best_for: "important work", caution: "recommended",
+          budget_profile: "balanced",
+        },
+        {
+          key: "persistent", label: "Keep working", best_for: "large work", caution: "",
+          budget_profile: "full",
+        },
+        {
+          key: "experiment", label: "Bounded experiment", best_for: "tiny trials", caution: "",
+          labs: true, experimental: true, requires_scope: true, budget_profile: "tiny",
+        },
+      ],
     };
   }
   if (url === "/api/setup") {
@@ -169,6 +220,29 @@ function okPayloadFor(url, setupPayload = null, taskPayload = null, healthPayloa
     return { tasks: [] };
   }
   return { ok: true };
+}
+
+function jsonResponse(payload, status = 200) {
+  return { status, ok: status >= 200 && status < 300, json: async () => payload };
+}
+
+function managedModesFor(setupPayload, { localAvailable = true, defaultRoute = "mode1" } = {}) {
+  const payload = okPayloadFor("/api/modes", setupPayload);
+  return {
+    ...payload,
+    default: defaultRoute,
+    default_route: defaultRoute,
+    routes: payload.routes.map((route) => (
+      route.key === "mode1"
+        ? {
+            ...route,
+            available: localAvailable,
+            enabled: localAvailable,
+            disabled_reason: localAvailable ? "" : "The local lane is currently busy.",
+          }
+        : route
+    )),
+  };
 }
 
 async function tick() {
@@ -388,7 +462,12 @@ async function testLegacySetupContractCompletesBootstrapAndAttachesStatusStream(
   assert.equal(app.elements.get("workspacePath").textContent, "legacy workspace");
   assert.equal(app.elements.get("workspacePath").title, "/tmp/legacy-workspace");
   assert.match(app.elements.get("executionSummary").textContent, /Managed runtime/);
-  assert.equal(app.elements.get("setupButton").hidden, true);
+  assert.equal(app.elements.get("setupButton").hidden, false);
+  assert.equal(app.elements.get("managedSettings").hidden, false);
+  assert.equal(app.elements.get("editableSettings").hidden, true);
+  app.elements.get("setupButton").listeners.click();
+  assert.equal(app.elements.get("settingsView").hidden, false);
+  assert.equal(app.elements.get("homeView").hidden, true);
   assert.deepEqual(app.websocketUrls, ["ws://127.0.0.1:41111/api/tasks/stream"]);
   assert.equal(app.fetchCalls.some((call) => call.url === "/api/setup"), true);
   assert.deepEqual(app.consoleErrors, []);
@@ -416,11 +495,11 @@ async function testFreshSetupOpensOnceAndSelectsTheRecommendedDetectedAgent() {
     ],
   };
   const app = await runApp({ publicAccess: true, setupPayload });
-  const setupDialog = app.elements.get("setupDialog");
+  const settingsView = app.elements.get("settingsView");
   const agentChoice = app.elements.get("codingAgentChoice");
 
-  assert.equal(setupDialog.open, true);
-  assert.equal(setupDialog.showCount, 1);
+  assert.equal(settingsView.hidden, false);
+  assert.equal(app.elements.get("homeView").hidden, true);
   assert.equal(agentChoice.value, "codex");
   assert.equal(agentChoice.children.length, 2);
   assert.equal(agentChoice.children[0].textContent, "Codex (recommended)");
@@ -431,7 +510,7 @@ async function testFreshSetupOpensOnceAndSelectsTheRecommendedDetectedAgent() {
   assert.equal(app.elements.get("verificationCommand").value, "npm test");
 
   await app.context.refreshSetup();
-  assert.equal(setupDialog.showCount, 1);
+  assert.equal(settingsView.hidden, false);
 }
 
 async function testConfiguredVerificationReplacesOnlyThePreviousSuggestion() {
@@ -456,7 +535,7 @@ async function testConfiguredVerificationReplacesOnlyThePreviousSuggestion() {
   assert.equal(app.elements.get("checks").value, "npm run verify");
   assert.equal(
     app.elements.get("executionSummary").textContent,
-    "Codex installed · connection not tested · model location set in agent",
+    "Codex · connection not tested",
   );
 
   app.elements.get("checks").value = "npm run verify:focused";
@@ -470,7 +549,7 @@ async function testConfiguredVerificationReplacesOnlyThePreviousSuggestion() {
   assert.equal(app.elements.get("checks").value, "npm run verify:focused");
 }
 
-async function testCodingAgentConnectionTestReportsLiveValidation() {
+async function testCodingAgentSaveAndTestReportsLiveValidation() {
   const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
   const setupPayload = {
     contract: "agentic_harness.gui_setup.v1",
@@ -510,7 +589,8 @@ async function testCodingAgentConnectionTestReportsLiveValidation() {
     },
   });
 
-  await app.elements.get("testCodingAgentButton").listeners.click();
+  app.elements.get("verificationCommand").value = "npm test";
+  await app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
   await tick();
 
   assert.equal(
@@ -519,7 +599,7 @@ async function testCodingAgentConnectionTestReportsLiveValidation() {
   );
   assert.equal(
     app.elements.get("executionSummary").textContent,
-    "Codex connection verified · model location set in agent",
+    "Codex · connection verified",
   );
   const probe = app.fetchCalls.find((call) => call.url === "/api/setup/test");
   assert.equal(JSON.parse(probe.options.body).agent, "codex");
@@ -541,8 +621,8 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
   const checks = app.elements.get("checks");
   const start = app.elements.get("startButton");
 
-  assert.equal(app.elements.get("verificationDetails").open, true);
-  assert.equal(app.elements.get("verificationSummary").textContent, "Required: add a success check");
+  assert.equal(app.elements.get("verificationDetails").open, false);
+  assert.equal(app.elements.get("verificationSummary").textContent, "Checks · Setup needed");
 
   objective.value = "Fix the regression";
   objective.listeners.input();
@@ -559,8 +639,10 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
       safeAreas: "",
       checks: "python -m pytest -q",
       mode: "plan",
-      goalKind: "",
-      draftVersion: 2,
+      route: "",
+      effort: "plan",
+      executionProfile: "automatic",
+      draftVersion: 4,
     },
   );
 }
@@ -581,7 +663,7 @@ async function testPortableUserChoosesProviderIndependentStrategy() {
   const modes = app.elements.get("modes");
 
   assert.equal(app.elements.get("modeSection").hidden, false);
-  assert.equal(modes.children.length, 4);
+  assert.equal(modes.children.length, 3);
   assert.equal(app.elements.get("modeSelect").value, "plan");
   objective.value = "Fix the public first-run flow";
   objective.listeners.input();
@@ -625,6 +707,244 @@ async function testProviderTemplatePrefillsEditableValues() {
   assert.equal(app.elements.get("providerModel").value, "glm-5.2");
   assert.equal(app.elements.get("providerApiKeyEnv").value, "ZAI_API_KEY");
   assert.equal(app.elements.get("connectionResult").textContent, "Confirm client eligibility.");
+}
+
+async function testTypedSessionKeyOverridesTemplateEnvironmentVariable() {
+  const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: false,
+    editable: true,
+    workspace: "/tmp/project",
+    suggested_check: "npm test",
+    provider_templates: [
+      { key: "custom", label: "Custom provider", data_location: "both" },
+      {
+        key: "zai_api",
+        label: "Z.ai API",
+        endpoint: "https://api.z.ai/api/paas/v4/chat/completions",
+        model: "glm-5.1",
+        api_key_env: "ZAI_API_KEY",
+        data_location: "cloud",
+      },
+    ],
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url, options = {}) => {
+      if (url === "/api/setup/test" && options.method === "POST") {
+        return response({ reachable: true, structured_actions: true, verified: true });
+      }
+      if (url === "/api/setup" && options.method === "POST") {
+        return response({ configured: true, credential: { source: "session" } });
+      }
+      if (url === "/api/setup/credential") return response({ configured: true });
+      return response(okPayloadFor(url, setupPayload));
+    },
+  });
+  app.elements.get("executionChoice").value = "cloud_model";
+  app.elements.get("executionChoice").listeners.change();
+  app.elements.get("providerPreset").value = "zai_api";
+  app.elements.get("providerPreset").listeners.change();
+  app.elements.get("providerApiKey").value = "typed-session-secret";
+  app.elements.get("verificationCommand").value = "npm test";
+  app.elements.get("confirmRemoteData").checked = true;
+
+  await app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
+
+  const posts = app.fetchCalls.filter((call) => (
+    ["/api/setup/test", "/api/setup"].includes(call.url) && call.options.method === "POST"
+  ));
+  assert.equal(posts.length, 2);
+  posts.forEach((call) => {
+    const body = JSON.parse(call.options.body);
+    assert.equal(body.api_key_env, "");
+    assert.equal(body.api_key, "typed-session-secret");
+  });
+  assert.equal(app.elements.get("providerApiKey").value, "");
+}
+
+async function testSlowSettingsSaveCannotBeSubmittedTwice() {
+  const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
+  let releaseProbe;
+  const probe = new Promise((resolve) => { releaseProbe = resolve; });
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: false,
+    editable: true,
+    workspace: "/tmp/project",
+    suggested_check: "npm test",
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url, options = {}) => {
+      if (url === "/api/setup/test" && options.method === "POST") return probe;
+      if (url === "/api/setup" && options.method === "POST") {
+        return response({ configured: true });
+      }
+      return response(okPayloadFor(url, setupPayload));
+    },
+  });
+  app.elements.get("executionChoice").value = "local_model";
+  app.elements.get("providerEndpoint").value = "http://127.0.0.1:8000/v1/chat/completions";
+  app.elements.get("providerModel").value = "local-model";
+  app.elements.get("verificationCommand").value = "npm test";
+  app.elements.get("saveSetupButton").textContent = "Save and test settings";
+
+  const first = app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
+  const second = app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
+  await tick();
+  assert.equal(app.fetchCalls.filter((call) => call.url === "/api/setup/test").length, 1);
+  assert.equal(app.elements.get("saveSetupButton").disabled, true);
+  assert.equal(app.elements.get("saveSetupButton")["aria-busy"], "true");
+
+  releaseProbe(response({ reachable: true, structured_actions: true, verified: true }));
+  await Promise.all([first, second]);
+  assert.equal(app.fetchCalls.filter((call) => (
+    call.url === "/api/setup" && call.options.method === "POST"
+  )).length, 1);
+  assert.equal(app.elements.get("saveSetupButton").disabled, false);
+  assert.equal(app.elements.get("saveSetupButton")["aria-busy"], undefined);
+  assert.equal(app.elements.get("saveSetupButton").textContent, "Save and test settings");
+}
+
+async function testReenteredSessionKeyResumesActiveTaskWithoutRewritingSetup() {
+  const response = (payload) => ({ status: 200, ok: true, json: async () => payload });
+  const taskPayload = {
+    id: "orphaned-task",
+    objective: "Finish the interrupted task",
+    status: "working",
+    status_label: "Working",
+    result_category: "in_progress",
+    summary: "Waiting for the session key.",
+    current: { cycle: 2, checkpoint: "Recovering", current_subgoal: "Resume safely" },
+  };
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: true,
+    workspace: "/tmp/project",
+    worker: {
+      type: "model_agent",
+      label: "Local model",
+      model: "local-model",
+      credential_source: "session",
+    },
+    credential: { source: "session", configured: false },
+    provider: {
+      endpoint: "http://127.0.0.1:8000/v1/chat/completions",
+      model: "local-model",
+      api_key_env: "",
+      data_location: "local",
+    },
+    verification_command: "npm test",
+  };
+  const healthPayload = {
+    ok: false,
+    local_goal_available: true,
+    readiness: { state: "credential_required", can_start: false },
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    taskPayload,
+    healthPayload,
+    fetchOverride: async (url, options = {}) => {
+      if (url === "/api/setup/test" && options.method === "POST") {
+        return response({ reachable: true, structured_actions: true, verified: true });
+      }
+      if (url === "/api/setup/credential" && options.method === "POST") {
+        return response({ ok: true, credential: { source: "session", configured: true } });
+      }
+      if (url === "/api/setup" && options.method === "POST") {
+        throw new Error("Active-task recovery must not rewrite setup.");
+      }
+      return response(okPayloadFor(url, setupPayload, taskPayload, healthPayload));
+    },
+  });
+  app.elements.get("providerApiKey").value = "reentered-session-secret";
+
+  await app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
+
+  const writes = app.fetchCalls.filter((call) => call.options.method === "POST");
+  assert.deepEqual(writes.map((call) => call.url), [
+    "/api/setup/test",
+    "/api/setup/credential",
+  ]);
+  assert.equal(app.elements.get("tasksView").hidden, false);
+  assert.equal(app.elements.get("tasksView").focusCount > 0, true);
+  assert.equal(app.elements.get("providerApiKey").value, "");
+}
+
+async function testDetectedLocalAiListsEveryModelWithoutOpeningManualConnection() {
+  const app = await runApp({ publicAccess: true });
+  const detection = {
+    status: "found",
+    summary: "Local AI found.",
+    detected: [
+      {
+        template_key: "ollama_local",
+        label: "Ollama",
+        endpoint: "http://127.0.0.1:11434/v1/chat/completions",
+        model: "coder-small",
+        models: ["coder-small", "coder-large"],
+      },
+    ],
+  };
+  vm.runInContext(`state.localModelDetection = ${JSON.stringify(detection)}`, app.context);
+  app.context.renderLocalModelDetection(detection);
+
+  const choices = app.elements.get("detectedModelChoice");
+  assert.deepEqual(choices.children.map((option) => option.textContent), [
+    "Ollama · coder-small",
+    "Ollama · coder-large",
+  ]);
+  choices.value = "0:1";
+  app.context.useDetectedLocalModel();
+  assert.equal(app.elements.get("providerEndpoint").value, detection.detected[0].endpoint);
+  assert.equal(app.elements.get("providerModel").value, "coder-large");
+  assert.equal(app.elements.get("manualConnectionDetails").open, false);
+}
+
+async function testSavingModelSettingsTestsStructuredActionsBeforeWritingConfig() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: false,
+    editable: true,
+    workspace: "/tmp/project",
+    suggested_check: "npm test",
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url, options) => ({
+      status: 200,
+      ok: true,
+      json: async () => {
+        if (url === "/api/setup/test" && options.method === "POST") {
+          return { reachable: true, structured_actions: true, verified: true };
+        }
+        if (url === "/api/setup" && options.method === "POST") {
+          return { configured: true };
+        }
+        return okPayloadFor(url, setupPayload);
+      },
+    }),
+  });
+  app.elements.get("executionChoice").value = "local_model";
+  app.elements.get("providerEndpoint").value = "http://127.0.0.1:8000/v1/chat/completions";
+  app.elements.get("providerModel").value = "local-coder";
+  app.elements.get("verificationCommand").value = "npm test";
+
+  await app.elements.get("setupForm").listeners.submit({ preventDefault() {} });
+
+  const writes = app.fetchCalls.filter((call) => (
+    ["/api/setup/test", "/api/setup"].includes(call.url) && call.options.method === "POST"
+  ));
+  assert.deepEqual(writes.map((call) => call.url), ["/api/setup/test", "/api/setup"]);
+  assert.equal(app.elements.get("connectionResult").textContent, "AI connection verified.");
 }
 
 async function testLocalAndCloudProviderChoicesStaySeparate() {
@@ -693,10 +1013,10 @@ async function testBoundedExperimentExplainsAndRequiresExplicitScope() {
   const start = app.elements.get("startButton");
   objective.value = "Try a reversible wording change";
   objective.listeners.input();
-  app.elements.get("modes").children[3].listeners.click();
+  app.elements.get("advancedModes").children[0].listeners.click();
 
   assert.equal(start.disabled, true);
-  assert.match(app.elements.get("startHelp").textContent, /allowed file or folder/i);
+  assert.match(app.elements.get("startHelp").textContent, /select at least one file or folder/i);
 
   safeAreas.value = "README.md";
   safeAreas.listeners.input();
@@ -721,36 +1041,50 @@ async function testLegacyHumanCanChooseEveryModeWithoutWritingACommand() {
   const modes = app.elements.get("modes");
 
   assert.equal(modeSection.hidden, false);
-  assert.equal(modes.children.length, 4);
+  assert.equal(modes.children.length, 3);
   assert.equal(checks.required, false);
   assert.equal(app.elements.get("verificationDetails").open, false);
   assert.equal(
     app.elements.get("verificationSummary").textContent,
-    "Optional: add your own success check",
+    "Checks · Automatic",
   );
   objective.value = "Please audit my system and give me a simple report.";
   objective.listeners.input();
   assert.equal(start.disabled, false);
   assert.match(app.elements.get("startHelp").textContent, /assistant will choose checks/i);
 
-  for (const card of [...modes.children]) {
+  for (const card of modes.children) {
     objective.value = "Please audit my system and give me a simple report.";
     objective.listeners.input();
     card.listeners.click();
     await app.context.startWork();
   }
+  objective.value = "Please audit my system and give me a simple report.";
+  objective.listeners.input();
+  app.elements.get("safeAreas").value = "reports";
+  app.elements.get("safeAreas").listeners.input();
+  const routeSelect = app.elements.get("routeSelect");
+  routeSelect.value = "mode3a";
+  routeSelect.listeners.change();
+  await app.context.startWork();
   const submissions = app.fetchCalls.filter((call) => call.url === "/api/tasks");
   assert.deepEqual(
-    submissions.map((call) => JSON.parse(call.options.body).mode),
-    ["local", "guided", "cloud", "experimental"],
+    submissions.map((call) => JSON.parse(call.options.body).route),
+    ["mode1", "mode1", "mode1", "mode3a"],
   );
+  assert.deepEqual(
+    submissions.map((call) => JSON.parse(call.options.body).effort),
+    ["quick", "standard", "thorough", "standard"],
+  );
+  assert.equal(submissions.every((call) => !("mode" in JSON.parse(call.options.body))), true);
   assert.equal(submissions.every((call) => JSON.parse(call.options.body).checks.length === 0), true);
   assert.equal(objective.value, "");
-  assert.equal(app.elements.get("modeSelect").value, "guided");
+  assert.equal(app.elements.get("modeSelect").value, "standard");
+  assert.equal(app.elements.get("routeSelect").value, "mode1");
   assert.equal(app.sessionStorage.getItem("agentic-harness-gui-form"), null);
 }
 
-async function testGoalStartersAndCompactModeSelectorKeepPlainLanguageDraftState() {
+async function testPredictableViewsConciseModesAndAccessSummaryKeepDraftState() {
   const app = await runApp({
     publicAccess: true,
     setupPayload: {
@@ -762,29 +1096,290 @@ async function testGoalStartersAndCompactModeSelectorKeepPlainLanguageDraftState
     },
   });
 
-  const fixStarter = app.elements.get("starterFix");
-  fixStarter.listeners.click();
-  assert.equal(fixStarter["aria-pressed"], "true");
-  assert.match(app.elements.get("objective").placeholder, /Save button does nothing on iPhone/);
-  assert.match(app.elements.get("objectiveHint").textContent, /what should happen instead/i);
-
   const modeSelect = app.elements.get("modeSelect");
-  assert.equal(modeSelect.children.length, 4);
-  assert.equal(modeSelect.value, "guided");
-  modeSelect.value = "cloud";
-  modeSelect.listeners.change();
-  assert.equal(modeSelect.value, "cloud");
+  assert.equal(modeSelect.children.length, 3);
+  assert.equal(modeSelect.value, "standard");
+  assert.deepEqual(modeSelect.children.map((option) => option.textContent), [
+    "Quick", "Standard", "Thorough",
+  ]);
+  const routeSelect = app.elements.get("routeSelect");
+  routeSelect.value = "mode3a";
+  routeSelect.listeners.change();
+  assert.equal(routeSelect.value, "mode3a");
+  const safeAreas = app.elements.get("safeAreas");
+  safeAreas.value = "src\ndocs";
+  safeAreas.listeners.input();
+  assert.equal(app.elements.get("accessSummary").textContent, "Access · Limited to 2 areas");
+  app.elements.get("historyTab").listeners.click();
+  assert.equal(app.elements.get("historyView").hidden, false);
+  assert.equal(app.elements.get("homeView").hidden, true);
+  app.elements.get("historyTab").listeners.keydown({
+    key: "ArrowRight",
+    currentTarget: app.elements.get("historyTab"),
+    preventDefault() {},
+  });
+  assert.equal(app.elements.get("settingsView").hidden, false);
+  assert.equal(app.elements.get("setupButton")["aria-selected"], "true");
   assert.deepEqual(
     JSON.parse(app.sessionStorage.getItem("agentic-harness-gui-form")),
     {
       objective: "",
-      safeAreas: "",
+      safeAreas: "src\ndocs",
       checks: "",
-      mode: "cloud",
-      goalKind: "fix",
-      draftVersion: 2,
+      mode: "mode3a",
+      route: "mode3a",
+      effort: "standard",
+      executionProfile: "automatic",
+      draftVersion: 4,
     },
   );
+}
+
+async function testExpectationReflectsSetupReadinessInsteadOfClaimingReady() {
+  const nextAction = "Open Settings and connect an assistant before starting real work.";
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: false,
+      editable: true,
+      workspace: "/tmp/new-project",
+      suggested_check: "npm test",
+    },
+    healthPayload: {
+      ok: true,
+      readiness: {
+        state: "setup_required",
+        can_start: false,
+        summary: "Choose an AI connection.",
+        next_action: nextAction,
+      },
+    },
+  });
+
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Setup needed");
+  assert.equal(app.elements.get("expectationSummary").textContent, nextAction);
+  assert.equal(app.elements.get("expectationLocation").textContent, "Connect AI in Settings");
+  assert.equal(app.elements.get("expectationModel").textContent, "Connect AI in Settings");
+  assert.equal(app.elements.get("expectationMutation").textContent, "Available after setup");
+  assert.equal(app.elements.get("startButton").disabled, true);
+}
+
+async function testExpectationUsesPlainDynamicFactsAndCardSelectionKeepsFocus() {
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: true,
+      editable: true,
+      workspace: "/tmp/project",
+      worker: { type: "coding_agent", agent: "codex", label: "Codex" },
+      verification_command: "npm test",
+    },
+  });
+
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Ready");
+  assert.equal(
+    app.elements.get("expectationSummary").textContent,
+    "Standard uses your installed coding app and independent verification.",
+  );
+  assert.equal(
+    app.elements.get("expectationLocation").textContent,
+    "Through an installed coding app",
+  );
+  assert.equal(app.elements.get("expectationModel").textContent, "Coding app · Codex");
+  assert.equal(app.elements.get("expectationMutation").textContent, "Can change project files");
+
+  const oldQuickCard = app.elements.get("modes").children[0];
+  oldQuickCard.listeners.click();
+  const newQuickCard = app.elements.get("modes").children[0];
+  assert.notEqual(newQuickCard, oldQuickCard);
+  assert.equal(newQuickCard.dataset.choiceKey, "quick");
+  assert.equal(newQuickCard.focusCount, 1);
+}
+
+async function testManagedExpectationStaysPlainAndMobileGetsUnavailableReasons() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/managed-project",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  const app = await runApp({ publicAccess: true, setupPayload });
+
+  assert.equal(
+    app.elements.get("expectationSummary").textContent,
+    "Local build will use standard effort. Work will use the configured local execution lane.",
+  );
+  assert.doesNotMatch(app.elements.get("expectationSummary").textContent, /OpenCode|Node1|Turnstone/);
+
+  const reasons = app.elements.get("routeSection").children
+    .find((child) => child.id === "routeUnavailableReasons");
+  assert.equal(reasons.hidden, false);
+  assert.deepEqual(reasons.children.map((row) => row.textContent), [
+    "Local build + Codex review: supervision policy only",
+    "Read-only audit: audit dispatch unavailable",
+  ]);
+
+  const oldRouteCard = app.elements.get("routes").children[0];
+  oldRouteCard.listeners.click();
+  const newRouteCard = app.elements.get("routes").children[0];
+  assert.notEqual(newRouteCard, oldRouteCard);
+  assert.equal(newRouteCard.dataset.choiceKey, "mode1");
+  assert.equal(newRouteCard.focusCount, 1);
+}
+
+async function testResetNeverSilentlyAppliesACloudDefaultRoute() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/managed-project",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  const app = await runApp({ publicAccess: true, setupPayload });
+  app.context.configureModesPayload(managedModesFor(setupPayload, { defaultRoute: "mode3a" }));
+  const routeSelect = app.elements.get("routeSelect");
+  routeSelect.value = "mode3a";
+  routeSelect.listeners.change();
+  assert.equal(app.context.formSnapshot().route, "mode3a");
+
+  app.context.resetNewGoalForm();
+
+  assert.equal(app.context.formSnapshot().route, "");
+  assert.match(app.elements.get("expectationSummary").textContent, /choose an available route/i);
+}
+
+async function testManualRefreshRecoversAModeLoadFailureAndReconnectsStatus() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/managed-project",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  let modeCalls = 0;
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url) => {
+      if (url === "/api/modes") {
+        modeCalls += 1;
+        return modeCalls === 1
+          ? jsonResponse({ error: "Execution routes are temporarily unavailable." }, 503)
+          : jsonResponse(managedModesFor(setupPayload));
+      }
+      return jsonResponse(okPayloadFor(url, setupPayload));
+    },
+  });
+
+  assert.equal(modeCalls, 1);
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Needs refresh");
+  assert.match(app.elements.get("expectationSummary").textContent, /choose refresh/i);
+  assert.deepEqual(app.websocketUrls, []);
+
+  await app.elements.get("checkButton").listeners.click();
+
+  assert.equal(modeCalls, 2);
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Ready");
+  assert.deepEqual(app.websocketUrls, ["ws://127.0.0.1:41111/api/tasks/stream"]);
+}
+
+async function testManualRefreshForcesCurrentRouteAvailabilityWhileBackgroundChecksThrottle() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/managed-project",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  let modeCalls = 0;
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url) => {
+      if (url === "/api/modes") {
+        modeCalls += 1;
+        return jsonResponse(managedModesFor(setupPayload, { localAvailable: modeCalls > 1 }));
+      }
+      return jsonResponse(okPayloadFor(url, setupPayload));
+    },
+  });
+  const objective = app.elements.get("objective");
+  objective.value = "Fix the local task";
+  objective.listeners.input();
+  assert.equal(app.elements.get("startButton").disabled, true);
+
+  await app.context.refreshModes();
+  assert.equal(modeCalls, 1);
+  await app.elements.get("checkButton").listeners.click();
+
+  assert.equal(modeCalls, 2);
+  assert.equal(app.elements.get("startButton").disabled, false);
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Ready");
+}
+
+async function testReadinessAndTaskTransitionsRefreshManagedRouteFacts() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/managed-project",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  let modeCalls = 0;
+  const activeHealth = {
+    ok: true,
+    readiness: {
+      state: "active",
+      can_start: false,
+      summary: "Another task is active.",
+    },
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    healthPayload: activeHealth,
+    fetchOverride: async (url) => {
+      if (url === "/api/modes") {
+        modeCalls += 1;
+        return jsonResponse(managedModesFor(setupPayload, { localAvailable: modeCalls > 1 }));
+      }
+      return jsonResponse(okPayloadFor(url, setupPayload, null, activeHealth));
+    },
+  });
+  assert.equal(modeCalls, 1);
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Unavailable");
+
+  app.context.renderHealth({
+    readiness: { state: "ready", can_start: true, summary: "Ready for another task." },
+  });
+  await tick();
+  await tick();
+  assert.equal(modeCalls, 2);
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Ready");
+
+  app.context.renderTask({
+    id: "managed-active",
+    objective: "Current managed task",
+    status: "working",
+    result_category: "in_progress",
+    summary: "Working",
+    current: { cycle: 1, checkpoint: "Work", current_subgoal: "Implement" },
+  });
+  app.context.renderTask({
+    id: "managed-active",
+    objective: "Current managed task",
+    status: "done",
+    result_category: "verified_done",
+    summary: "Done",
+    final_result: { label: "Verified done", reason: "Checks passed." },
+    current: { cycle: 1, checkpoint: "Done", current_subgoal: "Complete" },
+  });
+  await tick();
+  await tick();
+  assert.equal(modeCalls, 3);
 }
 
 async function testCompletedGoalClearsOnlyItsMatchingStaleDraft() {
@@ -796,7 +1391,7 @@ async function testCompletedGoalClearsOnlyItsMatchingStaleDraft() {
       safeAreas: "reports",
       checks: "",
       mode: "experimental",
-      goalKind: "audit",
+      draftVersion: 3,
     },
     setupPayload: {
       contract: "agentic_harness.gui_setup.v1",
@@ -820,8 +1415,8 @@ async function testCompletedGoalClearsOnlyItsMatchingStaleDraft() {
 
   assert.equal(app.elements.get("objective").value, "");
   assert.equal(app.elements.get("safeAreas").value, "");
-  assert.equal(app.elements.get("modeSelect").value, "guided");
-  assert.equal(app.elements.get("starterAudit")["aria-pressed"], "false");
+  assert.equal(app.elements.get("modeSelect").value, "standard");
+  assert.equal(app.elements.get("routeSelect").value, "mode1");
   assert.equal(app.sessionStorage.getItem("agentic-harness-gui-form"), null);
 }
 
@@ -834,8 +1429,7 @@ async function testCompletedGoalPreservesASecondGenerationNewDraft() {
       safeAreas: "docs",
       checks: "",
       mode: "guided",
-      goalKind: "create",
-      draftVersion: 2,
+      draftVersion: 3,
     },
     setupPayload: {
       contract: "agentic_harness.gui_setup.v1",
@@ -854,7 +1448,7 @@ async function testCompletedGoalPreservesASecondGenerationNewDraft() {
 
   assert.equal(app.elements.get("objective").value, nextObjective);
   assert.equal(app.elements.get("safeAreas").value, "docs");
-  assert.equal(app.elements.get("starterCreate")["aria-pressed"], "true");
+  assert.equal(app.elements.get("accessSummary").textContent, "Access · Limited to 1 area");
 }
 
 async function testPausedBackgroundAssistantIsNotCalledAnActiveTask() {
@@ -956,7 +1550,7 @@ async function testTerminalReceiptOverridesRawDoneAndRendersTrustedEvidence() {
   assert.equal(app.elements.get("finalRetries").textContent, "1");
   assert.equal(app.elements.get("attemptsValue").textContent, "2");
   assert.equal(app.elements.get("checkpoint").textContent, "claimed done");
-  assert.equal(app.elements.get("workApproachValue").textContent, "Plan first");
+  assert.equal(app.elements.get("workApproachValue").textContent, "Configured effort");
   assert.equal(app.elements.get("workDetailGrid").hidden, true);
   assert.equal(app.elements.get("activitySection").hidden, true);
   assert.equal(app.elements.get("changedFilesEvidence").hidden, true);
@@ -999,6 +1593,12 @@ async function testRawDoneWithoutTrustedReceiptRemainsUnverified() {
     app.elements.get("historyList").children[0].children[0].textContent,
     "Checking evidence: Legacy completion claim",
   );
+  app.elements.get("historyList").children[0].children[0].listeners.click();
+  assert.equal(app.elements.get("taskContext").hidden, false);
+  assert.equal(app.elements.get("tasksView").focusCount > 0, true);
+  assert.equal(app.elements.get("summary").textContent, "Completion is not verified yet.");
+  app.elements.get("returnToCurrentButton").listeners.click();
+  assert.equal(app.elements.get("taskContext").hidden, true);
 }
 
 async function testManagedWorkingTaskShowsRealPassAndIndeterminateProgress() {
@@ -1225,7 +1825,7 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
   assert.equal(app.elements.get("statusLabel").textContent, "Working");
   assert.equal(
     app.elements.get("summary").textContent,
-    "Your goal was accepted and is running. This page reconnected to the current task.",
+    "Your task was accepted and is running. This page reconnected to the current task.",
   );
   assert.equal(app.elements.get("attemptsValue").textContent, "1");
   assert.equal(objective.value, "");
@@ -1238,14 +1838,26 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
   await testLegacySetupContractCompletesBootstrapAndAttachesStatusStream();
   await testFreshSetupOpensOnceAndSelectsTheRecommendedDetectedAgent();
   await testConfiguredVerificationReplacesOnlyThePreviousSuggestion();
-  await testCodingAgentConnectionTestReportsLiveValidation();
+  await testCodingAgentSaveAndTestReportsLiveValidation();
   await testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDraft();
   await testPortableUserChoosesProviderIndependentStrategy();
   await testProviderTemplatePrefillsEditableValues();
+  await testTypedSessionKeyOverridesTemplateEnvironmentVariable();
+  await testSlowSettingsSaveCannotBeSubmittedTwice();
+  await testReenteredSessionKeyResumesActiveTaskWithoutRewritingSetup();
+  await testDetectedLocalAiListsEveryModelWithoutOpeningManualConnection();
+  await testSavingModelSettingsTestsStructuredActionsBeforeWritingConfig();
   await testLocalAndCloudProviderChoicesStaySeparate();
   await testBoundedExperimentExplainsAndRequiresExplicitScope();
   await testLegacyHumanCanChooseEveryModeWithoutWritingACommand();
-  await testGoalStartersAndCompactModeSelectorKeepPlainLanguageDraftState();
+  await testPredictableViewsConciseModesAndAccessSummaryKeepDraftState();
+  await testExpectationReflectsSetupReadinessInsteadOfClaimingReady();
+  await testExpectationUsesPlainDynamicFactsAndCardSelectionKeepsFocus();
+  await testManagedExpectationStaysPlainAndMobileGetsUnavailableReasons();
+  await testResetNeverSilentlyAppliesACloudDefaultRoute();
+  await testManualRefreshRecoversAModeLoadFailureAndReconnectsStatus();
+  await testManualRefreshForcesCurrentRouteAvailabilityWhileBackgroundChecksThrottle();
+  await testReadinessAndTaskTransitionsRefreshManagedRouteFacts();
   await testCompletedGoalClearsOnlyItsMatchingStaleDraft();
   await testCompletedGoalPreservesASecondGenerationNewDraft();
   await testPausedBackgroundAssistantIsNotCalledAnActiveTask();

@@ -790,6 +790,12 @@ def _validated_outcome(
     }
 
 
+def validate_report_outcome(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Validate the report_outcome arguments accepted by the model worker."""
+
+    return _validated_outcome(arguments)
+
+
 def _event(
     sequence: int,
     tool: str,

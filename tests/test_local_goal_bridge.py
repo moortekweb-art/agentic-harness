@@ -100,8 +100,7 @@ def test_build_mode3a_goal_hides_worker_details_behind_plain_objective() -> None
 
     assert "make Jarvis voice startup more reliable" in goal
     assert "configured external orchestrator" in goal
-    assert "worker names come from the external backend configuration" in goal
-    assert "glm" not in goal.lower()
+    assert "selection is pinned by the managed Mode 3A contract" in goal
     assert "- services/voice-assistant" in goal
     assert "- python3 -m pytest tests/test_voice.py" in goal
     assert "Do not expose or modify secrets" in goal
@@ -122,7 +121,21 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
             return subprocess.CompletedProcess(
                 command,
                 0,
-                '{"external_candidate_contracts":["agentic_harness.external_candidate.v1"]}',
+                (
+                    '{"external_candidate_contracts":["agentic_harness.external_candidate.v1"],'
+                    '"lanes":{"cloud_executor":{"installed":true,"available_now":true}}}'
+                ),
+                "",
+            )
+        if command[-2:] == ["adapter-matrix", "--json"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                (
+                    '{"matrix":[{"worker":"opencode-glm-build","enabled":true,'
+                    '"binary_resolved":true,"mutation_default":"implementation",'
+                    '"blockers":[]}]}'
+                ),
                 "",
             )
         return subprocess.CompletedProcess(command, 0, "queued_id=abc123\n", "")
@@ -142,11 +155,11 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
         "--harness-contract",
         "agentic_harness.external_candidate.v1",
         "--planner",
-        "gpt-5.5",
+        "glm-5.2",
         "--executor",
         "opencode",
         "--executor-worker",
-        "opencode-kimi-build",
+        "opencode-glm-build",
     ]
     assert "--goal" in command
     assert "fix one thing" in command[-1]
@@ -182,15 +195,21 @@ def test_human_modes_use_routes_advertised_by_external_backend(tmp_path) -> None
     bridge.start_human_goal(mode_key="local", objective="one")
     bridge.start_human_goal(mode_key="guided", objective="two")
     bridge.start_human_goal(mode_key="cloud", objective="three")
-    bridge.start_human_goal(mode_key="experimental", objective="four")
+    retired = bridge.start_human_goal(mode_key="experimental", objective="four")
 
-    starts = [call for call in calls if "capabilities" not in call]
+    starts = [
+        call
+        for call in calls
+        if len(call) > 1 and call[1] in {"quick-start", "premium-start", "enqueue"}
+    ]
     assert starts[0][starts[0].index("--executor") + 1] == "mini-swe"
     assert starts[1][starts[1].index("--planner") + 1] == "thinkmax"
     assert starts[1][starts[1].index("--executor") + 1] == "mini-swe"
     assert starts[2][starts[2].index("--executor-worker") + 1] == "kimi"
-    assert starts[3][starts[3].index("--executor-worker") + 1] == "codex"
-    assert starts[3][starts[3].index("--harness-contract") + 1] == (
+    assert len(starts) == 3
+    assert retired.returncode == 2
+    assert "retired" in retired.stderr
+    assert starts[2][starts[2].index("--harness-contract") + 1] == (
         "agentic_harness.external_candidate.v1"
     )
 
@@ -285,7 +304,10 @@ def test_local_goal_bridge_refuses_unadvertised_candidate_contract(tmp_path) -> 
 
     assert result.returncode == 2
     assert "does not advertise" in result.stderr
-    assert calls == [[str(tmp_path / "local-goal"), "capabilities", "--json"]]
+    assert calls == [
+        [str(tmp_path / "local-goal"), "capabilities", "--json"],
+        [str(tmp_path / "local-goal"), "harness-modes", "--json"],
+    ]
 
 
 def test_friendly_queue_summary_prefers_ticket_id() -> None:

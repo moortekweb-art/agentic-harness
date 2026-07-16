@@ -6,6 +6,20 @@ use a clean branch or disposable clone and review every diff.
 
 ## Ten-minute path
 
+Browser-first novice path:
+
+```bash
+pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git
+cd /path/to/your/project
+agentic-harness gui
+```
+
+Without terminal help, open Settings, connect an installed coding app or
+detected local AI, return Home, describe one small task, and reach a verified
+result. Record whether you had to type a path, command, endpoint, or model ID.
+
+Terminal comparison path:
+
 ```bash
 pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git
 cd /path/to/your/project

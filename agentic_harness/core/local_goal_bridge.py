@@ -19,6 +19,15 @@ import time
 DOC_ROOT_ENV = "AGENTIC_HARNESS_DOC_ROOT"
 LOCAL_GOAL_ENV = "AGENTIC_HARNESS_LOCAL_GOAL"
 EXTERNAL_CANDIDATE_CONTRACT = "agentic_harness.external_candidate.v1"
+TURNSTONE_MODE3A_CONTRACT = "agentic_harness_turnstone_mode3.v1"
+MODE3A_PLANNER = "glm-5.2"
+MODE3A_WORKER = "opencode-glm-build"
+MODE3A_BACKEND_ID = "mode3a_cloud_long_horizon_goal"
+MODE4_WORKER = "glm52-direct"
+MODE4_BACKEND_ID = "glm52_fully_local_long_horizon_executor"
+MODE4B_WORKER = "glm52-direct-implementation-canary"
+MODE4B_BACKEND_ID = "glm52_direct_implementation_canary"
+EXECUTION_PROFILES = frozenset({"automatic", "qwen-primary", "ornith-text"})
 
 
 def resolve_doc_root(doc_root: str | Path | None = None) -> Path:
@@ -85,6 +94,16 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+def _started_run_dir(result: CommandResult) -> str:
+    """Return the run directory printed by a successful local-goal start."""
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "run_dir" and value.strip():
+            return value.strip()
+    return ""
 
 
 @dataclass
@@ -92,7 +111,10 @@ class LocalGoalBridge:
     doc_root: str | Path | None = None
     local_goal: str | Path | None = None
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
-    timeout_seconds: int = 120
+    # Model-profile activation can include a guarded same-GPU service window.
+    # Match the deployed bridge timeout so that a healthy model swap is not
+    # reported as a failed task start after two minutes.
+    timeout_seconds: int = 360
     status_cache_seconds: float = 1.5
     _status_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _status_cache: CommandResult | None = field(default=None, init=False, repr=False)
@@ -102,13 +124,23 @@ class LocalGoalBridge:
     _monitor_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _monitor_cache: CommandResult | None = field(default=None, init=False, repr=False)
     _monitor_cache_at: float = field(default=0.0, init=False, repr=False)
+    # A model profile is selected before the goal starts and (for Ornith)
+    # attached afterwards.  The profile manager serializes each individual
+    # command, but it cannot make that multi-command sequence atomic.  Keep the
+    # entire managed start transaction together so concurrent GUI requests
+    # cannot swap the model between another request's verification and start.
+    _start_lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         resolved_doc_root = resolve_doc_root(self.doc_root)
         self.doc_root = resolved_doc_root
         if self.local_goal is None:
             configured = os.environ.get(LOCAL_GOAL_ENV, "").strip()
-            self.local_goal = Path(configured).expanduser() if configured else resolved_doc_root / "scripts/local-goal"
+            self.local_goal = (
+                Path(configured).expanduser()
+                if configured
+                else resolved_doc_root / "scripts/local-goal"
+            )
         else:
             self.local_goal = Path(self.local_goal).expanduser()
 
@@ -155,32 +187,96 @@ class LocalGoalBridge:
         options: Mode3AGoalOptions,
         *,
         capabilities: CommandResult | None = None,
+        adapter_matrix: CommandResult | None = None,
+        harness_modes: CommandResult | None = None,
     ) -> CommandResult:
-        capabilities = capabilities or self.run(["capabilities", "--json"])
-        if not _supports_candidate_contract(capabilities, EXTERNAL_CANDIDATE_CONTRACT):
+        capabilities = capabilities or self.capabilities()
+        harness_modes = harness_modes or self.harness_modes()
+        legacy_contract = _supports_candidate_contract(capabilities, EXTERNAL_CANDIDATE_CONTRACT)
+        managed_registry = _managed_mode_registry_present(harness_modes)
+        if managed_registry and not _supports_managed_mode(harness_modes, MODE3A_BACKEND_ID):
+            return _blocked_command_result(
+                harness_modes,
+                "The managed mode registry does not advertise Mode 3A as currently "
+                "dispatchable.",
+            )
+        if _is_turnstone_executable(self):
+            if not legacy_contract:
+                return _blocked_command_result(
+                    capabilities,
+                    "The Turnstone wrapper does not advertise the required external "
+                    f"candidate contract: {EXTERNAL_CANDIDATE_CONTRACT}",
+                )
+            if not _cloud_lane_available(capabilities):
+                return _blocked_command_result(
+                    capabilities,
+                    "The Turnstone Mode 3A cloud coordinator lane is not currently available.",
+                )
+            adapter_status = self.mode3a_adapter_status()
+            if not _turnstone_mode3a_ready(adapter_status):
+                return _blocked_command_result(
+                    adapter_status,
+                    "Turnstone Mode 3A is active, blocked, or its managed adapter contract "
+                    "could not be verified.",
+                )
+            return self.enqueue_cloud_goal(
+                build_mode3a_goal(options),
+                worker="local-builder",
+                planner="glm-coordinator",
+                executor="turnstone",
+                contract=EXTERNAL_CANDIDATE_CONTRACT,
+            )
+        if not managed_registry and not legacy_contract:
             return CommandResult(
-                args=capabilities.args,
+                args=harness_modes.args,
                 returncode=2,
-                stdout=capabilities.stdout,
+                stdout=harness_modes.stdout,
                 stderr=(
-                    "The external backend does not advertise the required candidate "
-                    f"contract: {EXTERNAL_CANDIDATE_CONTRACT}"
+                    "The backend does not advertise canonical Mode 3A or the legacy "
+                    f"candidate contract: {EXTERNAL_CANDIDATE_CONTRACT}"
                 ),
             )
-        routing = _routing_defaults(capabilities)
+        if not _cloud_lane_available(capabilities):
+            return _blocked_command_result(
+                capabilities,
+                "The canonical Mode 3A cloud lane is not currently available.",
+            )
+        adapter_matrix = adapter_matrix or self.adapter_matrix()
+        if not _worker_dispatchable(adapter_matrix, MODE3A_WORKER, mutation="implementation"):
+            return _blocked_command_result(
+                adapter_matrix,
+                f"The canonical Mode 3A worker is not dispatchable: {MODE3A_WORKER}",
+            )
         goal = build_mode3a_goal(options)
         return self.enqueue_cloud_goal(
             goal,
-            worker=_external_setting(
-                "AGENTIC_HARNESS_EXTERNAL_LONG_WORKER",
-                routing["long_worker"],
-            ),
-            planner=_external_setting(
-                "AGENTIC_HARNESS_EXTERNAL_PLANNER",
-                routing["planner"],
-            ),
-            executor=routing["executor"],
-            contract=EXTERNAL_CANDIDATE_CONTRACT,
+            worker=MODE3A_WORKER,
+            planner=MODE3A_PLANNER,
+            executor="opencode",
+            contract=EXTERNAL_CANDIDATE_CONTRACT if legacy_contract else "",
+        )
+
+    def enqueue_mode4_audit(
+        self,
+        options: Mode3AGoalOptions,
+        *,
+        capabilities: CommandResult | None = None,
+        adapter_matrix: CommandResult | None = None,
+        harness_modes: CommandResult | None = None,
+    ) -> CommandResult:
+        """Fail closed until the wrapper has a distinct audit dispatch contract.
+
+        The deployed Turnstone wrapper classifies the external-candidate
+        contract as Mode 3A before inspecting the requested worker. Sending the
+        Mode 4 worker through that path would therefore violate its audit-only
+        expectation and launch the wrong coordinator.
+        """
+        del options, capabilities, adapter_matrix
+        harness_modes = harness_modes or self.harness_modes()
+        return _blocked_command_result(
+            harness_modes,
+            "Mode 4 audit dispatch is disabled because the managed wrapper does not yet "
+            "advertise a distinct audit-only routing contract.",
         )
 
     def start_human_goal(
@@ -190,19 +286,178 @@ class LocalGoalBridge:
         objective: str,
         safe_areas: tuple[str, ...] = (),
         checks: tuple[str, ...] = (),
+        execution_profile: str = "automatic",
     ) -> CommandResult:
-        mode = human_mode_by_key(mode_key)
-        capabilities = self.run(["capabilities", "--json"])
+        with self._start_lock:
+            return self._start_human_goal_locked(
+                mode_key=mode_key,
+                objective=objective,
+                safe_areas=safe_areas,
+                checks=checks,
+                execution_profile=execution_profile,
+            )
+
+    def _start_human_goal_locked(
+        self,
+        *,
+        mode_key: str,
+        objective: str,
+        safe_areas: tuple[str, ...] = (),
+        checks: tuple[str, ...] = (),
+        execution_profile: str = "automatic",
+    ) -> CommandResult:
+        route = managed_route_key(mode_key)
+        if execution_profile not in EXECUTION_PROFILES:
+            raise ValueError(f"unsupported execution profile {execution_profile}")
+        if route != "mode1" and execution_profile not in {
+            "automatic",
+            "qwen-primary",
+        }:
+            raise ValueError("ornith-text is available only for local Mode 1 goals")
+        if route != "mode1" and execution_profile == "qwen-primary":
+            raise ValueError("local model profiles are available only for Mode 1 goals")
+        if route == "mode2":
+            return _blocked_command_result(
+                self.harness_modes(),
+                "Mode 2 supervises an already-running local goal; this backend does not "
+                "advertise an independent safe Mode 2 start operation.",
+            )
+        if route == "mode4":
+            return _blocked_command_result(
+                self.harness_modes(),
+                "Mode 4 audit dispatch is disabled because the managed wrapper does not yet "
+                "advertise a distinct audit-only routing contract.",
+            )
+        if route == "mode4b":
+            return _blocked_command_result(
+                self.harness_modes(),
+                "Mode 4B is a disabled implementation canary and cannot be started from "
+                "the managed GUI.",
+            )
+        if route == "legacy-experimental":
+            return _blocked_command_result(
+                self.harness_modes(),
+                "The legacy experimental route is retired. It cannot prove a distinct "
+                "bounded canary dispatch contract and is disabled.",
+            )
+
+        profile_status: CommandResult | None = None
+        if execution_profile != "automatic":
+            profile_status = self.model_profile_status()
+            if not _supports_model_profiles(profile_status):
+                return _blocked_command_result(
+                    profile_status,
+                    "The requested model profile cannot be verified on this managed backend.",
+                )
+
+        if (
+            execution_profile == "qwen-primary"
+            and _active_model_profile(profile_status) != "qwen-primary"
+        ):
+            restore = self.run(["model-profile-restore", "--json"])
+            if restore.returncode != 0:
+                return _profile_recovery_failure(
+                    restore,
+                    restore,
+                    "Qwen was requested but the active model could not be restored before start.",
+                )
+            profile_status = self.model_profile_status()
+            if _active_model_profile(profile_status) != "qwen-primary":
+                return _blocked_command_result(
+                    profile_status,
+                    "Qwen restoration returned successfully but the healthy primary profile "
+                    "could not be verified.",
+                )
+        elif execution_profile == "ornith-text":
+            if _model_profile_attached(profile_status):
+                return _blocked_command_result(
+                    profile_status or CommandResult((), 2, "", ""),
+                    "The active Ornith model window is already attached to another goal.",
+                )
+            activation = self.run(
+                ["model-profile-activate", "--profile", execution_profile, "--json"]
+            )
+            if activation.returncode != 0:
+                restore = self.run(["model-profile-restore", "--json"])
+                if restore.returncode != 0:
+                    return _profile_recovery_failure(
+                        activation,
+                        restore,
+                        "Ornith activation failed and Qwen restoration also failed.",
+                    )
+                return activation
+            profile_status = self.model_profile_status()
+            if _active_model_profile(profile_status) != "ornith-text":
+                restore = self.run(["model-profile-restore", "--json"])
+                failure = _blocked_command_result(
+                    profile_status,
+                    "Ornith activation returned successfully but a healthy Ornith profile "
+                    "could not be verified.",
+                )
+                if restore.returncode != 0:
+                    return _profile_recovery_failure(
+                        failure,
+                        restore,
+                        "Ornith verification failed and Qwen restoration also failed.",
+                    )
+                return failure
+
+        capabilities = self.capabilities()
         routing = _routing_defaults(capabilities)
-        if mode.key == "local":
+        if route == "mode1":
             result = self.start_local_goal(objective, executor=routing["executor"])
-        elif mode.key == "guided":
+        elif route == "legacy-guided":
             result = self.start_guided_goal(
                 objective,
                 planner=routing["planner"],
                 executor=routing["executor"],
             )
-        elif mode.key == "cloud":
+        elif route == "legacy-cloud":
+            legacy_contract = _supports_candidate_contract(
+                capabilities, EXTERNAL_CANDIDATE_CONTRACT
+            )
+            if not legacy_contract:
+                result = _blocked_command_result(
+                    capabilities,
+                    "The legacy cloud route requires an explicitly advertised external "
+                    f"candidate contract: {EXTERNAL_CANDIDATE_CONTRACT}",
+                )
+            elif _is_turnstone_executable(self):
+                # The wrapper classifies every external-candidate enqueue as
+                # Turnstone Mode 3A. Old client aliases must pass the same
+                # active-run and adapter-contract preflight as the canonical
+                # route instead of dispatching around it.
+                result = self.enqueue_mode3a(
+                    Mode3AGoalOptions(
+                        objective=objective,
+                        allowed_paths=safe_areas,
+                        verification=checks,
+                    ),
+                    capabilities=capabilities,
+                )
+            else:
+                result = self.enqueue_cloud_goal(
+                    build_mode3a_goal(
+                        Mode3AGoalOptions(
+                            objective=objective,
+                            allowed_paths=safe_areas,
+                            verification=checks,
+                        )
+                    ),
+                    worker=_external_setting(
+                        "AGENTIC_HARNESS_EXTERNAL_LONG_WORKER",
+                        routing["long_worker"],
+                    ),
+                    planner=_external_setting(
+                        "AGENTIC_HARNESS_EXTERNAL_PLANNER",
+                        routing["planner"],
+                    ),
+                    executor=routing["executor"],
+                    contract=EXTERNAL_CANDIDATE_CONTRACT if legacy_contract else "",
+                )
+        elif route == "mode3a":
+            adapter_matrix = self.adapter_matrix()
+            harness_modes = self.harness_modes()
             result = self.enqueue_mode3a(
                 Mode3AGoalOptions(
                     objective=objective,
@@ -210,21 +465,85 @@ class LocalGoalBridge:
                     verification=checks,
                 ),
                 capabilities=capabilities,
-            )
-        elif mode.key == "experimental":
-            goal = build_experimental_goal(objective, safe_areas=safe_areas, checks=checks)
-            result = self.enqueue_cloud_goal(
-                goal,
-                worker=_external_setting(
-                    "AGENTIC_HARNESS_EXTERNAL_EXPERIMENTAL_WORKER",
-                    routing["experimental_worker"],
-                ),
-                planner="none",
-                executor=routing["executor"],
-                contract=EXTERNAL_CANDIDATE_CONTRACT,
+                adapter_matrix=adapter_matrix,
+                harness_modes=harness_modes,
             )
         else:
-            raise ValueError(f"unsupported mode {mode.key}")
+            raise ValueError(f"unsupported managed route {route}")
+
+        if result.returncode == 0 and execution_profile == "ornith-text":
+            attachment_args = ["model-profile-attach"]
+            started_run_dir = _started_run_dir(result)
+            if started_run_dir:
+                attachment_args.extend(["--run-dir", started_run_dir])
+            attachment_args.append("--json")
+            attachment = self.run(attachment_args)
+            observed = self.model_profile_status()
+            if _model_profile_attachment_matches(observed, started_run_dir):
+                self.invalidate_status_caches()
+                if attachment.returncode == 0:
+                    return result
+                return CommandResult(
+                    result.args,
+                    result.returncode,
+                    result.stdout,
+                    result.stderr,
+                    {
+                        "profile_attachment": "confirmed_after_initial_error",
+                        "execution_profile": execution_profile,
+                        "run_dir": started_run_dir,
+                    },
+                )
+            retry = self.run(attachment_args)
+            observed_after_retry = self.model_profile_status()
+            if _model_profile_attachment_matches(observed_after_retry, started_run_dir):
+                self.invalidate_status_caches()
+                return CommandResult(
+                    result.args,
+                    result.returncode,
+                    result.stdout,
+                    result.stderr,
+                    {
+                        "profile_attachment": (
+                            "recovered_after_retry"
+                            if retry.returncode == 0
+                            else "confirmed_after_retry_error"
+                        ),
+                        "execution_profile": execution_profile,
+                        "run_dir": started_run_dir,
+                    },
+                )
+            # The goal has already started, so restoring Qwen here could
+            # invalidate it. Return a review-required success receipt with
+            # explicit reconciliation evidence instead of inviting a
+            # duplicate task start.
+            self.invalidate_status_caches()
+            return CommandResult(
+                result.args,
+                result.returncode,
+                result.stdout,
+                _join_errors(attachment.stderr, retry.stderr),
+                {
+                    "profile_attachment": "reconciliation_required",
+                    "execution_profile": execution_profile,
+                    "run_dir": started_run_dir,
+                    "profile_status": _json_object(observed_after_retry),
+                    "summary": (
+                        "The goal started on Ornith, but its model lease could not be attached "
+                        "to the started run after two attempts. Reconcile the active run before "
+                        "the temporary model window can restore safely."
+                    ),
+                },
+            )
+        elif execution_profile == "ornith-text":
+            # Activation happened but no goal owns the model window.
+            restore = self.run(["model-profile-restore", "--json"])
+            if restore.returncode != 0:
+                return _profile_recovery_failure(
+                    result,
+                    restore,
+                    "Goal start failed and Qwen restoration also failed.",
+                )
         self.invalidate_status_caches()
         return result
 
@@ -267,6 +586,22 @@ class LocalGoalBridge:
                 goal,
             ]
         )
+
+    def capabilities(self) -> CommandResult:
+        return self.run(["capabilities", "--json"])
+
+    def harness_modes(self) -> CommandResult:
+        return self.run(["harness-modes", "--json"])
+
+    def adapter_matrix(self) -> CommandResult:
+        return self.run(["adapter-matrix", "--json"])
+
+    def model_profile_status(self) -> CommandResult:
+        return self.run(["model-profile-status", "--json"])
+
+    def mode3a_adapter_status(self) -> CommandResult:
+        """Probe an optional managed Mode 3A adapter without starting work."""
+        return self.run(["turnstone-monitor", "--json"])
 
     def enqueue_cloud_goal(
         self,
@@ -320,10 +655,7 @@ class LocalGoalBridge:
             args.append("--json")
         now = time.monotonic()
         with self._status_lock:
-            if (
-                self._last_run_cache is not None
-                and now - self._last_run_cache_at < 5.0
-            ):
+            if self._last_run_cache is not None and now - self._last_run_cache_at < 5.0:
                 return self._last_run_cache
             result = self.run(args)
             self._last_run_cache = result
@@ -344,10 +676,7 @@ class LocalGoalBridge:
             args.append("--json")
         now = time.monotonic()
         with self._monitor_lock:
-            if (
-                self._monitor_cache is not None
-                and now - self._monitor_cache_at < 8.0
-            ):
+            if self._monitor_cache is not None and now - self._monitor_cache_at < 8.0:
                 return self._monitor_cache
             result = self.run(args)
             self._monitor_cache = result
@@ -416,7 +745,7 @@ def build_mode3a_goal(options: Mode3AGoalOptions) -> str:
             "",
             "Use the configured external orchestrator as a durable, evidence-driven goal worker.",
             "",
-            "Planner, executor, and worker names come from the external backend configuration.",
+            "Planner, executor, and worker selection is pinned by the managed Mode 3A contract.",
             "Boundary: bounded external goal, reviewable artifacts, deterministic review and acceptance gates.",
             "",
             "Autonomy contract:",
@@ -446,6 +775,45 @@ def build_mode3a_goal(options: Mode3AGoalOptions) -> str:
             "",
             "Guardrails:",
             *[f"- {guardrail}" for guardrail in guardrails],
+        ]
+    )
+
+
+def build_mode4_audit_goal(options: Mode3AGoalOptions) -> str:
+    """Build a source-read-only audit/proposal packet for the Mode 4 worker."""
+    objective = options.objective.strip()
+    if not objective:
+        raise ValueError("objective must not be empty")
+    allowed_paths = options.allowed_paths or (
+        "Inspect only the narrowest files and evidence needed for the audit.",
+    )
+    verification = options.verification or (
+        "Record the read-only checks and evidence used to support every finding.",
+    )
+    return "\n".join(
+        [
+            "Direct GLM read-only audit",
+            "",
+            "Produce an evidence-backed audit or implementation proposal. Do not edit source files.",
+            "The worker may write only its managed result artifacts.",
+            "",
+            "Original objective:",
+            objective,
+            "",
+            "Audit scope:",
+            *[f"- {path}" for path in allowed_paths],
+            "",
+            "Verification:",
+            *[f"- {command}" for command in verification],
+            "",
+            "Required result:",
+            "- State the observed evidence, findings, risks, and recommended next action.",
+            "- Clearly distinguish confirmed facts from inference.",
+            "- Report blockers honestly; do not claim implementation or completion.",
+            "",
+            "Guardrails:",
+            "- Do not modify source, configuration, services, credentials, routing, or provider state.",
+            "- Do not broaden the requested audit scope without explaining why.",
         ]
     )
 
@@ -497,6 +865,53 @@ def human_mode_by_key(value: str) -> HumanMode:
     raise ValueError(f"unknown mode {value!r}; choose one of {valid}")
 
 
+def managed_route_key(value: str) -> str:
+    """Resolve current managed routes while retaining safe legacy aliases.
+
+    The old ``guided`` route is intentionally kept under a legacy-only key: it
+    starts a premium planner followed by a local builder and is not the same as
+    canonical Mode 2's GLM-supervision/Codex-spot-check policy.
+    """
+    normalized = value.strip().lower().replace("_", "-")
+    aliases = {
+        "mode1": "mode1",
+        "mode-1": "mode1",
+        "1": "mode1",
+        "local": "mode1",
+        "quick": "mode1",
+        "mode2": "mode2",
+        "mode-2": "mode2",
+        "2": "mode2",
+        "mode3a": "mode3a",
+        "mode-3a": "mode3a",
+        "3a": "mode3a",
+        "3": "legacy-cloud",
+        "cloud": "legacy-cloud",
+        "persistent": "legacy-cloud",
+        "thorough": "legacy-cloud",
+        "mode4": "mode4",
+        "mode-4": "mode4",
+        "4": "mode4",
+        "audit": "mode4",
+        "mode4b": "mode4b",
+        "mode-4b": "mode4b",
+        "4b": "mode4b",
+        "experimental": "legacy-experimental",
+        "experiment": "legacy-experimental",
+        "guided": "legacy-guided",
+        "plan": "legacy-guided",
+        "legacy-guided": "legacy-guided",
+        "legacy-cloud": "legacy-cloud",
+        "legacy-experimental": "legacy-experimental",
+    }
+    try:
+        return aliases[normalized]
+    except KeyError as exc:
+        raise ValueError(
+            f"unknown managed route {value!r}; choose mode1, mode2, mode3a, mode4, or mode4b"
+        ) from exc
+
+
 def format_human_modes() -> str:
     lines = ["Agentic Harness modes", ""]
     for mode in HUMAN_MODES:
@@ -507,7 +922,7 @@ def format_human_modes() -> str:
         [
             "",
             "These modes apply only to the optional external backend; the embedded GUI uses one verified goal flow.",
-            'Interactive: agentic-harness work',
+            "Interactive: agentic-harness work",
             'Portable default: agentic-harness goal "describe one verified outcome"',
         ]
     )
@@ -516,6 +931,166 @@ def format_human_modes() -> str:
 
 def _external_setting(name: str, default: str) -> str:
     return os.environ.get(name, "").strip() or default
+
+
+def _json_object(result: CommandResult) -> dict[str, object]:
+    if result.returncode != 0:
+        return {}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _capabilities_payload(result: CommandResult) -> dict[str, object]:
+    payload = _json_object(result)
+    capabilities = payload.get("capabilities")
+    return capabilities if isinstance(capabilities, dict) else payload
+
+
+def _is_turnstone_executable(bridge: LocalGoalBridge) -> bool:
+    local_goal = bridge.local_goal
+    return local_goal is not None and Path(local_goal).name == "local-goal-turnstone"
+
+
+def _turnstone_mode3a_ready(result: CommandResult) -> bool:
+    payload = _json_object(result)
+    classification = str(payload.get("classification") or payload.get("status") or "").lower()
+    return bool(
+        payload.get("contract") == TURNSTONE_MODE3A_CONTRACT
+        and payload.get("active") is False
+        # An accepted Turnstone run remains as the durable current pointer and
+        # is rendered as ``done``. The controller explicitly permits a new run
+        # over terminal state, so treat only verified ready/done states as free.
+        and classification in {"ready", "done"}
+    )
+
+
+def _supports_model_profiles(result: CommandResult) -> bool:
+    payload = _json_object(result)
+    return payload.get("contract") == "node1_model_profile.v1"
+
+
+def _active_model_profile(result: CommandResult | None) -> str:
+    if result is None or not _supports_model_profiles(result):
+        return ""
+    payload = _json_object(result)
+    window = payload.get("window")
+    if isinstance(window, dict) and window.get("healthy") is False:
+        return ""
+    if payload.get("health") not in {None, 200}:
+        return ""
+    return str(payload.get("profile") or "")
+
+
+def _model_profile_attached(result: CommandResult | None) -> bool:
+    if result is None or not _supports_model_profiles(result):
+        return False
+    window = _json_object(result).get("window")
+    return isinstance(window, dict) and window.get("attached") is True
+
+
+def _model_profile_attachment_matches(
+    result: CommandResult | None,
+    expected_run_dir: str,
+) -> bool:
+    """Confirm attachment and, when reported, bind it to the started run."""
+    if not _model_profile_attached(result) or result is None:
+        return False
+    expected = expected_run_dir.strip().rstrip("/")
+    if not expected:
+        return True
+    window = _json_object(result).get("window")
+    if not isinstance(window, dict):
+        return False
+    observed = ""
+    for key in ("run_dir", "attached_run_dir", "run_id"):
+        value = window.get(key)
+        if isinstance(value, str) and value.strip():
+            observed = value.strip().rstrip("/")
+            break
+    # Older compatible profile managers advertise only the attached boolean.
+    # Keep that contract usable, but never accept a contradictory identity when
+    # the backend supplies one.
+    if not observed:
+        return True
+    return observed == expected or (
+        "/" not in observed and observed == expected.rsplit("/", 1)[-1]
+    )
+
+
+def _join_errors(*messages: str) -> str:
+    unique: list[str] = []
+    for message in messages:
+        normalized = message.strip()
+        if normalized and normalized not in unique:
+            unique.append(normalized)
+    return "\n".join(unique)
+
+
+def _profile_recovery_failure(
+    primary: CommandResult,
+    recovery: CommandResult,
+    summary: str,
+) -> CommandResult:
+    return CommandResult(
+        args=recovery.args,
+        returncode=recovery.returncode or primary.returncode or 2,
+        stdout=_join_errors(primary.stdout, recovery.stdout),
+        stderr=_join_errors(summary, primary.stderr, recovery.stderr),
+        metadata={
+            "profile_recovery": "failed",
+            "summary": summary,
+            "primary_returncode": primary.returncode,
+            "recovery_returncode": recovery.returncode,
+        },
+    )
+
+
+def _cloud_lane_available(result: CommandResult) -> bool:
+    payload = _capabilities_payload(result)
+    lanes = payload.get("lanes")
+    if not isinstance(lanes, dict):
+        return False
+    cloud = lanes.get("cloud_executor")
+    return (
+        isinstance(cloud, dict)
+        and cloud.get("installed") is not False
+        and cloud.get("available_now") is not False
+    )
+
+
+def _worker_dispatchable(
+    result: CommandResult,
+    worker: str,
+    *,
+    mutation: str,
+) -> bool:
+    payload = _json_object(result)
+    matrix = payload.get("matrix")
+    if not isinstance(matrix, list):
+        return False
+    for row in matrix:
+        if not isinstance(row, dict) or row.get("worker") != worker:
+            continue
+        readiness = str(row.get("readiness") or "").lower()
+        return (
+            row.get("enabled") is True
+            and row.get("binary_resolved") is not False
+            and readiness not in {"blocked", "disabled", "retired"}
+            and row.get("mutation_default") == mutation
+        )
+    return False
+
+
+def _blocked_command_result(result: CommandResult, reason: str) -> CommandResult:
+    return CommandResult(
+        args=result.args,
+        returncode=2,
+        stdout=result.stdout,
+        stderr=reason,
+    )
 
 
 def _routing_defaults(result: CommandResult) -> dict[str, str]:
@@ -590,6 +1165,48 @@ def _supports_candidate_contract(result: CommandResult, contract: str) -> bool:
         and contract in container["external_candidate_contracts"]
         for container in containers
     )
+
+
+def _supports_managed_mode(result: CommandResult, backend_id: str) -> bool:
+    payload = _json_object(result)
+    if (
+        payload.get("contract") != "local_goal_harness_modes.v1"
+        or payload.get("status") != "available"
+    ):
+        return False
+    modes = payload.get("modes")
+    if not isinstance(modes, list):
+        return False
+    return any(
+        isinstance(mode, dict)
+        and mode.get("id") == backend_id
+        and managed_mode_record_dispatchable(mode)
+        for mode in modes
+    )
+
+
+def _managed_mode_registry_present(result: CommandResult) -> bool:
+    payload = _json_object(result)
+    return payload.get("contract") == "local_goal_harness_modes.v1"
+
+
+def managed_mode_record_dispatchable(mode: dict[str, object]) -> bool:
+    readiness = str(mode.get("readiness") or "").strip().lower().replace("-", "_")
+    if not readiness or any(
+        marker in readiness
+        for marker in ("blocked", "disabled", "retired", "unavailable", "not_ready")
+    ):
+        return False
+    if mode.get("blocked") is True:
+        return False
+    if any(mode.get(key) is False for key in ("enabled", "available", "dispatchable")):
+        return False
+    blockers = mode.get("blockers")
+    if isinstance(blockers, str) and blockers.strip():
+        return False
+    if isinstance(blockers, list) and any(str(item).strip() for item in blockers):
+        return False
+    return True
 
 
 def format_command_result(result: CommandResult) -> str:

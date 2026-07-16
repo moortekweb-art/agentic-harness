@@ -54,6 +54,7 @@ rm -rf .agentic-harness
     DemoFile(
         "requirements-dev.txt",
         """pytest>=8
+PyYAML>=6.0
 """,
     ),
     DemoFile(

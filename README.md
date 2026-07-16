@@ -26,16 +26,17 @@ cd /path/to/your/project
 agentic-harness gui
 ```
 
-The app confirms the current workspace. In Setup, choose an installed coding
-agent or compatible model and enter the command that independently proves the
-result. Then describe one outcome and start. The browser shows the plan,
-changed files, checks, and final evidence. Work is marked done only when the
-verification command passes.
+The app confirms the current project and opens on **Home**. Describe one result
+in ordinary language; no prompt template or programming vocabulary is required.
+Use **Settings** once to connect an installed coding app, local AI, or cloud AI.
+Agentic Harness detects common project test commands automatically and keeps the
+technical command under an advanced disclosure. The browser separates **Home**,
+**Tasks**, **History**, and **Settings**, and marks work done only after the
+independent project check passes.
 
-See the loaded [desktop result](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/assets/agentic-harness-gui.png) and
-[mobile result](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/assets/agentic-harness-gui-mobile.png) from the packaged demo.
+![Agentic Harness Home view showing task effort and a plain-language execution expectation](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui.png)
 
-![Agentic Harness showing a verified completed task](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui.png)
+![Agentic Harness mobile first-run view with a safe no-account demo and a clear path to connect real work](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-mobile.png)
 
 ### Run the same verified task from the terminal
 
@@ -76,18 +77,38 @@ This is the same install, not two products. Both interfaces use
 `.agentic-harness/` inside the selected workspace. The portable embedded engine
 is the default and does not require an external orchestration service.
 
-The goal screen offers four provider-independent work approaches:
+The task screen offers four provider-independent run modes:
 
 | Approach | Intended use | Runtime boundary |
 | --- | --- | --- |
-| Quick task | One small, clear change | Small retry and spending caps |
-| Plan first | Important or unfamiliar work | Balanced caps; recommended default |
-| Keep working | Larger resumable work | Full workspace-configured limits |
-| Bounded experiment | A tiny reversible trial | Built-in model worker plus an explicit file scope |
+| Quick | One small, clear change | Small retry and spending caps |
+| Standard | Important or unfamiliar work | Balanced caps; recommended default |
+| Thorough | Larger resumable work | Full project-configured limits |
+| Experiment | A tiny reversible trial | Built-in model worker plus an explicit file limit |
 
 The approach is not a model choice. Any compatible provider can be used with
-Quick task, Plan first, or Keep working. Bounded experiment additionally
+Quick, Standard, or Thorough. Experiment additionally
 requires the built-in worker because it can enforce the selected path boundary.
+
+Managed installations keep that effort choice separate from their execution
+routes. Before a task starts, the browser combines the product's supported
+route catalog with live facts from the connected backend: where the work runs,
+the planner and executor, model profile, data boundary, verification policy,
+maturity, and current availability. Routes that are currently unavailable stay
+disabled with a reason; internal canaries that are not a user-facing product
+route can remain hidden. The interface never silently changes a local selection
+to a cloud route.
+
+<details>
+<summary>Example managed installation</summary>
+
+This example includes installation-specific local and cloud routes plus local
+model profiles. Those choices appear only when the connected backend proves
+that they exist and reports their current availability.
+
+![Managed Agentic Harness installation with execution routes and local model profiles](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-managed.png)
+
+</details>
 
 ## Advanced Workflows
 
@@ -208,7 +229,23 @@ Native Anthropic Messages and Google Gemini transports are not built into the
 embedded engine. Use an OpenAI-compatible gateway, an installed coding agent,
 or an optional external orchestrator if those native APIs are required.
 
-Setup includes editable convenience templates for a custom provider, the Z.ai
+Settings can find fixed loopback endpoints for Ollama, LM Studio, vLLM, and
+llama.cpp. When a server reports more than one model, the user chooses the exact
+model before connecting. Endpoint, model ID, and environment-variable fields
+remain available under **Manual connection**. Discovery only proves that a
+server reports models; a separate structured-action test must pass before the
+project becomes ready.
+
+If this is your first local-AI setup, choose **AI running on my computer** in
+Settings and follow the built-in LM Studio guide: [install LM Studio](https://lmstudio.ai/download),
+download and load a chat model with tool-use support, switch on the local server
+from LM Studio's Developer page, then return to Agentic Harness and choose
+**Find local AI**. LM Studio documents the same [app setup](https://lmstudio.ai/docs/app/basics)
+and [local-server switch](https://lmstudio.ai/docs/developer/core/server).
+Ollama, vLLM, llama.cpp, custom ports, and private-network servers remain under
+the advanced/manual path.
+
+Settings also includes editable convenience templates for a custom provider, the Z.ai
 general API, and a Z.ai GLM Coding Plan account. Templates only pre-fill the
 endpoint, model ID, and environment-variable name; they do not bundle a key or
 turn a provider into a work approach. The GLM Coding Plan template starts with
@@ -303,6 +340,12 @@ Choose a stable loopback port when a service or private reverse proxy needs one:
 ```bash
 agentic-harness-gui --project-dir /path/to/project --port 8765 --no-open
 ```
+
+Settings are scoped to that one project and stored in its
+`.agentic-harness/config.yml`. A managed installation exposes the same Settings
+view as read-only instead of hiding it. If an existing configuration is invalid
+or uses an unsafe symlink, the GUI reports the problem and refuses to overwrite
+the original file.
 
 Keep loopback as the default. A non-loopback bind is refused unless
 `AGENTIC_HARNESS_GUI_TOKEN` is set. Authenticated clients send that value in the

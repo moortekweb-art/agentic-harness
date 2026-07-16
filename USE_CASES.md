@@ -10,8 +10,8 @@ These examples describe the current source behavior. Install it with:
 pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git
 ```
 
-The latest PyPI release remains available as `local-agentic-harness==0.7.2`,
-but its output can differ until the next release includes the current changes.
+The latest PyPI release remains available for validating the public package;
+source checkouts may include unreleased interface changes.
 
 From the project you want to change, start the browser flow:
 
@@ -20,9 +20,11 @@ cd /path/to/your/project
 agentic-harness gui
 ```
 
-Choose an installed coding agent or compatible model, enter the independent
-verification command, and describe one outcome. The same workflow is available
-from the terminal without editing YAML:
+On **Home**, describe one outcome in ordinary language. **Settings** connects an
+installed coding app, detected local AI, or compatible cloud AI. Common project
+tests are selected automatically; endpoint, model ID, raw command, and access
+paths stay under progressive disclosure unless they need attention. The same
+workflow is available from the terminal without editing YAML:
 
 ```bash
 agentic-harness do "draft release notes for the last three commits" --check "python -m pytest tests/ -q"
