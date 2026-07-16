@@ -43,14 +43,17 @@ GUI_TOKEN_ENV = "AGENTIC_HARNESS_GUI_TOKEN"
 
 
 def test_gui_modes_use_human_labels() -> None:
-    labels = [mode["label"] for mode in modes_payload()]
+    routes = modes_payload()
 
-    assert labels == [
-        "Quick task",
-        "Plan first",
-        "Keep working",
-        "Safe experiment",
+    assert [route["key"] for route in routes] == [
+        "mode1",
+        "mode2",
+        "mode3a",
+        "mode4",
+        "mode4b",
     ]
+    assert routes[0]["label"] == "Local build"
+    assert routes[0]["technical_mode"] == "Mode 1 local start"
 
 
 def test_default_gui_surface_has_no_manual_babysitting_control() -> None:
@@ -862,7 +865,10 @@ def test_start_task_uses_bridge_human_goal() -> None:
 def test_start_task_blocks_when_current_work_needs_review() -> None:
     bridge = ReviewBridge()
 
-    task = start_task(bridge, {"mode": "cloud", "objective": "new task"})
+    task = start_task(
+        bridge,
+        {"mode": "cloud", "objective": "new task", "safe_areas": ["tests"]},
+    )
 
     assert task["status"] == "needs_review"
     assert task["readiness_gate"]["requires_review"] is True
@@ -872,7 +878,10 @@ def test_start_task_blocks_when_current_work_needs_review() -> None:
 def test_start_task_refuses_unowned_background_work() -> None:
     bridge = InactiveSupervisionBridge()
 
-    task = start_task(bridge, {"mode": "cloud", "objective": "unowned task"})
+    task = start_task(
+        bridge,
+        {"mode": "cloud", "objective": "unowned task", "safe_areas": ["tests"]},
+    )
 
     assert task["status"] == "blocked"
     assert task["needs_human"] is True
@@ -935,7 +944,8 @@ def test_gui_server_get_api_routes_return_json() -> None:
     assert health["no_babysitting"]["enabled"] is True
     assert health["readiness"]["agent_loop"]["stage"] == "Act"
     assert readiness["agent_loop"]["stage"] == "Act"
-    assert modes["modes"][0]["label"] == "Quick task"
+    assert modes["modes"][0]["label"] == "Local build"
+    assert modes["modes"][0]["technical_mode"] == "Mode 1 local start"
     assert tasks["tasks"][0]["status"] == "working"
     assert current["status"] == "working"
     assert details["task"]["status"] == "working"
@@ -1332,11 +1342,15 @@ def test_gui_frontend_separates_public_strategies_from_legacy_managed_modes() ->
     assert 'payload.kind === "managed_route"' in app
     assert "DEFAULT_MANAGED_MODE" in app
     assert "DEFAULT_PUBLIC_STRATEGY" in app
-    assert "renderModes(payload.modes || [], payload.default || fallback)" in app
+    assert "function configureModesPayload(payload)" in app
+    assert "payload?.routes || payload?.modes" in app
+    assert "payload?.default_route || payload?.default" in app
     assert "const objective = els.objective.value.trim()" in app
     assert "objective," in app
-    assert "mode: usesHumanModes() ? state.mode : undefined" in app
-    assert "strategy: usesHumanModes() ? undefined : state.mode" in app
+    assert "route: usesHumanModes() ? state.route : undefined" in app
+    assert "effort: usesHumanModes() ? state.effort : undefined" in app
+    assert "strategy: usesHumanModes() ? undefined : state.effort" in app
+    assert "mode: usesHumanModes() ? state.mode : undefined" not in app
     assert "Promise.all([refreshSetup(), refreshHealth(), refreshTask(true)])" in app
     assert "allowed_actions" in app
 
@@ -1505,7 +1519,11 @@ def test_serve_gui_browser_open_failure_does_not_stop_server(monkeypatch, capsys
 def test_gui_server_post_task_workflow_routes() -> None:
     bridge = FakeBridge()
     with gui_server(bridge) as base_url:
-        created = post_json(base_url, "/api/tasks", {"mode": "cloud", "objective": "test task"})
+        created = post_json(
+            base_url,
+            "/api/tasks",
+            {"mode": "cloud", "objective": "test task", "safe_areas": ["tests"]},
+        )
         watched = post_json(base_url, "/api/tasks/current/watch", {})
         continued = post_json(base_url, "/api/tasks/current/continue", {"feedback": "keep going"})
         accepted = post_json(base_url, "/api/tasks/current/accept", {})
@@ -1550,7 +1568,7 @@ def test_gui_server_accepts_same_origin_json_post() -> None:
         )
 
     assert created["status"] == "starting"
-    assert bridge.commands[0][:1] == ["quick-start"]
+    assert any(command[:1] == ["quick-start"] for command in bridge.commands)
 
 
 def test_gui_server_rejected_start_preserves_blocker_and_submitted_objective() -> None:
@@ -1559,7 +1577,7 @@ def test_gui_server_rejected_start_preserves_blocker_and_submitted_objective() -
         created = post_json(
             base_url,
             "/api/tasks",
-            {"mode": "cloud", "objective": "new audit"},
+            {"mode": "cloud", "objective": "new audit", "safe_areas": ["tests"]},
             origin=base_url,
         )
 
@@ -1576,7 +1594,7 @@ def test_gui_session_preserves_full_objective_when_worker_reports_only_a_title()
         created = post_json(
             base_url,
             "/api/tasks",
-            {"mode": "cloud", "objective": objective},
+            {"mode": "cloud", "objective": objective, "safe_areas": ["tests"]},
             origin=base_url,
         )
         current = get_json(base_url, "/api/tasks/current")
@@ -1660,8 +1678,16 @@ def test_gui_server_rejects_oversized_task_post() -> None:
 def test_gui_server_keeps_task_history_and_searches() -> None:
     bridge = FakeBridge()
     with gui_server(bridge) as base_url:
-        post_json(base_url, "/api/tasks", {"mode": "cloud", "objective": "alpha deploy"})
-        post_json(base_url, "/api/tasks", {"mode": "cloud", "objective": "beta docs"})
+        post_json(
+            base_url,
+            "/api/tasks",
+            {"mode": "cloud", "objective": "alpha deploy", "safe_areas": ["tests"]},
+        )
+        post_json(
+            base_url,
+            "/api/tasks",
+            {"mode": "cloud", "objective": "beta docs", "safe_areas": ["docs"]},
+        )
         history = get_json(base_url, "/api/tasks/history")
         filtered = get_json(base_url, "/api/tasks/history?q=beta")
 
@@ -1677,7 +1703,12 @@ def test_gui_server_bulk_tasks_returns_created_tasks() -> None:
             "/api/tasks/bulk",
             {
                 "tasks": [
-                    {"mode": "cloud", "objective": "first", "priority": "high"},
+                    {
+                        "mode": "cloud",
+                        "objective": "first",
+                        "priority": "high",
+                        "safe_areas": ["tests"],
+                    },
                     {"mode": "local", "objective": "second"},
                 ]
             },
@@ -1689,7 +1720,11 @@ def test_gui_server_bulk_tasks_returns_created_tasks() -> None:
 
 def test_gui_server_session_export_import_round_trips_history() -> None:
     with gui_server(FakeBridge()) as base_url:
-        post_json(base_url, "/api/tasks", {"mode": "cloud", "objective": "export me"})
+        post_json(
+            base_url,
+            "/api/tasks",
+            {"mode": "cloud", "objective": "export me", "safe_areas": ["tests"]},
+        )
         session = get_json(base_url, "/api/session")
 
     with gui_server(FakeBridge()) as base_url:

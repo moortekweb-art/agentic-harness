@@ -44,18 +44,20 @@ and arbitrary model identifiers. The same setup surface also supports an
 installed coding-agent executable. Model brand is not part of the execution
 contract.
 
-Four product decisions remain independent:
+Five product decisions remain independent:
 
 | Decision | Examples | Persisted as |
 | --- | --- | --- |
 | Execution method | installed coding agent, built-in model worker | worker configuration |
 | Provider | local endpoint, custom cloud endpoint, editable Z.ai template | non-secret provider profile |
-| Run mode | Quick, Standard, Thorough, Experiment | goal execution strategy |
+| Task effort | Quick, Standard, Thorough, Experiment | goal execution strategy |
+| Managed execution route | local build, reviewed local build, bounded cloud, read-only audit | backend route identity and resolved facts |
 | Verification | tests, lint, build, or another deterministic command | goal review command |
 
-The concise names are frontend presentation aliases. The stable backend keys
-remain `quick`, `plan`, `persistent`, and `experiment` so CLI and API routing do
-not change.
+For the portable embedded backend, the concise names are frontend presentation
+aliases. Its stable strategy keys remain `quick`, `plan`, `persistent`, and
+`experiment` so CLI and API routing do not change. Managed route keys are a
+separate adapter contract.
 
 An execution strategy supplies plain-language guidance and can only tighten the
 workspace autonomy limits. It cannot enlarge configured cycles, elapsed time,
@@ -65,7 +67,10 @@ selected. Provider templates never select or alter a strategy.
 
 An external orchestration adapter remains available with
 `--backend local-goal`. It is optional, is not the default public product path,
-and is not installed by this distribution. See
+and is not installed by this distribution. The managed adapter keeps task
+effort, backend route, and installation-provided model profile as separate
+decisions. It displays exact backend facts and availability instead of assigning
+portable strategy names to unrelated orchestration modes. See
 [Turnstone integration](TURNSTONE_INTEGRATION.md) for the supported boundary.
 
 ## Components
@@ -174,10 +179,23 @@ files, verification, artifacts, allowed actions, safety boundaries, budget
 usage, and final-result evidence.
 
 `GET /api/modes` describes work strategies for the embedded public backend and
-marks `plan` as the default. The optional managed compatibility backend retains
-its separate managed-route vocabulary. `GET /api/setup` declares the embedded
-deployment as `local_self_hosted` and `multi_user: false`; clients must not
-mistake that process for a shared hosted control plane.
+marks `plan` as the default. For the optional managed backend it returns three
+separate sets: effort choices, backend-provided execution routes, and any
+installation-provided model profiles. Managed routes include their mutation
+boundary, location, planner, executor, verification, maturity, availability,
+and disabled reason. `GET /api/setup` declares the embedded deployment as
+`local_self_hosted` and `multi_user: false`; clients must not mistake that
+process for a shared hosted control plane.
+
+Some managed adapters do not echo the selected route, effort, or temporary
+model profile in later status responses. For those deployments the GUI keeps a
+sanitized overlay at `.agentic-harness/gui-session.v1.json` inside the selected
+project. Records bind to the exact managed run directory or run id; a different
+external run never inherits an earlier task's labels. The sidecar omits raw
+commands, stdout, stderr, provider payloads, and credentials, is written with
+owner-only permissions, and fails open to the live backend if it is corrupt or
+unwritable. `AGENTIC_HARNESS_GUI_SESSION_PATH` may override the path or be set to
+`off` to disable this managed-only overlay.
 
 Embedded setup is explicitly workspace-scoped through
 `management.mode = "workspace"`. Managed compatibility deployments use

@@ -34,9 +34,9 @@ technical command under an advanced disclosure. The browser separates **Home**,
 **Tasks**, **History**, and **Settings**, and marks work done only after the
 independent project check passes.
 
-![Agentic Harness Tasks view showing an independently verified result](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui.png)
+![Agentic Harness Home view showing task effort and a plain-language execution expectation](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui.png)
 
-![Agentic Harness mobile Home view with beginner setup and safe demo](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-mobile.png)
+![Agentic Harness mobile first-run view with a safe no-account demo and a clear path to connect real work](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-mobile.png)
 
 ### Run the same verified task from the terminal
 
@@ -89,6 +89,26 @@ The task screen offers four provider-independent run modes:
 The approach is not a model choice. Any compatible provider can be used with
 Quick, Standard, or Thorough. Experiment additionally
 requires the built-in worker because it can enforce the selected path boundary.
+
+Managed installations keep that effort choice separate from their execution
+routes. Before a task starts, the browser combines the product's supported
+route catalog with live facts from the connected backend: where the work runs,
+the planner and executor, model profile, data boundary, verification policy,
+maturity, and current availability. Routes that are currently unavailable stay
+disabled with a reason; internal canaries that are not a user-facing product
+route can remain hidden. The interface never silently changes a local selection
+to a cloud route.
+
+<details>
+<summary>Example managed installation</summary>
+
+This example includes installation-specific local and cloud routes plus local
+model profiles. Those choices appear only when the connected backend proves
+that they exist and reports their current availability.
+
+![Managed Agentic Harness installation with execution routes and local model profiles](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-managed.png)
+
+</details>
 
 ## Advanced Workflows
 

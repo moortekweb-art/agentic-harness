@@ -381,7 +381,9 @@ def test_create_demo_fix_tests_writes_runnable_project(tmp_path, capsys) -> None
     assert (demo / "calculator.py").read_text(encoding="utf-8").strip().endswith(
         "return left + right + 1"
     )
-    assert (demo / "requirements-dev.txt").read_text(encoding="utf-8") == "pytest>=8\n"
+    assert (demo / "requirements-dev.txt").read_text(encoding="utf-8") == (
+        "pytest>=8\nPyYAML>=6.0\n"
+    )
     assert (demo / "mock_coding_agent.py").exists()
     assert (demo / "reset_demo.py").exists()
     assert (demo / "tests" / "test_calculator.py").exists()
@@ -500,10 +502,10 @@ def test_run_demo_exposes_only_harness_import_root_to_nested_venv(tmp_path, monk
     demo = tmp_path / "demo"
     existing = [str(tmp_path / "existing"), str(Path(cli.__file__).resolve().parent.parent)]
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(existing))
-    environments: list[dict[str, str]] = []
+    environments: list[tuple[str, dict[str, str]]] = []
 
     def fake_step(label, command, **kwargs):
-        environments.append(kwargs["env"])
+        environments.append((label, dict(kwargs["env"])))
         return True
 
     monkeypatch.setattr(cli, "_run_demo_step", fake_step)
@@ -512,7 +514,11 @@ def test_run_demo_exposes_only_harness_import_root_to_nested_venv(tmp_path, monk
 
     harness_root = str(Path(cli.__file__).resolve().parent.parent)
     expected = [harness_root, existing[0]]
-    assert all(env["PYTHONPATH"].split(os.pathsep) == expected for env in environments)
+    for label, environment in environments:
+        if label == "Install demo dependencies":
+            assert "PYTHONPATH" not in environment
+        else:
+            assert environment["PYTHONPATH"].split(os.pathsep) == expected
     parent_site_packages = str(Path(sys.prefix) / "lib" / "python-site-packages")
     assert parent_site_packages not in expected
 
@@ -797,6 +803,7 @@ def test_installed_artifact_smoke_checks_version_commands(
     labels: list[str] = []
     commands: dict[str, list[str]] = {}
     required_outputs: dict[str, str | None] = {}
+    environments: dict[str, dict[str, str] | None] = {}
 
     def fake_run_release_step(
         label: str,
@@ -809,6 +816,7 @@ def test_installed_artifact_smoke_checks_version_commands(
         labels.append(label)
         commands[label] = command
         required_outputs[label] = required_stdout
+        environments[label] = env
         if label == "Smoke wheel run-until-done":
             project_dir = Path(command[command.index("--project-dir") + 1])
             run_dir = project_dir / ".agentic-harness" / "runs" / "goal"
@@ -837,7 +845,9 @@ def test_installed_artifact_smoke_checks_version_commands(
             demo_dir = Path(command[-1])
             run_dir = demo_dir / ".agentic-harness" / "runs" / "goal"
             run_dir.mkdir(parents=True)
-            (demo_dir / "requirements-dev.txt").write_text("pytest>=8\n", encoding="utf-8")
+            (demo_dir / "requirements-dev.txt").write_text(
+                "pytest>=8\nPyYAML>=6.0\n", encoding="utf-8"
+            )
             transcript_python = cli._venv_python(
                 demo_dir / ".venv" if use_nested_demo_venv else tmp_root / "wheel" / "venv"
             )
@@ -901,6 +911,19 @@ def test_installed_artifact_smoke_checks_version_commands(
     )
     assert "Smoke wheel strict goal" in labels
     assert "Smoke wheel recipe until-done" in labels
+    assert "Install wheel recipe test dependency" in labels
+    assert commands["Install wheel recipe test dependency"] == [
+        str(cli._venv_python(tmp_root / "wheel" / "venv")),
+        "-m",
+        "pip",
+        "install",
+        "pytest>=8",
+    ]
+    recipe_env = environments["Smoke wheel recipe until-done"]
+    assert recipe_env is not None
+    assert recipe_env["PATH"].split(os.pathsep)[0] == str(
+        cli._venv_python(tmp_root / "wheel" / "venv").parent
+    )
     assert "Smoke wheel run auto-config" in labels
     assert commands["Verify wheel final demo tests"][0] == str(
         cli._venv_python(tmp_root / "wheel" / "demo" / ".venv")

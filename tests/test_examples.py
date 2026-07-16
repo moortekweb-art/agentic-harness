@@ -57,7 +57,9 @@ def test_killer_demo_contains_runnable_fix_failing_tests_loop() -> None:
 
     assert (root / "README.md").exists()
     assert (root / "mock_coding_agent.py").exists()
-    assert (root / "requirements-dev.txt").read_text(encoding="utf-8") == "pytest>=8\n"
+    assert (root / "requirements-dev.txt").read_text(encoding="utf-8") == (
+        "pytest>=8\nPyYAML>=6.0\n"
+    )
     assert (root / "tests" / "test_calculator.py").exists()
 
     readme = (root / "README.md").read_text(encoding="utf-8")
@@ -484,7 +486,9 @@ def test_packaged_demo_generator_runs_failure_fix_review_cycle(tmp_path) -> None
 
     assert create.returncode == 0, create.stderr
     assert "Created demo:" in create.stdout
-    assert (demo / "requirements-dev.txt").read_text(encoding="utf-8") == "pytest>=8\n"
+    assert (demo / "requirements-dev.txt").read_text(encoding="utf-8") == (
+        "pytest>=8\nPyYAML>=6.0\n"
+    )
 
     before = subprocess.run(
         [sys.executable, "-m", "pytest", "tests/", "-q"],

@@ -132,22 +132,70 @@ function okPayloadFor(url, setupPayload = null, taskPayload = null, healthPayloa
   }
   if (url === "/api/modes") {
     const managed = setupPayload?.worker?.type === "local_goal";
-    return {
-      default: managed ? "guided" : "plan",
-      kind: managed ? "managed_route" : "strategy",
-      modes: managed
-        ? [
-          { key: "local", label: "Quick task", best_for: "small work", caution: "" },
-          { key: "guided", label: "Plan first", best_for: "important work", caution: "recommended" },
-          { key: "cloud", label: "Keep working", best_for: "large work", caution: "" },
-          { key: "experimental", label: "Safe experiment", best_for: "tiny trials", caution: "" },
-        ]
-        : [
-          { key: "quick", label: "Quick task", best_for: "small work", caution: "" },
-          { key: "plan", label: "Plan first", best_for: "important work", caution: "recommended" },
-          { key: "persistent", label: "Keep working", best_for: "large work", caution: "" },
-          { key: "experiment", label: "Bounded experiment", best_for: "tiny trials", caution: "" },
+    if (managed) {
+      return {
+        kind: "managed_route",
+        default_route: "mode1",
+        default_effort: "standard",
+        routes: [
+          {
+            key: "mode1", label: "Local build", technical_mode: "Mode 1 local start",
+            best_for: "normal local work", available: true, recommended: true,
+            data_location: "local_node1", network_scope: "local_execution",
+            supports_execution_profiles: true,
+          },
+          {
+            key: "mode2", label: "Local build + Codex review", technical_mode: "Mode 2",
+            available: false, disabled_reason: "supervision policy only",
+            data_location: "mixed_local_cloud", network_scope: "mixed",
+          },
+          {
+            key: "mode3a", label: "Cloud long run", technical_mode: "Mode 3A",
+            best_for: "bounded separate work", available: true, requires_scope: true,
+            data_location: "cloud_provider", network_scope: "cloud",
+          },
+          {
+            key: "mode4", label: "Read-only audit", technical_mode: "Mode 4",
+            available: false, disabled_reason: "audit dispatch unavailable",
+            data_location: "cloud_provider", network_scope: "cloud",
+          },
+          {
+            key: "mode4b", label: "One-file canary", technical_mode: "Mode 4B",
+            available: false, hidden: true, labs: true,
+            disabled_reason: "canary disabled", data_location: "cloud_provider",
+            network_scope: "cloud",
+          },
         ],
+        efforts: [
+          { key: "quick", label: "Quick", available: true },
+          { key: "standard", label: "Standard", available: true, recommended: true },
+          { key: "thorough", label: "Thorough", available: true },
+        ],
+        execution_profiles: [],
+        default_execution_profile: "automatic",
+      };
+    }
+    return {
+      default: "plan",
+      kind: "strategy",
+      modes: [
+        {
+          key: "quick", label: "Quick task", best_for: "small work", caution: "",
+          budget_profile: "small",
+        },
+        {
+          key: "plan", label: "Plan first", best_for: "important work", caution: "recommended",
+          budget_profile: "balanced",
+        },
+        {
+          key: "persistent", label: "Keep working", best_for: "large work", caution: "",
+          budget_profile: "full",
+        },
+        {
+          key: "experiment", label: "Bounded experiment", best_for: "tiny trials", caution: "",
+          labs: true, experimental: true, requires_scope: true, budget_profile: "tiny",
+        },
+      ],
     };
   }
   if (url === "/api/setup") {
@@ -172,6 +220,29 @@ function okPayloadFor(url, setupPayload = null, taskPayload = null, healthPayloa
     return { tasks: [] };
   }
   return { ok: true };
+}
+
+function jsonResponse(payload, status = 200) {
+  return { status, ok: status >= 200 && status < 300, json: async () => payload };
+}
+
+function managedModesFor(setupPayload, { localAvailable = true, defaultRoute = "mode1" } = {}) {
+  const payload = okPayloadFor("/api/modes", setupPayload);
+  return {
+    ...payload,
+    default: defaultRoute,
+    default_route: defaultRoute,
+    routes: payload.routes.map((route) => (
+      route.key === "mode1"
+        ? {
+            ...route,
+            available: localAvailable,
+            enabled: localAvailable,
+            disabled_reason: localAvailable ? "" : "The local lane is currently busy.",
+          }
+        : route
+    )),
+  };
 }
 
 async function tick() {
@@ -568,7 +639,10 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
       safeAreas: "",
       checks: "python -m pytest -q",
       mode: "plan",
-      draftVersion: 3,
+      route: "",
+      effort: "plan",
+      executionProfile: "automatic",
+      draftVersion: 4,
     },
   );
 }
@@ -979,20 +1053,34 @@ async function testLegacyHumanCanChooseEveryModeWithoutWritingACommand() {
   assert.equal(start.disabled, false);
   assert.match(app.elements.get("startHelp").textContent, /assistant will choose checks/i);
 
-  for (const card of [...modes.children, ...app.elements.get("advancedModes").children]) {
+  for (const card of modes.children) {
     objective.value = "Please audit my system and give me a simple report.";
     objective.listeners.input();
     card.listeners.click();
     await app.context.startWork();
   }
+  objective.value = "Please audit my system and give me a simple report.";
+  objective.listeners.input();
+  app.elements.get("safeAreas").value = "reports";
+  app.elements.get("safeAreas").listeners.input();
+  const routeSelect = app.elements.get("routeSelect");
+  routeSelect.value = "mode3a";
+  routeSelect.listeners.change();
+  await app.context.startWork();
   const submissions = app.fetchCalls.filter((call) => call.url === "/api/tasks");
   assert.deepEqual(
-    submissions.map((call) => JSON.parse(call.options.body).mode),
-    ["local", "guided", "cloud", "experimental"],
+    submissions.map((call) => JSON.parse(call.options.body).route),
+    ["mode1", "mode1", "mode1", "mode3a"],
   );
+  assert.deepEqual(
+    submissions.map((call) => JSON.parse(call.options.body).effort),
+    ["quick", "standard", "thorough", "standard"],
+  );
+  assert.equal(submissions.every((call) => !("mode" in JSON.parse(call.options.body))), true);
   assert.equal(submissions.every((call) => JSON.parse(call.options.body).checks.length === 0), true);
   assert.equal(objective.value, "");
-  assert.equal(app.elements.get("modeSelect").value, "guided");
+  assert.equal(app.elements.get("modeSelect").value, "standard");
+  assert.equal(app.elements.get("routeSelect").value, "mode1");
   assert.equal(app.sessionStorage.getItem("agentic-harness-gui-form"), null);
 }
 
@@ -1009,14 +1097,15 @@ async function testPredictableViewsConciseModesAndAccessSummaryKeepDraftState() 
   });
 
   const modeSelect = app.elements.get("modeSelect");
-  assert.equal(modeSelect.children.length, 4);
-  assert.equal(modeSelect.value, "guided");
+  assert.equal(modeSelect.children.length, 3);
+  assert.equal(modeSelect.value, "standard");
   assert.deepEqual(modeSelect.children.map((option) => option.textContent), [
-    "Quick", "Standard", "Thorough", "Experiment",
+    "Quick", "Standard", "Thorough",
   ]);
-  modeSelect.value = "cloud";
-  modeSelect.listeners.change();
-  assert.equal(modeSelect.value, "cloud");
+  const routeSelect = app.elements.get("routeSelect");
+  routeSelect.value = "mode3a";
+  routeSelect.listeners.change();
+  assert.equal(routeSelect.value, "mode3a");
   const safeAreas = app.elements.get("safeAreas");
   safeAreas.value = "src\ndocs";
   safeAreas.listeners.input();
@@ -1037,10 +1126,260 @@ async function testPredictableViewsConciseModesAndAccessSummaryKeepDraftState() 
       objective: "",
       safeAreas: "src\ndocs",
       checks: "",
-      mode: "cloud",
-      draftVersion: 3,
+      mode: "mode3a",
+      route: "mode3a",
+      effort: "standard",
+      executionProfile: "automatic",
+      draftVersion: 4,
     },
   );
+}
+
+async function testExpectationReflectsSetupReadinessInsteadOfClaimingReady() {
+  const nextAction = "Open Settings and connect an assistant before starting real work.";
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: false,
+      editable: true,
+      workspace: "/tmp/new-project",
+      suggested_check: "npm test",
+    },
+    healthPayload: {
+      ok: true,
+      readiness: {
+        state: "setup_required",
+        can_start: false,
+        summary: "Choose an AI connection.",
+        next_action: nextAction,
+      },
+    },
+  });
+
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Setup needed");
+  assert.equal(app.elements.get("expectationSummary").textContent, nextAction);
+  assert.equal(app.elements.get("expectationLocation").textContent, "Connect AI in Settings");
+  assert.equal(app.elements.get("expectationModel").textContent, "Connect AI in Settings");
+  assert.equal(app.elements.get("expectationMutation").textContent, "Available after setup");
+  assert.equal(app.elements.get("startButton").disabled, true);
+}
+
+async function testExpectationUsesPlainDynamicFactsAndCardSelectionKeepsFocus() {
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: true,
+      editable: true,
+      workspace: "/tmp/project",
+      worker: { type: "coding_agent", agent: "codex", label: "Codex" },
+      verification_command: "npm test",
+    },
+  });
+
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Ready");
+  assert.equal(
+    app.elements.get("expectationSummary").textContent,
+    "Standard uses your installed coding app and independent verification.",
+  );
+  assert.equal(
+    app.elements.get("expectationLocation").textContent,
+    "Through an installed coding app",
+  );
+  assert.equal(app.elements.get("expectationModel").textContent, "Coding app · Codex");
+  assert.equal(app.elements.get("expectationMutation").textContent, "Can change project files");
+
+  const oldQuickCard = app.elements.get("modes").children[0];
+  oldQuickCard.listeners.click();
+  const newQuickCard = app.elements.get("modes").children[0];
+  assert.notEqual(newQuickCard, oldQuickCard);
+  assert.equal(newQuickCard.dataset.choiceKey, "quick");
+  assert.equal(newQuickCard.focusCount, 1);
+}
+
+async function testManagedExpectationStaysPlainAndMobileGetsUnavailableReasons() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/managed-project",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  const app = await runApp({ publicAccess: true, setupPayload });
+
+  assert.equal(
+    app.elements.get("expectationSummary").textContent,
+    "Local build will use standard effort. Work will use the configured local execution lane.",
+  );
+  assert.doesNotMatch(app.elements.get("expectationSummary").textContent, /OpenCode|Node1|Turnstone/);
+
+  const reasons = app.elements.get("routeSection").children
+    .find((child) => child.id === "routeUnavailableReasons");
+  assert.equal(reasons.hidden, false);
+  assert.deepEqual(reasons.children.map((row) => row.textContent), [
+    "Local build + Codex review: supervision policy only",
+    "Read-only audit: audit dispatch unavailable",
+  ]);
+
+  const oldRouteCard = app.elements.get("routes").children[0];
+  oldRouteCard.listeners.click();
+  const newRouteCard = app.elements.get("routes").children[0];
+  assert.notEqual(newRouteCard, oldRouteCard);
+  assert.equal(newRouteCard.dataset.choiceKey, "mode1");
+  assert.equal(newRouteCard.focusCount, 1);
+}
+
+async function testResetNeverSilentlyAppliesACloudDefaultRoute() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/managed-project",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  const app = await runApp({ publicAccess: true, setupPayload });
+  app.context.configureModesPayload(managedModesFor(setupPayload, { defaultRoute: "mode3a" }));
+  const routeSelect = app.elements.get("routeSelect");
+  routeSelect.value = "mode3a";
+  routeSelect.listeners.change();
+  assert.equal(app.context.formSnapshot().route, "mode3a");
+
+  app.context.resetNewGoalForm();
+
+  assert.equal(app.context.formSnapshot().route, "");
+  assert.match(app.elements.get("expectationSummary").textContent, /choose an available route/i);
+}
+
+async function testManualRefreshRecoversAModeLoadFailureAndReconnectsStatus() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/managed-project",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  let modeCalls = 0;
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url) => {
+      if (url === "/api/modes") {
+        modeCalls += 1;
+        return modeCalls === 1
+          ? jsonResponse({ error: "Execution routes are temporarily unavailable." }, 503)
+          : jsonResponse(managedModesFor(setupPayload));
+      }
+      return jsonResponse(okPayloadFor(url, setupPayload));
+    },
+  });
+
+  assert.equal(modeCalls, 1);
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Needs refresh");
+  assert.match(app.elements.get("expectationSummary").textContent, /choose refresh/i);
+  assert.deepEqual(app.websocketUrls, []);
+
+  await app.elements.get("checkButton").listeners.click();
+
+  assert.equal(modeCalls, 2);
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Ready");
+  assert.deepEqual(app.websocketUrls, ["ws://127.0.0.1:41111/api/tasks/stream"]);
+}
+
+async function testManualRefreshForcesCurrentRouteAvailabilityWhileBackgroundChecksThrottle() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/managed-project",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  let modeCalls = 0;
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    fetchOverride: async (url) => {
+      if (url === "/api/modes") {
+        modeCalls += 1;
+        return jsonResponse(managedModesFor(setupPayload, { localAvailable: modeCalls > 1 }));
+      }
+      return jsonResponse(okPayloadFor(url, setupPayload));
+    },
+  });
+  const objective = app.elements.get("objective");
+  objective.value = "Fix the local task";
+  objective.listeners.input();
+  assert.equal(app.elements.get("startButton").disabled, true);
+
+  await app.context.refreshModes();
+  assert.equal(modeCalls, 1);
+  await app.elements.get("checkButton").listeners.click();
+
+  assert.equal(modeCalls, 2);
+  assert.equal(app.elements.get("startButton").disabled, false);
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Ready");
+}
+
+async function testReadinessAndTaskTransitionsRefreshManagedRouteFacts() {
+  const setupPayload = {
+    contract: "agentic_harness.gui_setup.v1",
+    configured: true,
+    editable: false,
+    workspace: "/tmp/managed-project",
+    worker: { type: "local_goal", label: "Existing local-goal runtime" },
+  };
+  let modeCalls = 0;
+  const activeHealth = {
+    ok: true,
+    readiness: {
+      state: "active",
+      can_start: false,
+      summary: "Another task is active.",
+    },
+  };
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload,
+    healthPayload: activeHealth,
+    fetchOverride: async (url) => {
+      if (url === "/api/modes") {
+        modeCalls += 1;
+        return jsonResponse(managedModesFor(setupPayload, { localAvailable: modeCalls > 1 }));
+      }
+      return jsonResponse(okPayloadFor(url, setupPayload, null, activeHealth));
+    },
+  });
+  assert.equal(modeCalls, 1);
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Unavailable");
+
+  app.context.renderHealth({
+    readiness: { state: "ready", can_start: true, summary: "Ready for another task." },
+  });
+  await tick();
+  await tick();
+  assert.equal(modeCalls, 2);
+  assert.equal(app.elements.get("expectationAvailability").textContent, "Ready");
+
+  app.context.renderTask({
+    id: "managed-active",
+    objective: "Current managed task",
+    status: "working",
+    result_category: "in_progress",
+    summary: "Working",
+    current: { cycle: 1, checkpoint: "Work", current_subgoal: "Implement" },
+  });
+  app.context.renderTask({
+    id: "managed-active",
+    objective: "Current managed task",
+    status: "done",
+    result_category: "verified_done",
+    summary: "Done",
+    final_result: { label: "Verified done", reason: "Checks passed." },
+    current: { cycle: 1, checkpoint: "Done", current_subgoal: "Complete" },
+  });
+  await tick();
+  await tick();
+  assert.equal(modeCalls, 3);
 }
 
 async function testCompletedGoalClearsOnlyItsMatchingStaleDraft() {
@@ -1076,7 +1415,8 @@ async function testCompletedGoalClearsOnlyItsMatchingStaleDraft() {
 
   assert.equal(app.elements.get("objective").value, "");
   assert.equal(app.elements.get("safeAreas").value, "");
-  assert.equal(app.elements.get("modeSelect").value, "guided");
+  assert.equal(app.elements.get("modeSelect").value, "standard");
+  assert.equal(app.elements.get("routeSelect").value, "mode1");
   assert.equal(app.sessionStorage.getItem("agentic-harness-gui-form"), null);
 }
 
@@ -1210,7 +1550,7 @@ async function testTerminalReceiptOverridesRawDoneAndRendersTrustedEvidence() {
   assert.equal(app.elements.get("finalRetries").textContent, "1");
   assert.equal(app.elements.get("attemptsValue").textContent, "2");
   assert.equal(app.elements.get("checkpoint").textContent, "claimed done");
-  assert.equal(app.elements.get("workApproachValue").textContent, "Standard");
+  assert.equal(app.elements.get("workApproachValue").textContent, "Configured effort");
   assert.equal(app.elements.get("workDetailGrid").hidden, true);
   assert.equal(app.elements.get("activitySection").hidden, true);
   assert.equal(app.elements.get("changedFilesEvidence").hidden, true);
@@ -1511,6 +1851,13 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
   await testBoundedExperimentExplainsAndRequiresExplicitScope();
   await testLegacyHumanCanChooseEveryModeWithoutWritingACommand();
   await testPredictableViewsConciseModesAndAccessSummaryKeepDraftState();
+  await testExpectationReflectsSetupReadinessInsteadOfClaimingReady();
+  await testExpectationUsesPlainDynamicFactsAndCardSelectionKeepsFocus();
+  await testManagedExpectationStaysPlainAndMobileGetsUnavailableReasons();
+  await testResetNeverSilentlyAppliesACloudDefaultRoute();
+  await testManualRefreshRecoversAModeLoadFailureAndReconnectsStatus();
+  await testManualRefreshForcesCurrentRouteAvailabilityWhileBackgroundChecksThrottle();
+  await testReadinessAndTaskTransitionsRefreshManagedRouteFacts();
   await testCompletedGoalClearsOnlyItsMatchingStaleDraft();
   await testCompletedGoalPreservesASecondGenerationNewDraft();
   await testPausedBackgroundAssistantIsNotCalledAnActiveTask();

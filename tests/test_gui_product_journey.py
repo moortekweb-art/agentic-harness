@@ -180,8 +180,10 @@ def test_gui_primary_form_uses_plain_language_and_progressive_disclosure() -> No
     assert "Access · Entire project" in html
     assert "Technical check for this task" in javascript
     assert 'id="manualConnectionDetails" class="manual-connection"' in html
-    assert "MODE_PRESENTATION" in javascript
-    assert 'label: "Standard"' in javascript
+    assert "function modePresentation(mode)" in javascript
+    assert "function technicalModeLabel(option)" in javascript
+    assert 'id="expectationHeading">What to expect' in html
+    assert 'const DEFAULT_EXECUTION_EFFORT = "standard"' in javascript
     assert objective < modes < verification < access < safe_areas
     assert "Add scope and checks" not in html
     assert "Optional scope" not in html
@@ -197,10 +199,14 @@ def test_gui_explains_why_start_is_disabled() -> None:
     assert "Describe the outcome you want before starting." in javascript
     assert "Ready to start this verified task." in javascript
     assert "The assistant will choose checks and show the evidence" in javascript
-    assert "mode: usesHumanModes() ? state.mode : undefined" in javascript
-    assert "strategy: usesHumanModes() ? undefined : state.mode" in javascript
+    assert "route: usesHumanModes() ? state.route : undefined" in javascript
+    assert "effort: usesHumanModes() ? state.effort : undefined" in javascript
+    assert "strategy: usesHumanModes() ? undefined : state.effort" in javascript
+    assert "mode: usesHumanModes() ? state.mode : undefined" not in javascript
     assert "resetNewGoalForm()" in javascript
-    assert "state.mode = state.modeDefault" in javascript
+    assert 'managedRouteSelection(state.routes, "", state.routeDefault)' in javascript
+    assert "state.effort = state.effortDefault" in javascript
+    assert "Choose Refresh to check the execution routes again." in javascript
 
 
 def test_gui_compacts_mobile_intake_and_collapses_previous_evidence() -> None:
@@ -214,8 +220,13 @@ def test_gui_compacts_mobile_intake_and_collapses_previous_evidence() -> None:
     assert "els.completedDetails.hidden = !terminal" in javascript
     assert "els.artifactsEvidence.hidden = receipt.terminal" in javascript
     assert "#modes {\n    display: none;" in styles
-    assert ".advanced-mode-details {\n    display: none;" in styles
-    assert ".mode-select {\n    display: block;" in styles
+    assert "Change how it runs" in html
+    assert ".advanced-mode-details {" in styles
+    assert ".route-grid:not(.advanced-mode-grid),\n  .profile-grid {\n    display: none;" in styles
+    assert ".mode-select,\n  .choice-select {\n    display: block;" in styles
+    assert 'routeUnavailableReasons.id = "routeUnavailableReasons"' in javascript
+    assert ".mobile-unavailable-reasons {" in styles
+    assert ".mobile-unavailable-reasons[hidden] {" in styles
     assert ".primary-nav" in styles
     assert "flex: 1 1 0" in styles
     assert ".settings-summary" in styles

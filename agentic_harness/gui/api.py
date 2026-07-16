@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any
 import json
 from datetime import UTC, datetime
+from inspect import Parameter, signature
+from pathlib import Path
+from typing import Any, cast
 
-from agentic_harness.core.local_goal_bridge import CommandResult, HUMAN_MODES, LocalGoalBridge
+from agentic_harness.core.local_goal_bridge import (
+    CommandResult,
+    EXTERNAL_CANDIDATE_CONTRACT,
+    LocalGoalBridge,
+    MODE3A_PLANNER,
+    MODE3A_WORKER,
+    MODE4_WORKER,
+    MODE4B_WORKER,
+    managed_mode_record_dispatchable,
+    managed_route_key,
+)
 
 
 TaskPayload = dict[str, Any]
@@ -25,17 +37,783 @@ _TECHNICAL_SUMMARY_TERMS = (
 _PERMANENT_COMMAND_FAILURES = frozenset({2, 126, 127})
 
 
-def modes_payload() -> list[dict[str, Any]]:
+_MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "mode1",
+        "technical_mode": "Mode 1 local start",
+        "backend_id": "opencode_executes_glm52_supervises",
+        "mode_number": "1",
+        "label": "Local build",
+        "summary": "Run the implementation through OpenCode on the local Node1 model lane.",
+        "best_for": "Normal implementation work when the managed local lane is free.",
+        "caution": (
+            "The start route is local quick-start. GLM supervision is advisory and is not "
+            "automatically started or proven by this GUI route."
+        ),
+        "recommended": True,
+        "maturity": "local_start_compatibility",
+        "mutation": "implementation",
+        "data_location": "local_node1",
+        "local_only": True,
+        "network_scope": "local_execution",
+        "planner": "none at start",
+        "executor": "opencode",
+        "worker": "local Node1 model lane",
+        "verification": "deterministic review and acceptance gates",
+        "labs": False,
+        "experimental": False,
+        "requires_scope": False,
+        "hidden": False,
+        "backend_route": "quick-start",
+        "supports_execution_profiles": True,
+        "uses_local_node1": True,
+        "leaves_local_lane_free": False,
+    },
+    {
+        "key": "mode2",
+        "technical_mode": "Mode 2",
+        "backend_id": "opencode_executes_glm52_supervises_codex_spotchecks",
+        "mode_number": "2",
+        "label": "Local build + Codex review",
+        "summary": "Use GLM for routine supervision and reserve Codex for important spot-checks.",
+        "best_for": "Expensive long-running local work where Codex usage should be conserved.",
+        "caution": "This is a supervision policy for an existing goal, not an independent start command.",
+        "recommended": False,
+        "maturity": "policy_only",
+        "mutation": "implementation",
+        "data_location": "mixed_local_cloud",
+        "local_only": False,
+        "network_scope": "mixed",
+        "planner": "GLM-5.2 advisory supervisor",
+        "executor": "opencode",
+        "worker": "local Node1 model lane with Codex spot-checks",
+        "verification": "deterministic gates plus selected Codex review",
+        "labs": False,
+        "experimental": False,
+        "requires_scope": False,
+        "hidden": False,
+        "backend_route": "supervise-existing-goal",
+        "supports_execution_profiles": False,
+        "uses_local_node1": True,
+        "leaves_local_lane_free": False,
+    },
+    {
+        "key": "mode3a",
+        "technical_mode": "Mode 3A",
+        "backend_id": "mode3a_cloud_long_horizon_goal",
+        "mode_number": "3A",
+        "label": "Cloud long run",
+        "summary": "Run a bounded long-horizon goal while leaving the local Node1 lane available.",
+        "best_for": "A separate, explicitly scoped cloud task when the local lane is busy.",
+        "caution": "Source context is sent to the configured cloud planner and worker.",
+        "recommended": False,
+        "maturity": "installed_capability_bounded",
+        "mutation": "implementation",
+        "data_location": "cloud_provider",
+        "local_only": False,
+        "network_scope": "cloud",
+        "planner": MODE3A_PLANNER,
+        "executor": "opencode",
+        "worker": MODE3A_WORKER,
+        "verification": "local reconciliation, deterministic review, and acceptance gates",
+        "labs": False,
+        "experimental": False,
+        "requires_scope": True,
+        "hidden": False,
+        "backend_route": f"enqueue:{MODE3A_WORKER}",
+        "supports_execution_profiles": False,
+        "uses_local_node1": False,
+        "leaves_local_lane_free": True,
+    },
+    {
+        "key": "mode4",
+        "technical_mode": "Mode 4",
+        "backend_id": "glm52_fully_local_long_horizon_executor",
+        "mode_number": "4",
+        "label": "Read-only audit",
+        "summary": "Ask direct GLM-5.2 for an evidence-backed audit or implementation proposal.",
+        "best_for": "Fast review and proposal work that must not change source files.",
+        "caution": "This route cannot implement fixes; it writes managed audit artifacts only.",
+        "recommended": False,
+        "maturity": "audit_proposal_only",
+        "mutation": "audit_only",
+        "data_location": "cloud_provider",
+        "local_only": False,
+        "network_scope": "cloud",
+        "planner": "none",
+        "executor": "direct GLM-5.2 audit worker",
+        "worker": MODE4_WORKER,
+        "verification": "read-only evidence checks and managed audit artifacts",
+        "labs": False,
+        "experimental": False,
+        "requires_scope": False,
+        "hidden": False,
+        "backend_route": f"enqueue:{MODE4_WORKER}:audit-only",
+        "supports_execution_profiles": False,
+        "uses_local_node1": False,
+        "leaves_local_lane_free": True,
+    },
+    {
+        "key": "mode4b",
+        "technical_mode": "Mode 4B",
+        "backend_id": "glm52_direct_implementation_canary",
+        "mode_number": "4B",
+        "label": "One-file implementation canary",
+        "summary": "Evaluate direct GLM implementation inside a one-file experimental boundary.",
+        "best_for": "A deliberate laboratory canary, never normal project work.",
+        "caution": "The installed worker is currently disabled and must not be presented as runnable.",
+        "recommended": False,
+        "maturity": "canary_only",
+        "mutation": "canary_implementation",
+        "data_location": "cloud_provider",
+        "local_only": False,
+        "network_scope": "cloud",
+        "planner": "none",
+        "executor": "direct GLM-5.2 canary worker",
+        "worker": MODE4B_WORKER,
+        "verification": "one-file boundary, deterministic review, and comparison evidence",
+        "labs": True,
+        "experimental": True,
+        "requires_scope": True,
+        "hidden": True,
+        "backend_route": f"enqueue:{MODE4B_WORKER}:canary",
+        "supports_execution_profiles": False,
+        "uses_local_node1": False,
+        "leaves_local_lane_free": True,
+    },
+)
+
+
+_EXECUTION_EFFORTS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "quick",
+        "label": "Quick",
+        "summary": "One narrow, focused implementation pass with a relevant check.",
+        "policy": "Keep scope tight, avoid optional expansion, and verify the requested outcome.",
+        "recommended": False,
+    },
+    {
+        "key": "standard",
+        "label": "Standard",
+        "summary": "Plan briefly, implement the complete request, verify it, and repair relevant failures.",
+        "policy": "Use a short plan and evidence-backed closeout without unnecessary exploration.",
+        "recommended": True,
+    },
+    {
+        "key": "thorough",
+        "label": "Thorough",
+        "summary": "Use checkpoints, persistent repair, and a requirement-by-requirement completion audit.",
+        "policy": "Continue through recoverable failures and preserve durable evidence across attempts.",
+        "recommended": False,
+    },
+)
+
+
+def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]:
+    """Return truthful managed routes, overlaid with current backend readiness.
+
+    Without a bridge this remains a useful schema/UX description, but all
+    execution is marked unavailable. A managed server should pass its bridge so
+    current harness-modes, capabilities, and adapter-matrix facts determine the
+    selectable routes.
+    """
+    routes = [
+        {**spec, "available": False, "enabled": False, "disabled_reason": ""}
+        for spec in _MANAGED_ROUTE_SPECS
+    ]
+    if bridge is None:
+        for route in routes:
+            route["disabled_reason"] = (
+                "Current managed backend availability has not been checked."
+                if route["key"] != "mode4b"
+                else "Mode 4B is disabled until its canary worker is explicitly enabled and verified."
+            )
+        return routes
+    if not bridge.available():
+        for route in routes:
+            route["disabled_reason"] = (
+                "The managed local-goal backend is not installed or executable."
+            )
+        return routes
+
+    modes_result = _bridge_command(bridge, "harness_modes", ["harness-modes", "--json"])
+    capabilities_result = _bridge_command(bridge, "capabilities", ["capabilities", "--json"])
+    matrix_result = _bridge_command(bridge, "adapter_matrix", ["adapter-matrix", "--json"])
+    modes_document = (
+        _json_from_output(modes_result.stdout) if modes_result.returncode == 0 else None
+    )
+    capabilities_document = (
+        _json_from_output(capabilities_result.stdout)
+        if capabilities_result.returncode == 0
+        else None
+    )
+    matrix_document = (
+        _json_from_output(matrix_result.stdout) if matrix_result.returncode == 0 else None
+    )
+    registry = _mode_registry(modes_document)
+    capabilities = _capabilities_document(capabilities_document)
+    workers = _worker_registry(matrix_document)
+
+    if not registry and isinstance(capabilities.get("lanes"), dict):
+        return _legacy_modes_payload(capabilities_document)
+
+    recommended_id = str((modes_document or {}).get("recommended_default_mode") or "")
+    local_lane = _dictionary(_dictionary(capabilities.get("lanes")).get("local"))
+    cloud_lane = _dictionary(_dictionary(capabilities.get("lanes")).get("cloud_executor"))
+    current_contract_ok = bool(
+        (modes_document or {}).get("contract") == "local_goal_harness_modes.v1"
+        and (modes_document or {}).get("status") == "available"
+    )
+    contract_ok = bool(
+        current_contract_ok
+        or _document_supports_contract(capabilities_document, EXTERNAL_CANDIDATE_CONTRACT)
+    )
+    candidate_contract_ok = _document_supports_contract(
+        capabilities_document, EXTERNAL_CANDIDATE_CONTRACT
+    )
+    adapter_document: dict[str, Any] | None = None
+    turnstone_executable = _is_turnstone_bridge(bridge)
+    if turnstone_executable:
+        adapter_result = _bridge_command(
+            bridge,
+            "mode3a_adapter_status",
+            ["turnstone-monitor", "--json"],
+        )
+        if adapter_result.returncode == 0:
+            adapter_document = _json_from_output(adapter_result.stdout)
+    adapter = _dictionary(adapter_document)
+    turnstone_monitor_proven = bool(adapter.get("contract") == "agentic_harness_turnstone_mode3.v1")
+    turnstone_adapter = turnstone_executable
+
+    for route in routes:
+        backend = registry.get(str(route["backend_id"]), {})
+        if backend:
+            route["technical_label"] = str(backend.get("label") or route["label"])
+            route["best_for"] = str(backend.get("use_for") or route["best_for"])
+            route["canonical_maturity"] = str(backend.get("readiness") or route["maturity"])
+            if route["key"] != "mode1":
+                route["maturity"] = route["canonical_maturity"]
+            route["backend_gates"] = _string_list(backend.get("gates"))
+        route["recommended"] = bool(
+            route["key"] == "mode1"
+            and (not recommended_id or recommended_id == route["backend_id"])
+        )
+
+        if not backend:
+            route["disabled_reason"] = (
+                "The current harness mode registry does not advertise this route."
+            )
+            continue
+        key = route["key"]
+        if key == "mode1":
+            if not current_contract_ok or not managed_mode_record_dispatchable(backend):
+                route["available"] = False
+                route["disabled_reason"] = _managed_mode_disabled_reason(
+                    backend,
+                    contract_ok=current_contract_ok,
+                )
+            else:
+                route["available"] = _lane_available(local_lane)
+                route["disabled_reason"] = (
+                    "" if route["available"] else _lane_disabled_reason(local_lane)
+                )
+        elif key == "mode2":
+            route["available"] = False
+            route["disabled_reason"] = (
+                "Mode 2 supervises an already-running local goal; no independent safe start "
+                "operation is advertised by the managed backend."
+            )
+        elif key == "mode3a":
+            if not current_contract_ok or not managed_mode_record_dispatchable(backend):
+                route["available"] = False
+                route["disabled_reason"] = _managed_mode_disabled_reason(
+                    backend,
+                    contract_ok=current_contract_ok,
+                )
+            elif turnstone_adapter:
+                route.update(
+                    {
+                        "technical_mode": "Mode 3A via Turnstone",
+                        "label": "Turnstone long run",
+                        "summary": (
+                            "Use Turnstone's cloud GLM coordinator to plan and its local "
+                            "Node1 model child to perform bounded implementation."
+                        ),
+                        "caution": (
+                            "This adapter uses the local Node1 model for implementation; it "
+                            "does not leave Node1 free for another local model workload."
+                        ),
+                        "data_location": "mixed_local_cloud",
+                        "network_scope": "mixed",
+                        "planner": "glm-coordinator (LiteLLM GLM cloud coordinator)",
+                        "executor": "local-builder (LiteLLM local-node1-vllm)",
+                        "worker": "local Node1 vLLM child",
+                        "backend_route": "turnstone:mode3a",
+                        "adapter_contract": "agentic_harness_turnstone_mode3.v1",
+                        "route_facts_proven": turnstone_monitor_proven,
+                        "uses_local_node1": True,
+                        "leaves_local_lane_free": False,
+                    }
+                )
+                adapter_active = adapter.get("active") is True
+                adapter_state = str(
+                    adapter.get("classification") or adapter.get("status") or ""
+                ).lower()
+                route["available"] = bool(
+                    candidate_contract_ok
+                    and turnstone_monitor_proven
+                    and _lane_available(cloud_lane)
+                    and not adapter_active
+                    and adapter_state in {"ready", "done"}
+                )
+                if route["available"]:
+                    route["disabled_reason"] = ""
+                elif not candidate_contract_ok:
+                    route["disabled_reason"] = (
+                        "The Turnstone wrapper does not advertise the required external "
+                        "candidate dispatch contract."
+                    )
+                elif not turnstone_monitor_proven:
+                    route["disabled_reason"] = (
+                        "Turnstone route identity or readiness could not be verified from "
+                        "its managed adapter contract."
+                    )
+                elif adapter_active:
+                    route["disabled_reason"] = "A Turnstone long run is already active."
+                elif not _lane_available(cloud_lane):
+                    route["disabled_reason"] = _lane_disabled_reason(cloud_lane)
+                else:
+                    route["disabled_reason"] = str(
+                        adapter.get("summary")
+                        or "The Turnstone adapter is not ready for another task."
+                    )
+            else:
+                worker = workers.get(MODE3A_WORKER, {})
+                route["available"] = bool(
+                    contract_ok
+                    and _lane_available(cloud_lane)
+                    and _worker_available(worker, mutation="implementation")
+                )
+                route["disabled_reason"] = (
+                    ""
+                    if route["available"]
+                    else _cloud_disabled_reason(contract_ok, cloud_lane, worker, MODE3A_WORKER)
+                )
+        elif key == "mode4":
+            route["available"] = False
+            route["disabled_reason"] = (
+                "Mode 4 audit dispatch is disabled until the managed wrapper advertises a "
+                "distinct audit-only routing contract."
+            )
+        elif key == "mode4b":
+            route["available"] = False
+            route["hidden"] = True
+            route["disabled_reason"] = (
+                "Mode 4B is a disabled implementation canary and cannot be started from "
+                "the managed GUI."
+            )
+        route["enabled"] = route["available"]
+    return routes
+
+
+def execution_efforts_payload() -> list[dict[str, Any]]:
+    return [dict(effort) for effort in _EXECUTION_EFFORTS]
+
+
+def execution_profiles_payload(
+    bridge: LocalGoalBridge | None = None,
+) -> list[dict[str, Any]]:
+    """Expose installation-specific model profiles only when the backend proves support."""
+    if bridge is None or not bridge.available():
+        return []
+    result = _bridge_command(
+        bridge,
+        "model_profile_status",
+        ["model-profile-status", "--json"],
+    )
+    payload = _json_from_output(result.stdout) if result.returncode == 0 else None
+    if not isinstance(payload, dict) or payload.get("contract") != "node1_model_profile.v1":
+        return []
+    current = str(payload.get("profile") or "")
     return [
         {
-            "key": mode.key,
-            "number": mode.number,
-            "label": mode.title,
-            "best_for": mode.best_for,
-            "caution": mode.caution,
-        }
-        for mode in HUMAN_MODES
+            "key": "qwen-primary",
+            "label": "Qwen primary",
+            "summary": "Production local lane with text, tools, and vision.",
+            "caution": "Recommended default. No temporary model window is needed.",
+            "vision": True,
+            "recommended": True,
+            "requires_swap": False,
+            "route_key": "mode1",
+            "active": current == "qwen-primary",
+        },
+        {
+            "key": "ornith-text",
+            "label": "Ornith fast text",
+            "summary": "Higher-throughput local text and tool lane on the same GPUs.",
+            "caution": "Text only. Qwen is restored when the attached goal finishes or start-up fails.",
+            "vision": False,
+            "recommended": False,
+            "requires_swap": True,
+            "route_key": "mode1",
+            "active": current == "ornith-text",
+        },
     ]
+
+
+def _bridge_command(
+    bridge: LocalGoalBridge,
+    method_name: str,
+    args: list[str],
+) -> CommandResult:
+    method = getattr(bridge, method_name, None)
+    try:
+        if callable(method):
+            return cast(CommandResult, method())
+        return bridge.run(args)
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        return CommandResult(tuple(args), 127, "", str(exc))
+
+
+def _is_turnstone_bridge(bridge: LocalGoalBridge) -> bool:
+    """Recognize the deployed adapter without applying its facts to generic wrappers."""
+    local_goal = getattr(bridge, "local_goal", None)
+    return local_goal is not None and Path(str(local_goal)).name == "local-goal-turnstone"
+
+
+def _dictionary(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _mode_registry(payload: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    rows = _dictionary(payload).get("modes")
+    if not isinstance(rows, list):
+        return {}
+    return {
+        str(row["id"]): row
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("id"), str)
+    }
+
+
+def _capabilities_document(payload: dict[str, Any] | None) -> dict[str, Any]:
+    document = _dictionary(payload)
+    nested = document.get("capabilities")
+    return nested if isinstance(nested, dict) else document
+
+
+def _worker_registry(payload: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    rows = _dictionary(payload).get("matrix")
+    if not isinstance(rows, list):
+        return {}
+    return {
+        str(row["worker"]): row
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("worker"), str)
+    }
+
+
+def _document_supports_contract(payload: dict[str, Any] | None, contract: str) -> bool:
+    document = _dictionary(payload)
+    containers = [document]
+    nested = document.get("capabilities")
+    if isinstance(nested, dict):
+        containers.append(nested)
+    return any(
+        isinstance(container.get("external_candidate_contracts"), list)
+        and contract in container["external_candidate_contracts"]
+        for container in containers
+    )
+
+
+def _lane_available(lane: dict[str, Any]) -> bool:
+    return lane.get("installed") is True and lane.get("available_now") is True
+
+
+def _lane_disabled_reason(lane: dict[str, Any]) -> str:
+    if not lane:
+        return "The current backend did not advertise this execution lane."
+    if lane.get("installed") is not True:
+        return "This execution lane is not installed."
+    reason = str(lane.get("unavailable_reason") or lane.get("availability_reason") or "").strip()
+    return reason.replace("_", " ") if reason else "This execution lane is not available right now."
+
+
+def _worker_available(worker: dict[str, Any], *, mutation: str) -> bool:
+    readiness = str(worker.get("readiness") or "").lower()
+    return (
+        bool(worker)
+        and worker.get("enabled") is True
+        and worker.get("binary_resolved") is not False
+        and readiness not in {"blocked", "disabled", "retired"}
+        and worker.get("mutation_default") == mutation
+    )
+
+
+def _managed_mode_disabled_reason(
+    mode: dict[str, Any],
+    *,
+    contract_ok: bool,
+) -> str:
+    if not contract_ok:
+        return "The managed mode registry contract is missing or unavailable."
+    blockers = _string_list(mode.get("blockers"))
+    if blockers:
+        return f"This route is blocked by the managed registry: {', '.join(blockers)}."
+    readiness = str(mode.get("readiness") or "").strip().replace("_", " ")
+    if readiness:
+        return f"The managed registry marks this route as {readiness}."
+    return "The managed registry does not mark this route as dispatchable."
+
+
+def _cloud_disabled_reason(
+    contract_ok: bool,
+    lane: dict[str, Any],
+    worker: dict[str, Any],
+    worker_name: str,
+) -> str:
+    if not contract_ok:
+        return (
+            "The backend does not advertise the current managed-mode or legacy candidate contract."
+        )
+    if not _lane_available(lane):
+        return _lane_disabled_reason(lane)
+    if not worker:
+        return f"The worker registry does not advertise {worker_name}."
+    if worker.get("enabled") is not True:
+        return f"The worker {worker_name} is disabled."
+    blockers = _string_list(worker.get("blockers"))
+    if blockers:
+        return f"The worker {worker_name} is blocked: {', '.join(blockers)}."
+    return f"The worker {worker_name} has not passed the required dispatch contract."
+
+
+def _legacy_modes_payload(
+    capabilities_payload: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Describe a generic older local-goal backend without assigning canonical mode numbers."""
+    capabilities = _capabilities_document(capabilities_payload)
+    lanes = _dictionary(capabilities.get("lanes"))
+    local = _dictionary(lanes.get("local"))
+    guided = _dictionary(lanes.get("premium_planner_local_builder"))
+    cloud = _dictionary(lanes.get("cloud_executor"))
+    candidate_contract = _document_supports_contract(
+        capabilities_payload, EXTERNAL_CANDIDATE_CONTRACT
+    )
+
+    def record(
+        *,
+        key: str,
+        label: str,
+        summary: str,
+        lane: dict[str, Any],
+        backend_route: str,
+        planner: str,
+        executor: str,
+        worker: str,
+        mutation: str,
+        data_location: str,
+        labs: bool = False,
+        experimental: bool = False,
+        requires_scope: bool = False,
+        available_override: bool | None = None,
+        disabled_reason: str = "",
+    ) -> dict[str, Any]:
+        available = _legacy_lane_available(lane)
+        if available_override is not None:
+            available = available_override
+        return {
+            "key": key,
+            "technical_mode": "Compatibility route",
+            "backend_id": f"legacy-{key}",
+            "mode_number": "",
+            "label": label,
+            "summary": summary,
+            "best_for": summary,
+            "caution": (
+                "This backend does not advertise the current canonical harness-mode registry; "
+                "routing follows its legacy capabilities contract."
+            ),
+            "available": available,
+            "enabled": available,
+            "recommended": key == "local",
+            "maturity": str(lane.get("classification") or "legacy_compatibility"),
+            "mutation": mutation,
+            "data_location": data_location,
+            "local_only": False,
+            "network_scope": "managed",
+            "planner": planner,
+            "executor": executor,
+            "worker": worker,
+            "verification": "managed backend review and acceptance",
+            "labs": labs,
+            "experimental": experimental,
+            "requires_scope": requires_scope,
+            "hidden": experimental and not available,
+            "disabled_reason": ""
+            if available
+            else (disabled_reason or _legacy_lane_disabled_reason(lane)),
+            "backend_route": backend_route,
+            "supports_execution_profiles": False,
+        }
+
+    executor = str(local.get("executor") or "opencode")
+    planners = _string_list(guided.get("planners"))
+    planner = "gpt-5.5" if "gpt-5.5" in planners else (planners[0] if planners else "planner")
+    workers = _string_list(cloud.get("executor_workers"))
+    configured_worker = str(cloud.get("default_executor_worker") or "")
+    worker = configured_worker if configured_worker in workers else (workers[0] if workers else "")
+    canaries = _string_list(cloud.get("adapter_canary_workers"))
+    canary = canaries[0] if canaries else ""
+    return [
+        record(
+            key="local",
+            label="Local build",
+            summary="Run through the local executor advertised by this installation.",
+            lane=local,
+            backend_route="quick-start",
+            planner="none",
+            executor=executor,
+            worker="managed local lane",
+            mutation="implementation",
+            data_location="managed_local",
+        ),
+        record(
+            key="guided",
+            label="Planned local build",
+            summary="Use an advertised planner before the managed local executor.",
+            lane=guided,
+            backend_route="premium-start",
+            planner=planner,
+            executor=executor,
+            worker="managed local lane",
+            mutation="implementation",
+            data_location="mixed_or_managed",
+        ),
+        record(
+            key="cloud",
+            label="Managed cloud queue",
+            summary="Queue work through the generic cloud worker advertised by this installation.",
+            lane=cloud,
+            backend_route="enqueue",
+            planner=planner,
+            executor=executor,
+            worker=worker,
+            mutation="implementation",
+            data_location="managed_cloud",
+            available_override=bool(candidate_contract and _legacy_lane_available(cloud)),
+            disabled_reason=(
+                "The legacy cloud route requires the explicitly advertised external "
+                "candidate contract."
+            ),
+        ),
+        record(
+            key="experimental",
+            label="Advertised worker canary",
+            summary="Run a bounded canary only when the legacy backend advertises one.",
+            lane=cloud,
+            backend_route="enqueue:canary",
+            planner="none",
+            executor=executor,
+            worker=canary,
+            mutation="canary_implementation",
+            data_location="managed_cloud",
+            labs=True,
+            experimental=True,
+            requires_scope=True,
+            available_override=bool(
+                candidate_contract and _legacy_lane_available(cloud) and canary
+            ),
+            disabled_reason="No safely advertised legacy adapter canary is available.",
+        ),
+    ]
+
+
+def _legacy_lane_available(lane: dict[str, Any]) -> bool:
+    return bool(
+        lane and lane.get("installed") is not False and lane.get("available_now") is not False
+    )
+
+
+def _legacy_lane_disabled_reason(lane: dict[str, Any]) -> str:
+    if not lane:
+        return "This legacy backend did not advertise the route."
+    return _lane_disabled_reason(lane)
+
+
+def _objective_with_effort(objective: str, effort: str) -> str:
+    policies = {
+        "quick": (
+            "Keep the scope narrow and complete the requested outcome in one focused pass. "
+            "Avoid optional expansion, but run the most relevant verification before closeout."
+        ),
+        "standard": (
+            "Make a short plan, implement the complete request, run relevant verification, "
+            "and repair failures caused by the change before closeout."
+        ),
+        "thorough": (
+            "Use durable checkpoints, persist through recoverable failures, and finish with a "
+            "requirement-by-requirement audit plus recorded verification evidence."
+        ),
+    }
+    return "\n".join(
+        [
+            "Managed task request",
+            "",
+            "Original objective (preserve this exactly):",
+            objective,
+            "",
+            f"Execution effort: {effort}",
+            policies[effort],
+            "",
+            "The effort policy changes depth and persistence, not the selected execution route.",
+        ]
+    )
+
+
+def _accepts_keyword(function: object, keyword: str) -> bool:
+    try:
+        parameters = signature(function).parameters.values()  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == keyword or parameter.kind is Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+def _annotate_requested_execution(
+    task: TaskPayload,
+    *,
+    objective: str,
+    route: str,
+    effort: str,
+    execution_profile: str,
+    safe_areas: tuple[str, ...],
+    checks: tuple[str, ...],
+) -> TaskPayload:
+    task["objective"] = objective
+    metadata = task.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        task["metadata"] = metadata
+    metadata.update(
+        {
+            "route_key": route,
+            "effort": effort,
+            "execution_profile": execution_profile,
+            "safe_areas": list(safe_areas),
+            "checks": list(checks),
+        }
+    )
+    metadata["execution_expectation"] = {
+        "route_key": route,
+        "effort": effort,
+        "execution_profile": execution_profile
+        if route in {"mode1", "legacy-guided"}
+        else "not_applicable",
+    }
+    return task
 
 
 def health_payload(bridge: LocalGoalBridge) -> dict[str, Any]:
@@ -107,7 +885,9 @@ def readiness_payload(
         )
     task = status_task(bridge)
     gate = dict(task.get("readiness_gate", {}))
-    gate["agent_loop"] = task.get("agent_loop", _agent_loop_for_status(str(task.get("status", "ready"))))
+    gate["agent_loop"] = task.get(
+        "agent_loop", _agent_loop_for_status(str(task.get("status", "ready")))
+    )
     return gate
 
 
@@ -116,7 +896,10 @@ def start_task(
     body: dict[str, Any],
 ) -> TaskPayload:
     objective = str(body.get("objective", "")).strip()
-    mode = str(body.get("mode", "cloud")).strip() or "cloud"
+    requested_route = str(body.get("route") or body.get("mode") or "mode1").strip() or "mode1"
+    effort = str(body.get("effort", "standard")).strip().lower() or "standard"
+    requested_profile = str(body.get("execution_profile", "")).strip()
+    execution_profile = requested_profile or "automatic"
     safe_areas = tuple(_string_list(body.get("safe_areas")))
     checks = tuple(_string_list(body.get("checks")))
     if not objective:
@@ -125,6 +908,106 @@ def start_task(
             summary="Tell the assistant what you want done first.",
             needs_human=True,
             advanced_details={"error": "objective must not be empty"},
+        )
+    try:
+        route = managed_route_key(requested_route)
+    except ValueError as exc:
+        return _task(
+            status="blocked",
+            summary=str(exc),
+            needs_human=True,
+            advanced_details={"error": str(exc)},
+        )
+    if effort not in {row["key"] for row in _EXECUTION_EFFORTS}:
+        return _task(
+            status="blocked",
+            summary="Choose Quick, Standard, or Thorough effort.",
+            needs_human=True,
+            advanced_details={"error": f"unsupported execution effort: {effort}"},
+        )
+    if route == "mode2":
+        return _annotate_requested_execution(
+            _task(
+                status="blocked",
+                summary=(
+                    "Mode 2 is not available as a standalone start route. Start Mode 1, then "
+                    "use the managed supervision workflow when it is explicitly available."
+                ),
+                needs_human=True,
+                advanced_details={"error": "mode2_not_independently_dispatchable"},
+            ),
+            objective=objective,
+            route=route,
+            effort=effort,
+            execution_profile=execution_profile,
+            safe_areas=safe_areas,
+            checks=checks,
+        )
+    if route == "mode4b":
+        return _annotate_requested_execution(
+            _task(
+                status="blocked",
+                summary="Mode 4B is not available because its implementation-canary worker is disabled.",
+                needs_human=True,
+                advanced_details={"error": "mode4b_worker_disabled"},
+            ),
+            objective=objective,
+            route=route,
+            effort=effort,
+            execution_profile=execution_profile,
+            safe_areas=safe_areas,
+            checks=checks,
+        )
+    if route == "legacy-experimental":
+        return _annotate_requested_execution(
+            _task(
+                status="blocked",
+                summary=(
+                    "The former experimental route is retired because this backend cannot "
+                    "prove a distinct bounded canary dispatch contract."
+                ),
+                needs_human=True,
+                advanced_details={"error": "legacy_experimental_route_retired"},
+            ),
+            objective=objective,
+            route=route,
+            effort=effort,
+            execution_profile=execution_profile,
+            safe_areas=safe_areas,
+            checks=checks,
+        )
+    if route == "mode4":
+        return _annotate_requested_execution(
+            _task(
+                status="blocked",
+                summary=(
+                    "Mode 4 audit dispatch is not available because this backend does not "
+                    "yet provide a distinct audit-only routing contract."
+                ),
+                needs_human=True,
+                advanced_details={"error": "mode4_audit_route_not_distinct"},
+            ),
+            objective=objective,
+            route=route,
+            effort=effort,
+            execution_profile=execution_profile,
+            safe_areas=safe_areas,
+            checks=checks,
+        )
+    if route in {"mode3a", "legacy-cloud"} and not safe_areas:
+        return _annotate_requested_execution(
+            _task(
+                status="blocked",
+                summary="Cloud long runs require at least one explicit allowed file or scope area.",
+                needs_human=True,
+                advanced_details={"error": "mode3a_scope_required"},
+            ),
+            objective=objective,
+            route=route,
+            effort=effort,
+            execution_profile=execution_profile,
+            safe_areas=safe_areas,
+            checks=checks,
         )
     if not bridge.available():
         return _task(
@@ -146,13 +1029,57 @@ def start_task(
             needs_human=True,
             advanced_details={"readiness": readiness},
         )
-    try:
-        result = bridge.start_human_goal(
-            mode_key=mode,
+    if route == "mode1":
+        available_profiles = execution_profiles_payload(bridge)
+        default_profile = "qwen-primary" if available_profiles else "automatic"
+        execution_profile = requested_profile or default_profile
+        if execution_profile not in {
+            "automatic",
+            *[str(row["key"]) for row in available_profiles],
+        }:
+            return _annotate_requested_execution(
+                _task(
+                    status="blocked",
+                    summary="Choose a supported local execution profile.",
+                    needs_human=True,
+                    advanced_details={
+                        "error": f"unsupported execution profile: {execution_profile}"
+                    },
+                ),
+                objective=objective,
+                route=route,
+                effort=effort,
+                execution_profile=execution_profile,
+                safe_areas=safe_areas,
+                checks=checks,
+            )
+    elif execution_profile != "automatic":
+        return _annotate_requested_execution(
+            _task(
+                status="blocked",
+                summary="Local model profiles apply only to the Mode 1 local execution lane.",
+                needs_human=True,
+                advanced_details={"error": "execution_profile_not_applicable"},
+            ),
             objective=objective,
+            route=route,
+            effort=effort,
+            execution_profile=execution_profile,
             safe_areas=safe_areas,
             checks=checks,
         )
+    try:
+        start_kwargs: dict[str, Any] = {
+            "mode_key": route,
+            "objective": _objective_with_effort(objective, effort),
+            "safe_areas": safe_areas,
+            "checks": checks,
+        }
+        if execution_profile != "automatic" and _accepts_keyword(
+            bridge.start_human_goal, "execution_profile"
+        ):
+            start_kwargs["execution_profile"] = execution_profile
+        result = bridge.start_human_goal(**start_kwargs)
     except ValueError as exc:
         return _task(
             status="blocked",
@@ -160,7 +1087,15 @@ def start_task(
             needs_human=True,
             advanced_details={"error": str(exc)},
         )
-    return task_from_command_result(result, fallback_status="starting")
+    return _annotate_requested_execution(
+        task_from_command_result(result, fallback_status="starting"),
+        objective=objective,
+        route=route,
+        effort=effort,
+        execution_profile=execution_profile,
+        safe_areas=safe_areas,
+        checks=checks,
+    )
 
 
 def status_task(bridge: LocalGoalBridge) -> TaskPayload:
@@ -184,7 +1119,9 @@ def status_task(bridge: LocalGoalBridge) -> TaskPayload:
             ]
             return _task(
                 status="done",
-                summary=str(last_run.get("summary") or "The managed reviewer accepted this result."),
+                summary=str(
+                    last_run.get("summary") or "The managed reviewer accepted this result."
+                ),
                 needs_human=False,
                 changed_files=_string_list(last_run.get("owned_files_sample")),
                 verification=_string_list(last_run.get("verification")),
@@ -205,7 +1142,9 @@ def watch_task(bridge: LocalGoalBridge) -> TaskPayload:
     return task_from_command_result(bridge.monitor(json_output=True), fallback_status="checking")
 
 
-def command_task(bridge: LocalGoalBridge, command: str, body: dict[str, Any] | None = None) -> TaskPayload:
+def command_task(
+    bridge: LocalGoalBridge, command: str, body: dict[str, Any] | None = None
+) -> TaskPayload:
     if not bridge.available():
         return status_task(bridge)
     body = body or {}
@@ -245,13 +1184,41 @@ def task_from_command_result(result: CommandResult, *, fallback_status: str) -> 
         "stdout": result.stdout,
         "stderr": result.stderr,
     }
+    if result.metadata:
+        advanced_details["command_metadata"] = result.metadata
     if parsed is not None:
         advanced_details["payload"] = parsed
+    if result.metadata.get("profile_recovery") == "failed":
+        return _task(
+            status="needs_review",
+            summary=str(
+                result.metadata.get("summary")
+                or "The requested model change failed and the primary model could not be restored."
+            ),
+            needs_human=True,
+            advanced_details={
+                **advanced_details,
+                "permanent_error": True,
+                "profile_state_unknown": True,
+            },
+        )
+    if result.metadata.get("profile_attachment") == "reconciliation_required":
+        return _task(
+            status="needs_review",
+            summary=str(
+                result.metadata.get("summary")
+                or "The goal started, but its temporary model lease needs reconciliation."
+            ),
+            needs_human=True,
+            advanced_details=advanced_details,
+        )
     if result.returncode != 0:
         permanent = result.returncode in _PERMANENT_COMMAND_FAILURES
         return _task(
             status="blocked" if permanent else "checking",
-            summary=_clean_summary(result.stderr or result.stdout or "The task could not move forward."),
+            summary=_clean_summary(
+                result.stderr or result.stdout or "The task could not move forward."
+            ),
             needs_human=permanent,
             advanced_details={
                 **advanced_details,
@@ -444,7 +1411,7 @@ def _external_last_run_is_valid(
         and _normalize_status(last_run.get("status")) == "done"
         and last_run.get("review_status") == "accepted"
         and run_dir == active.get("run_dir")
-        and last_run.get("complete_source") == "global"
+        and last_run.get("complete_source") in {"global", "run-local"}
         and isinstance(last_run.get("summary"), str)
         and bool(last_run["summary"].strip())
         and last_run.get("owned_file_count") == len(owned)
@@ -563,9 +1530,7 @@ def _runtime_context(status: str, details: dict[str, Any]) -> dict[str, Any]:
         },
         "plan": _workflow_plan(status),
         "requirements": (
-            [{"status": "active", "text": f"Requested outcome: {objective}"}]
-            if objective
-            else []
+            [{"status": "active", "text": f"Requested outcome: {objective}"}] if objective else []
         ),
         "events": events,
     }
@@ -581,7 +1546,11 @@ def _current_action(status: str, iteration: int) -> str:
     if status == "starting":
         return "Preparing the task"
     if status == "working":
-        return f"Working through the request (pass {iteration})" if iteration else "Working through the request"
+        return (
+            f"Working through the request (pass {iteration})"
+            if iteration
+            else "Working through the request"
+        )
     if status == "checking":
         return "Checking the evidence"
     if status == "needs_review":
@@ -696,7 +1665,9 @@ def _readiness_gate(status: str, summary: str, details: dict[str, Any]) -> dict[
     active_run_dir = ""
     payload = details.get("payload")
     if isinstance(payload, dict):
-        active_run_dir = _nested_string(payload, ("capabilities", "current_state", "active_run_dir"))
+        active_run_dir = _nested_string(
+            payload, ("capabilities", "current_state", "active_run_dir")
+        )
         active_goal = payload.get("active_goal")
         if not active_run_dir and isinstance(active_goal, dict):
             run_dir = active_goal.get("run_dir")
@@ -768,7 +1739,11 @@ def _status_from_payload(payload: dict[str, Any] | None, *, fallback_status: str
         return "working"
     if _payload_reports_completion(payload):
         return "done" if _payload_is_accepted(payload) else "needs_review"
-    if payload.get("active") is False or payload.get("active_goal") is None and "active_goal" in payload:
+    if (
+        payload.get("active") is False
+        or payload.get("active_goal") is None
+        and "active_goal" in payload
+    ):
         return "ready"
 
     recovery_status = _recovery_status(payload)
@@ -794,9 +1769,14 @@ def _status_from_payload(payload: dict[str, Any] | None, *, fallback_status: str
         return status
 
     text = json.dumps(payload, sort_keys=True).lower()
-    if any(marker in text for marker in ("needs_review", "awaiting_review", '"review"', "needs review")):
+    if any(
+        marker in text for marker in ("needs_review", "awaiting_review", '"review"', "needs review")
+    ):
         return "needs_review"
-    if any(marker in text for marker in ("blocked", "failed", "error", "operator_intervention_required")):
+    if any(
+        marker in text
+        for marker in ("blocked", "failed", "error", "operator_intervention_required")
+    ):
         return "blocked"
     if any(marker in text for marker in ("stopped", "cancelled", "canceled")):
         return "stopped"
@@ -814,7 +1794,10 @@ def _recovery_status(payload: dict[str, Any]) -> str:
         # override the current, authoritative lane-ready state or a new user
         # will see an unrelated historical run as a blocking active task.
         return ""
-    if payload.get("hard_blocked") is True or recovery.get("operator_intervention_required") is True:
+    if (
+        payload.get("hard_blocked") is True
+        or recovery.get("operator_intervention_required") is True
+    ):
         return "blocked"
     runtime = payload.get("runtime")
     loop_state = runtime.get("loop_state") if isinstance(runtime, dict) else None
@@ -900,7 +1883,9 @@ def _summary_from_payload(
                 if isinstance(reason, str) and reason.strip():
                     return _human_summary(_clean_summary(reason), "blocked")
             return "The same blocker repeated without progress and now needs a decision."
-        recommended = _nested_string(payload, ("capabilities", "current_state", "recommended_action"))
+        recommended = _nested_string(
+            payload, ("capabilities", "current_state", "recommended_action")
+        )
         if recommended:
             return _human_summary(_clean_summary(recommended), fallback_status)
         for key in ("summary", "message", "status", "classification"):

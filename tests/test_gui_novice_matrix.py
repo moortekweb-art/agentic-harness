@@ -22,12 +22,12 @@ NOVICE_GOALS = (
     "The app looks frozen. Please investigate the cause, fix it, and show me how you know it is working.",
 )
 
-MODES = ("local", "guided", "cloud", "experimental")
+SUPPORTED_MODES = ("local", "guided", "cloud")
 
 
-@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("mode", SUPPORTED_MODES)
 @pytest.mark.parametrize("goal", NOVICE_GOALS)
-def test_forty_plain_language_goals_route_through_each_human_mode(
+def test_plain_language_goals_route_through_each_supported_human_mode(
     tmp_path: Path,
     mode: str,
     goal: str,
@@ -58,8 +58,31 @@ def test_forty_plain_language_goals_route_through_each_human_mode(
         "local": "quick-start",
         "guided": "premium-start",
         "cloud": "enqueue",
-        "experimental": "enqueue",
     }[mode]
     assert expected_action in calls[-1]
-    if mode == "experimental":
-        assert "Experimental external executor canary" in flattened
+
+
+@pytest.mark.parametrize("goal", NOVICE_GOALS)
+def test_plain_language_goals_cannot_reactivate_retired_experimental_route(
+    tmp_path: Path,
+    goal: str,
+) -> None:
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, '{"status":"available"}', "")
+
+    executable = tmp_path / "local-goal"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    bridge = LocalGoalBridge(doc_root=tmp_path, local_goal=executable, runner=runner)
+
+    result = bridge.start_human_goal(mode_key="experimental", objective=goal)
+
+    assert result.returncode == 2
+    assert "retired" in result.stderr.lower()
+    assert all(
+        not any(action in call for action in ("quick-start", "premium-start", "enqueue"))
+        for call in calls
+    )

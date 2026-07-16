@@ -14,8 +14,11 @@ script, prompt, or internal agent transcript:
 - Is the result `Verified done`, `Blocked with reason`, or `Failed with
   evidence`?
 
-The browser app is a human layer over the same durable engine used by the CLI.
-It simplifies language; it does not weaken review or invent progress.
+For the portable embedded backend, the browser app is a human layer over the
+same durable engine used by the CLI. Managed installations can connect an
+external orchestration adapter while preserving the same visible evidence and
+fail-closed product contract. The interface simplifies language; it does not
+weaken review or invent progress.
 
 ## Predictable product structure
 
@@ -38,11 +41,19 @@ Settings asks for three decisions:
 3. **Independent check** — automatically detected project tests when possible,
    with the raw command under **Technical check**.
 
-The Home view separately asks how the assistant should work: Quick, Standard,
-Thorough, or the advanced Experiment mode. These are execution strategies, not
-provider modes. The selected strategy remains visible while the task runs.
-Experiment explains and enforces its built-in-worker and explicit-access
-requirements before Start is enabled.
+The Home view separately asks how much effort the assistant should use: Quick,
+Standard, Thorough, or the advanced Experiment strategy. These are execution
+strategies, not provider or orchestration modes. The selected effort remains
+visible while the task runs. Experiment explains and enforces its
+built-in-worker and explicit-access requirements before Start is enabled.
+
+Managed installations add a compact **What to expect** card. The default view
+shows the selected effort and resolved execution summary; **Change how it runs**
+reveals the supported user-facing route catalog and any model profiles proven
+by that installation. Backend mode identifiers remain small technical badges
+beside plain labels. Routes that are currently unavailable stay disabled with a
+reason; non-product internal canaries can remain hidden. The interface does not
+silently fall back across local, private-network, or cloud boundaries.
 
 The interface does not ask users to classify a task as Create, Fix, Check, or
 Explain because those choices do not alter execution. One ordinary sentence is
@@ -71,6 +82,8 @@ and tool-call limits. Reaching a limit produces `Blocked with reason` or
 - Show the selected workspace and execution method.
 - Accept one complete task in ordinary language.
 - Show **Checks · Automatic** and **Access · Entire project** by default.
+- For managed installations, show the resolved route, model profile, data
+  location, planner, executor, verification, and maturity before submission.
 - Let advanced users override the technical check or limit access.
 - Disable Start until setup, objective, and independent verification are valid.
 

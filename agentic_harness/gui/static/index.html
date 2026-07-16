@@ -311,17 +311,76 @@
 
           <section id="modeSection" class="mode-section">
             <div class="mode-heading">
-              <span class="field-label">Run mode</span>
-              <span class="mode-recommendation">Standard is recommended.</span>
+              <div>
+                <span class="field-label">Task effort</span>
+                <p class="help-text">Choose how much time the assistant should spend. This does not change where the work runs.</p>
+              </div>
+              <span class="mode-recommendation" id="effortRecommendation">Standard is recommended.</span>
             </div>
-            <label class="visually-hidden" for="modeSelect">Run mode</label>
-            <select id="modeSelect" class="mode-select" aria-label="Run mode"></select>
-            <div class="mode-grid" id="modes" role="group" aria-label="Run mode"></div>
+            <label class="visually-hidden" for="modeSelect">Task effort</label>
+            <select id="modeSelect" class="mode-select" aria-label="Task effort"></select>
+            <div class="mode-grid" id="modes" role="group" aria-label="Task effort"></div>
             <p class="help-text mode-help" id="modeHelp">Standard plans the work and verifies the result.</p>
-            <details class="advanced-mode-details">
-              <summary>Experimental mode</summary>
-              <div class="mode-grid advanced-mode-grid" id="advancedModes" role="group" aria-label="Experimental run mode"></div>
-            </details>
+
+            <section class="expectation-card" aria-labelledby="expectationHeading">
+              <div class="expectation-heading">
+                <div>
+                  <p class="eyebrow">Before you start</p>
+                  <h3 id="expectationHeading">What to expect</h3>
+                </div>
+                <span class="expectation-ready" id="expectationAvailability">Checking route…</span>
+              </div>
+              <p id="expectationSummary" class="expectation-summary" aria-live="polite">Loading the execution plan…</p>
+              <dl class="expectation-facts" id="expectationFacts">
+                <div><dt>Runs</dt><dd id="expectationLocation">Checking…</dd></div>
+                <div><dt>Model</dt><dd id="expectationModel">Automatic</dd></div>
+                <div><dt>Changes</dt><dd id="expectationMutation">Implementation</dd></div>
+              </dl>
+
+              <details class="expectation-technical-details">
+                <summary>View route details</summary>
+                <dl class="expectation-facts expectation-facts-technical">
+                <div><dt>Planner</dt><dd id="expectationPlanner">Automatic</dd></div>
+                <div><dt>Executor</dt><dd id="expectationExecutor">Automatic</dd></div>
+                <div><dt>Verification</dt><dd id="expectationVerification">Independent checks</dd></div>
+                <div><dt>Maturity</dt><dd id="expectationMaturity">Supported</dd></div>
+                </dl>
+              </details>
+
+              <details id="expectationDetails" class="expectation-details">
+                <summary>Change how it runs</summary>
+                <section id="routeSection" class="expectation-choice-section" hidden>
+                  <div class="choice-heading">
+                    <div>
+                      <span class="field-label">Execution route</span>
+                      <p class="help-text">Choose where the task runs and which systems plan, execute, and review it.</p>
+                    </div>
+                    <span id="routeRecommendation" class="mode-recommendation"></span>
+                  </div>
+                  <label class="visually-hidden" for="routeSelect">Execution route</label>
+                  <select id="routeSelect" class="choice-select" aria-label="Execution route"></select>
+                  <div id="routes" class="route-grid" role="group" aria-label="Execution route"></div>
+                </section>
+
+                <section id="modelProfileSection" class="expectation-choice-section" hidden>
+                  <div class="choice-heading">
+                    <div>
+                      <span class="field-label">Model profile</span>
+                      <p class="help-text">Automatic follows this installation's recommended model. Choose a named profile only when the task needs it.</p>
+                    </div>
+                  </div>
+                  <label class="visually-hidden" for="modelProfileSelect">Model profile</label>
+                  <select id="modelProfileSelect" class="choice-select" aria-label="Model profile"></select>
+                  <div id="modelProfiles" class="profile-grid" role="group" aria-label="Model profile"></div>
+                </section>
+
+                <details id="advancedModeDetails" class="advanced-mode-details" hidden>
+                  <summary>Labs · bounded experiments</summary>
+                  <p class="help-text">These routes are limited trials. Availability and scope requirements come from the connected backend.</p>
+                  <div class="route-grid advanced-mode-grid" id="advancedModes" role="group" aria-label="Experimental execution routes"></div>
+                </details>
+              </details>
+            </section>
           </section>
 
           <details id="verificationDetails" class="verification-details">

@@ -1328,6 +1328,14 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
         cwd=tmp_root,
     ):
         return False
+    if not _run_release_step(
+        f"Install {stem} recipe test dependency",
+        [str(python_bin), "-m", "pip", "install", "pytest>=8"],
+        cwd=tmp_root,
+    ):
+        return False
+    smoke_env = os.environ.copy()
+    smoke_env["PATH"] = str(python_bin.parent) + os.pathsep + smoke_env.get("PATH", "")
     for version_command in ("--version", "version"):
         if not _run_release_step(
             f"Smoke {stem} version {version_command}",
@@ -1516,6 +1524,7 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
         ],
         cwd=tmp_root,
         required_stdout="Recipe: fix-tests",
+        env=smoke_env,
     ):
         return False
     if len(list((recipe_project / CONFIG_DIR / "runs").glob("*/report.md"))) != 1:
@@ -1563,7 +1572,7 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
         fake_codex = fake_bin / "codex"
         fake_codex.write_text("#!/bin/sh\necho fake codex \"$@\"\n", encoding="utf-8")
         fake_codex.chmod(0o755)
-    auto_env = os.environ.copy()
+    auto_env = smoke_env.copy()
     auto_env["PATH"] = str(fake_bin) + os.pathsep + auto_env.get("PATH", "")
     if not _run_release_step(
         f"Smoke {stem} run auto-config",
@@ -1671,11 +1680,17 @@ def run_demo(name: str, path: Path, *, force: bool = False, install: bool = True
         python = _venv_python(venv_dir)
     env["PATH"] = str(python.parent) + os.pathsep + env.get("PATH", "")
     if install:
+        # The harness import root may point at the parent environment's
+        # site-packages for an installed artifact. Do not expose that path to
+        # pip: it can make a dependency appear satisfied even though the
+        # nested demo interpreter cannot import it during isolated review.
+        dependency_env = env.copy()
+        dependency_env.pop("PYTHONPATH", None)
         if not _run_demo_step(
             "Install demo dependencies",
             [str(python), "-m", "pip", "install", "-r", "requirements-dev.txt"],
             cwd=demo_path,
-            env=env,
+            env=dependency_env,
         ):
             return 1
     if not _run_demo_step(
