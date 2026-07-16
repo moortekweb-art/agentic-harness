@@ -1007,6 +1007,9 @@ def test_openai_compatible_provider_refuses_redirects_before_credentials_can_lea
 
         def do_POST(self) -> None:
             if self.path == "/redirect":
+                content_length = int(self.headers.get("Content-Length", "0"))
+                if content_length:
+                    self.rfile.read(content_length)
                 calls["redirect"] += 1
                 self.send_response(302)
                 self.send_header("Location", "/target")
