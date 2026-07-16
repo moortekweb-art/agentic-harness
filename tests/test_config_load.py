@@ -628,9 +628,11 @@ def test_detect_review_command_ignores_placeholder_npm_and_bare_pyproject(tmp_pa
 )
 def test_detect_review_command_prefers_project_build_wrappers(
     tmp_path,
+    monkeypatch,
     marker,
     expected,
 ) -> None:
+    monkeypatch.setattr(config_module, "_IS_WINDOWS", False)
     if marker == "mvnw":
         (tmp_path / "pom.xml").write_text("<project />", encoding="utf-8")
     else:
