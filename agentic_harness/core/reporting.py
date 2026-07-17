@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
+from agentic_harness.core.errors import HarnessError
 from agentic_harness.core.presentation import safe_inline_text
 from agentic_harness.core.safety import format_command
 from agentic_harness.core.state import Goal, GoalStatus
+from agentic_harness.core.supervisor import Supervisor
+from agentic_harness.core.workspace import format_workspace_change_lines, workspace_change_summary
 
 ReceiptCategory = Literal["verified_done", "blocked", "failed", "in_progress"]
 ReviewSource = Literal["prior", "current"]
@@ -68,6 +72,135 @@ def build_run_receipt(goal: Goal) -> RunReceipt:
         retries=max(0, attempts - 1),
         trusted_reason=_trusted_reason(goal, category, review_attempts),
     )
+
+
+def write_goal_report(
+    supervisor: Supervisor,
+    project_dir: Path,
+    goal: Goal,
+) -> tuple[Goal, str]:
+    """Write the terminal report while freezing its workspace evidence once."""
+
+    changes = goal_workspace_changes(project_dir, goal)
+    frozen = goal.metadata.get("terminal_workspace_changes")
+    if goal.status.is_terminal and isinstance(changes, dict) and not isinstance(frozen, dict):
+        with supervisor.store.autonomy_locked():
+            with supervisor.store.locked():
+                current = supervisor.store.read_current_goal()
+                if current is None or current.id != goal.id:
+                    raise HarnessError("active goal changed before terminal evidence was frozen")
+                current_frozen = current.metadata.get("terminal_workspace_changes")
+                if isinstance(current_frozen, dict):
+                    changes = current_frozen
+                else:
+                    current.metadata["terminal_workspace_changes"] = changes
+                supervisor.store.write_goal(current)
+                goal = current
+    reported_goal, report_path = supervisor.write_report(
+        format_report_markdown(goal, workspace_changes=changes)
+    )
+    report_rel = project_relative_path(project_dir, report_path)
+    changes = goal_workspace_changes(project_dir, reported_goal)
+    reported_goal, _ = supervisor.write_report(
+        format_report_markdown(
+            reported_goal,
+            report_path=report_rel,
+            workspace_changes=changes,
+        )
+    )
+    return reported_goal, report_rel
+
+
+def goal_workspace_changes(project_dir: Path, goal: Goal) -> dict[str, object] | None:
+    frozen = goal.metadata.get("terminal_workspace_changes")
+    if goal.status.is_terminal and isinstance(frozen, dict):
+        return frozen
+    return workspace_change_summary(project_dir, goal.metadata.get("workspace_snapshot"))
+
+
+def format_report_text(
+    goal: Goal | None,
+    *,
+    report_path: str | None = None,
+    workspace_changes: dict[str, object] | None = None,
+) -> str:
+    if goal is None:
+        return "\n".join(["No active run.", "Next: agentic-harness quickstart"])
+    receipt = build_run_receipt(goal)
+    lines = [
+        f"Result: {receipt.label}",
+        f"Goal: {goal.id}",
+        f"Objective: {safe_inline_text(goal.objective)}",
+        f"Status: {receipt.label.lower()}",
+    ]
+    if receipt.worker_claim:
+        lines.append(f"{receipt.worker_claim_label}: {receipt.worker_claim}")
+    lines.append(f"Reason: {receipt.trusted_reason}")
+    lines.extend([f"Attempts: {receipt.attempts}", f"Retries: {receipt.retries}"])
+    autonomy = goal.metadata.get("autonomy")
+    if isinstance(autonomy, dict):
+        checkpoint = str(autonomy.get("checkpoint") or "").strip()
+        if checkpoint:
+            lines.append(f"Checkpoint: {safe_inline_text(checkpoint)}")
+    if report_path:
+        lines.append(f"Report: {safe_inline_text(report_path)}")
+    lines.extend(format_workspace_change_lines(workspace_changes))
+    duration = goal.duration_seconds
+    if duration is not None:
+        if duration < 60:
+            lines.append(f"Duration: {duration:.0f}s")
+        elif duration < 3600:
+            lines.append(f"Duration: {duration / 60:.1f}m")
+        else:
+            lines.append(f"Duration: {duration / 3600:.1f}h")
+    worker_success = goal.metadata.get("worker_success")
+    if worker_success is not None:
+        lines.append(f"Worker: {'passed' if worker_success else 'failed'}")
+    if goal.review:
+        lines.append(f"Review: {'passed' if goal.review.get('passed') is True else 'failed'}")
+    if receipt.verification_commands:
+        lines.append("Verification commands:")
+        lines.extend(f"- {command}" for command in receipt.verification_commands)
+    if receipt.review_attempts:
+        lines.append("Verification attempts:")
+        for attempt in receipt.review_attempts:
+            result = "passed" if attempt.passed else "failed"
+            lines.append(f"- Attempt {attempt.number}: {result} — {attempt.summary}")
+            for check in attempt.checks:
+                scope = "independent" if check.independent else "worker-reported"
+                check_result = "passed" if check.passed else "failed"
+                detail = check.message or check.name
+                lines.append(f"  - {scope}: {check_result} — {detail}")
+    if goal.error:
+        lines.append(f"Error: {safe_inline_text(goal.error)}")
+    if goal.artifacts:
+        lines.append("Artifacts:")
+        lines.extend(f"- {safe_inline_text(artifact)}" for artifact in goal.artifacts)
+    return "\n".join(lines)
+
+
+def format_report_markdown(
+    goal: Goal,
+    *,
+    report_path: str | None = None,
+    workspace_changes: dict[str, object] | None = None,
+) -> str:
+    return (
+        "# Agentic Harness Report\n\n"
+        + format_report_text(
+            goal,
+            report_path=report_path,
+            workspace_changes=workspace_changes,
+        )
+        + "\n"
+    )
+
+
+def project_relative_path(project_dir: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(project_dir.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _category(goal: Goal) -> ReceiptCategory:

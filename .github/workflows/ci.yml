@@ -51,6 +51,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'
         run: |
           node --check agentic_harness/gui/static/app.js
+          node --check agentic_harness/gui/static/auth.js
           node tests/frontend_token_race_test.js
 
       - name: Build package
