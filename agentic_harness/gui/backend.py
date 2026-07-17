@@ -444,6 +444,7 @@ class EmbeddedExecutionBackend:
                 "label": _review_command_label(config.review_command),
                 "technical_command": format_command(config.review_command),
             }
+            result["assurance_mode"] = config.assurance_mode
             result["limits"] = {
                 "max_cycles": config.goal_max_cycles,
                 "max_elapsed_seconds": config.goal_max_elapsed_seconds,
@@ -653,6 +654,7 @@ class EmbeddedExecutionBackend:
             payload = {
                 "version": 1,
                 "worker": "model_agent",
+                "assurance_mode": _assurance_setting(body, existing),
                 "llm": {
                     "endpoint": profile.endpoint,
                     "model": profile.model,
@@ -715,6 +717,7 @@ class EmbeddedExecutionBackend:
             )
             payload = {
                 "version": 1,
+                "assurance_mode": _assurance_setting(body, existing),
                 "worker": {
                     "type": "coding_agent",
                     "coding_agent_command": command,
@@ -1280,6 +1283,39 @@ class EmbeddedExecutionBackend:
             return _tag_demo_task(self._demo_backend.continue_task(feedback))
         with self._config_lock:
             return self._continue_task_locked(feedback)
+
+    def approve_specification(self, requirements: list[str] | None = None) -> dict[str, Any]:
+        """Approve pending high-assurance conditions and resume execution."""
+
+        with self._config_lock:
+            goal = self.store.read_current_goal()
+            if goal is None:
+                return self._blocked_task(
+                    "There is no specification to approve.",
+                    action="new_task",
+                )
+            if self._driver_active():
+                return self._current_task(goal)
+            try:
+                config = self._config()
+                review_commands = _review_commands_from_goal(goal)
+                supervisor = build_supervisor(
+                    self.project_dir,
+                    review_commands=review_commands,
+                    api_key=self.api_key,
+                    cancel_requested=self._cancel.is_set,
+                )
+                policy = self._policy_for_goal(config, goal)
+                goal = AutonomousRunner(
+                    supervisor,
+                    policy=policy,
+                    cancel_requested=self._cancel.is_set,
+                ).approve_specification(requirements)
+                self._cancel.clear()
+                self._start_thread(review_commands, policy)
+                return self._current_task(goal)
+            except (ConfigError, HarnessError, OSError, ValueError) as exc:
+                return self._blocked_task(str(exc), action="view_current")
 
     def _continue_task_locked(self, feedback: str = "") -> dict[str, Any]:
         goal = self.store.read_current_goal()
@@ -1975,6 +2011,8 @@ def _task_status(goal: Goal, autonomy: dict[str, Any]) -> str:
         return "stopped"
     if goal.status is GoalStatus.DONE:
         return "done"
+    if autonomy.get("status") == "awaiting_specification_approval":
+        return "needs_review"
     if autonomy.get("operator_intervention_required") is True:
         return "blocked"
     if goal.status is GoalStatus.FAILED:
@@ -2145,6 +2183,11 @@ def _allowed_actions(status: str) -> list[dict[str, Any]]:
     if status == "blocked":
         return [
             {"action": "continue", "enabled": True},
+            {"action": "stop", "enabled": True},
+        ]
+    if status == "needs_review":
+        return [
+            {"action": "approve_spec", "enabled": True},
             {"action": "stop", "enabled": True},
         ]
     if status in {"starting", "working", "checking"}:
@@ -2871,3 +2914,16 @@ def _preserved_configuration_settings(
     if existing.review_git_clean:
         preserved["review_git_clean"] = True
     return preserved
+
+
+def _assurance_setting(
+    body: dict[str, Any],
+    existing: HarnessConfig | None,
+) -> str:
+    value = str(
+        body.get("assurance_mode")
+        or (existing.assurance_mode if existing else "specification_frozen")
+    ).strip()
+    if value not in {"check_gated", "specification_frozen", "high_assurance"}:
+        raise ValueError("Choose check-gated, specification-frozen, or high assurance.")
+    return value

@@ -457,6 +457,10 @@
           </section>
 
           <div class="quick-actions">
+            <button id="approveSpecButton" hidden>
+              <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
+              <span>Approve completion conditions</span>
+            </button>
             <button id="continueButton" hidden>
               <svg class="icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg>
               <span>Continue with a note</span>
@@ -659,6 +663,13 @@
 
             <section class="settings-group">
               <h3>How should completion be checked?</h3>
+              <label class="field-label" for="assuranceMode">Completion assurance</label>
+              <select id="assuranceMode">
+                <option value="specification_frozen">Frozen completion conditions (recommended)</option>
+                <option value="check_gated">Configured checks only</option>
+                <option value="high_assurance">Approve conditions before work starts</option>
+              </select>
+              <p class="help-text">This controls what the result proves. It is separate from Quick, Standard, and Thorough effort.</p>
               <div class="automatic-check-card">
                 <strong id="automaticCheckLabel">Automatic project checks</strong>
                 <p id="automaticCheckDetail">Agentic Harness will detect this project's tests and run them independently.</p>

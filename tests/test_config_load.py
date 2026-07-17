@@ -363,6 +363,29 @@ review_covers: [R1, R1]
         load_config(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "mode",
+    ["check_gated", "specification_frozen", "high_assurance"],
+)
+def test_named_assurance_modes_are_accepted(tmp_path, mode: str) -> None:
+    _write_config(
+        tmp_path,
+        f"version: 1\nworker: noop\nassurance_mode: {mode}\n",
+    )
+
+    assert load_config(tmp_path).assurance_mode == mode
+
+
+def test_unknown_assurance_mode_is_rejected(tmp_path) -> None:
+    _write_config(
+        tmp_path,
+        "version: 1\nworker: noop\nassurance_mode: thorough\n",
+    )
+
+    with pytest.raises(ConfigError, match="assurance_mode"):
+        load_config(tmp_path)
+
+
 # --- Worker validation ---
 
 

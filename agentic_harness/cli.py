@@ -297,6 +297,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format. Default: text.",
     )
     sub.add_parser("continue", help="Advance the active goal")
+    approve_spec = sub.add_parser(
+        "approve-spec",
+        help="Approve pending high-assurance completion conditions",
+    )
+    approve_spec.add_argument(
+        "--requirement",
+        action="append",
+        default=None,
+        help="Replace the proposed conditions with this plain-language condition; repeatable.",
+    )
     review = sub.add_parser("review", help="Run deterministic independent review")
     review.add_argument(
         "--check",
@@ -625,6 +635,15 @@ def main(argv: list[str] | None = None) -> int:
             config = load_config(project_dir)
             _ensure_cli_goal_safety(supervisor, project_dir, config)
             goal = supervisor.continue_goal()
+            print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
+            return 0
+        if args.command == "approve-spec":
+            config = load_config(project_dir)
+            supervisor = build_supervisor(project_dir)
+            policy = autonomy_policy_from_config(config)
+            goal = AutonomousRunner(supervisor, policy=policy).approve_specification(
+                args.requirement
+            )
             print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
             return 0
         if args.command == "review":

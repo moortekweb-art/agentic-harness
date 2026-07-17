@@ -151,6 +151,7 @@ const els = {
   returnToCurrentButton: byId("returnToCurrentButton"),
   currentCard: byId("currentCard"),
   continueButton: byId("continueButton"),
+  approveSpecButton: byId("approveSpecButton"),
   acceptButton: byId("acceptButton"),
   stopButton: byId("stopButton"),
   planList: byId("planList"),
@@ -226,6 +227,7 @@ const els = {
   remoteDataRow: byId("remoteDataRow"),
   confirmRemoteData: byId("confirmRemoteData"),
   verificationCommand: byId("verificationCommand"),
+  assuranceMode: byId("assuranceMode"),
   automaticCheckLabel: byId("automaticCheckLabel"),
   automaticCheckDetail: byId("automaticCheckDetail"),
   maxCycles: byId("maxCycles"),
@@ -1474,6 +1476,7 @@ function renderTask(task) {
 
   const viewingHistory = Boolean(state.viewingHistoryId);
   els.continueButton.hidden = viewingHistory || !hasAction(task, "continue");
+  els.approveSpecButton.hidden = viewingHistory || !hasAction(task, "approve_spec");
   els.acceptButton.hidden = viewingHistory || !hasAction(task, "accept");
   els.stopButton.hidden = viewingHistory || !hasAction(task, "stop");
   els.advancedDetails.textContent = JSON.stringify({
@@ -1764,6 +1767,7 @@ function renderSetup(setup) {
     ? previousSetup.verification_command || previousSetup.suggested_check || ""
     : "";
   const effectiveCheck = setup.verification_command || setup.suggested_check || "";
+  els.assuranceMode.value = setup.assurance_mode || "specification_frozen";
   if (!els.verificationCommand.value.trim() || els.verificationCommand.value === previousCheck) {
     els.verificationCommand.value = effectiveCheck;
   }
@@ -2233,6 +2237,7 @@ async function saveSetup(event) {
     api_key: apiKey,
     confirm_remote_data: els.confirmRemoteData.checked,
     verification_command: els.verificationCommand.value.trim(),
+    assurance_mode: els.assuranceMode.value,
     max_cycles: Number(els.maxCycles.value),
     max_elapsed_seconds: Number(els.maxMinutes.value) * 60,
     max_total_tokens: Number(els.maxTokens.value),
@@ -2436,6 +2441,11 @@ els.providerPreset.addEventListener("change", applyProviderTemplate);
 els.useDetectedModelButton.addEventListener("click", useDetectedLocalModel);
 els.checkLocalModelsButton.addEventListener("click", () => refreshLocalModelDetection());
 els.continueButton.addEventListener("click", () => els.continueDialog.showModal());
+els.approveSpecButton.addEventListener("click", () => {
+  if (window.confirm("Approve these completion conditions and start the task?")) {
+    postAction("/api/tasks/current/approve-spec", {});
+  }
+});
 els.closeContinueButton.addEventListener("click", () => els.continueDialog.close());
 els.continueForm.addEventListener("submit", (event) => {
   event.preventDefault();

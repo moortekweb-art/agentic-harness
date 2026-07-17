@@ -22,7 +22,11 @@ from agentic_harness.core.safety import split_command
 from agentic_harness.core.state import Goal, GoalStatus
 
 
-def _configure_scripted_agent(project: Path) -> None:
+def _configure_scripted_agent(
+    project: Path,
+    *,
+    assurance_mode: str = "specification_frozen",
+) -> None:
     worker = project / "scripted_agent.py"
     worker.write_text(
         """
@@ -59,6 +63,7 @@ print("HARNESS_RESULT_JSON=" + json.dumps(outcome))
         "\n".join(
             [
                 "version: 1",
+                f"assurance_mode: {assurance_mode}",
                 "worker:",
                 "  type: coding_agent",
                 "  coding_agent_command:",
@@ -113,6 +118,39 @@ def test_embedded_backend_runs_public_engine_from_start_to_verified_finish(tmp_p
     assert finished["plan"][0]["status"] == "completed"
     assert finished["requirements"][0]["status"] == "satisfied"
     assert any(row["passed"] is True for row in finished["verification"])
+
+
+def test_embedded_high_assurance_requires_visible_approval_before_worker(
+    tmp_path,
+) -> None:
+    _configure_scripted_agent(tmp_path, assurance_mode="high_assurance")
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    backend.start(
+        {
+            "objective": "Create result.txt only after approval",
+            "safe_areas": ["result.txt"],
+            "checks": [],
+        }
+    )
+    deadline = time.monotonic() + 5
+    pending: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        pending = backend.status()
+        if pending["status"] == "needs_review":
+            break
+        time.sleep(0.02)
+
+    assert pending["status"] == "needs_review"
+    assert pending["needs_human"] is True
+    assert pending["allowed_actions"][0]["action"] == "approve_spec"
+    assert not (tmp_path / "result.txt").exists()
+
+    backend.approve_specification()
+    finished = _wait_for_terminal(backend)
+
+    assert finished["status"] == "done"
+    assert (tmp_path / "result.txt").read_text(encoding="utf-8") == "finished"
     assert any(row["path"] == "result.txt" for row in finished["changed_files"])
     assert finished["final_result"]["accepted"] is True
     assert finished["allowed_actions"] == [{"action": "new_task", "enabled": True}]

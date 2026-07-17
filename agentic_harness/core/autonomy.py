@@ -9,10 +9,15 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+from agentic_harness.core.assurance import AssuranceMode
 from agentic_harness.core.errors import GoalConflictError, NoActiveGoalError
 from agentic_harness.core.evidence import EvidenceRecord, EvidenceResult
 from agentic_harness.core.events import TaskEventStore
-from agentic_harness.core.goal_spec import GoalSpec, preserved_objective_spec
+from agentic_harness.core.goal_spec import (
+    GoalRequirement,
+    GoalSpec,
+    preserved_objective_spec,
+)
 from agentic_harness.core.state import Goal, GoalStatus, now_iso
 from agentic_harness.core.supervisor import Supervisor
 from agentic_harness.core.workspace import capture_workspace_snapshot
@@ -29,6 +34,7 @@ class AutonomyPolicy:
 
     repeated_blocker_limit: int = 3
     require_completion_claim: bool = True
+    assurance_mode: AssuranceMode = AssuranceMode.SPECIFICATION_FROZEN
     max_cycles: int = 100
     max_elapsed_seconds: int = 7_200
     max_total_tokens: int = 500_000
@@ -36,6 +42,7 @@ class AutonomyPolicy:
     max_tool_calls: int = 1_000
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "assurance_mode", AssuranceMode(self.assurance_mode))
         if self.repeated_blocker_limit < 1:
             raise ValueError("repeated_blocker_limit must be at least 1")
         for name in (
@@ -79,6 +86,55 @@ class AutonomousRunner:
         with self.supervisor.store.autonomy_locked() as lease:
             return self._step_unlocked(objective, lease)
 
+    def approve_specification(self, requirements: list[str] | None = None) -> Goal:
+        """Approve or edit the pending high-assurance completion conditions."""
+
+        with self.supervisor.store.autonomy_locked() as lease:
+            goal = self.supervisor.status()
+            if goal is None:
+                raise NoActiveGoalError("no active goal has a specification to approve")
+            if self.policy.assurance_mode is not AssuranceMode.HIGH_ASSURANCE:
+                raise GoalConflictError(
+                    "specification approval is available only in high_assurance mode"
+                )
+            autonomy = self._initialize(goal)
+            proposal = self.supervisor.store.read_goal_spec_proposal(goal.id)
+            requirement_text = (
+                [str(item).strip() for item in requirements]
+                if requirements is not None
+                else [item.text for item in proposal.requirements]
+            )
+            if not requirement_text or any(not item for item in requirement_text):
+                raise GoalConflictError("approved specification requires completion conditions")
+            approved_path = self.supervisor.store.approved_goal_spec_path(goal)
+            if approved_path.exists():
+                existing = self.supervisor.store.read_goal_spec(goal.id)
+                if requirement_text != [item.text for item in existing.requirements]:
+                    raise GoalConflictError(
+                        "operator-approved specification cannot be edited after approval"
+                    )
+                return goal
+            if autonomy.get("status") != "awaiting_specification_approval":
+                raise GoalConflictError("specification is not awaiting operator approval")
+            approved = GoalSpec(
+                objective=proposal.objective,
+                requirements=tuple(
+                    GoalRequirement(id=f"R{index}", text=text)
+                    for index, text in enumerate(requirement_text, 1)
+                ),
+                derivation=proposal.derivation,
+                approval="operator_approved",
+                created_at=now_iso(),
+            )
+            with self.supervisor.store.locked():
+                self.supervisor.store.write_approved_goal_spec(goal, approved)
+            autonomy["goal_spec_sha256"] = approved.sha256
+            autonomy["status"] = "running"
+            autonomy["operator_intervention_required"] = False
+            autonomy["checkpoint"] = "specification_approved"
+            self._save(goal, lease)
+            return goal
+
     def _step_unlocked(self, objective: str | None, lease: object) -> Goal:
         goal = self._load_or_start(objective, lease)
         autonomy = self._initialize(goal)
@@ -87,6 +143,8 @@ class AutonomousRunner:
             _progress_signature(self.supervisor),
         )
         self._save(goal, lease)
+        if autonomy.get("status") == "awaiting_specification_approval":
+            return goal
         if goal.status is GoalStatus.DONE:
             return goal
         if goal.status is GoalStatus.FAILED:
@@ -179,6 +237,20 @@ class AutonomousRunner:
             )
         if outcome_status == "blocked":
             return self._record_blocker(goal, _outcome_blocker(outcome), lease)
+        if outcome_status == "specification_change_required":
+            proposed = outcome.get("proposed_changes")
+            autonomy["specification_amendment"] = {
+                "reason": str(outcome.get("reason") or "Specification change requested"),
+                "proposed_changes": proposed if isinstance(proposed, list) else [],
+                "requested_at": now_iso(),
+            }
+            self._save(goal, lease)
+            return self._record_blocker(
+                goal,
+                "worker requested a specification amendment; frozen specification unchanged",
+                lease,
+                immediate=True,
+            )
 
         goal = self.supervisor.review(finalize=False, _autonomy_lease=lease)
         autonomy = _autonomy(goal)
@@ -251,6 +323,17 @@ class AutonomousRunner:
             existing["strict_completion"] = bool(persisted_strict) or bool(
                 self.policy.require_completion_claim
             )
+            persisted_assurance = existing.get("assurance_mode")
+            if persisted_assurance not in {None, self.policy.assurance_mode.value}:
+                raise GoalConflictError("persisted assurance mode cannot change during a goal")
+            existing["assurance_mode"] = self.policy.assurance_mode.value
+            if (
+                self.policy.assurance_mode is AssuranceMode.HIGH_ASSURANCE
+                and not self.supervisor.store.approved_goal_spec_path(goal).exists()
+            ):
+                existing["status"] = "awaiting_specification_approval"
+                existing["checkpoint"] = "specification_approval_required"
+                existing["operator_intervention_required"] = True
             existing.setdefault("budget", self._new_budget())
             return existing
         autonomy: dict[str, Any] = {
@@ -258,16 +341,30 @@ class AutonomousRunner:
             "objective": goal.objective,
             "objective_sha256": hashlib.sha256(goal.objective.encode("utf-8")).hexdigest(),
             "goal_spec_sha256": goal_spec.sha256,
-            "status": "running",
+            "status": (
+                "awaiting_specification_approval"
+                if self.policy.assurance_mode is AssuranceMode.HIGH_ASSURANCE
+                and not self.supervisor.store.approved_goal_spec_path(goal).exists()
+                else "running"
+            ),
             "cycle": 0,
             "heartbeat": now_iso(),
             "plan": [],
             "requirement_status": [],
             "current_subgoal": "execute the frozen requirements",
-            "checkpoint": "goal_started",
+            "checkpoint": (
+                "specification_approval_required"
+                if self.policy.assurance_mode is AssuranceMode.HIGH_ASSURANCE
+                and not self.supervisor.store.approved_goal_spec_path(goal).exists()
+                else "goal_started"
+            ),
             "blocker": {"signature": "", "consecutive_count": 0, "reason": ""},
-            "operator_intervention_required": False,
+            "operator_intervention_required": (
+                self.policy.assurance_mode is AssuranceMode.HIGH_ASSURANCE
+                and not self.supervisor.store.approved_goal_spec_path(goal).exists()
+            ),
             "strict_completion": self.policy.require_completion_claim,
+            "assurance_mode": self.policy.assurance_mode.value,
             "budget": self._new_budget(),
         }
         goal.metadata["autonomy"] = autonomy
@@ -338,7 +435,12 @@ class AutonomousRunner:
             strategy_instruction = str(strategy.get("instruction") or "").strip()
             if strategy_instruction:
                 lines.extend(["", strategy_instruction])
-        review_refs = _expected_review_evidence_refs(self.supervisor)
+        review_refs = _expected_review_evidence_refs(
+            self.supervisor,
+            require_coverage=(
+                self.policy.assurance_mode is not AssuranceMode.CHECK_GATED
+            ),
+        )
         if review_refs:
             lines.append(
                 "If the corresponding independent checks pass, cite these exact IDs: "
@@ -516,6 +618,12 @@ class AutonomousRunner:
         )
 
         strict_completion = autonomy.get("strict_completion") is True
+        assurance_mode = AssuranceMode(
+            str(
+                autonomy.get("assurance_mode")
+                or AssuranceMode.SPECIFICATION_FROZEN.value
+            )
+        )
         if strict_completion:
             has_independent_criterion = isinstance(criteria, list) and any(
                 isinstance(item, dict) and item.get("independent") is True
@@ -617,7 +725,7 @@ class AutonomousRunner:
                                 f"requirement {requirement_id} "
                                 "cites unverified evidence: " + ", ".join(invalid)
                             )
-                        else:
+                        elif assurance_mode is not AssuranceMode.CHECK_GATED:
                             ineligible = [
                                 evidence_id
                                 for evidence_id in normalized
@@ -646,6 +754,7 @@ class AutonomousRunner:
             "failures": failures,
             "review": review,
             "goal_spec_sha256": goal_spec.sha256,
+            "assurance_mode": assurance_mode.value,
             "requirement_status": outcome.get("requirement_status") or [],
             "evidence_registry": [
                 record.to_dict() for record in evidence_registry.values()
@@ -785,11 +894,15 @@ def _review_evidence_ref(index: int) -> str:
     return f"review:{index}"
 
 
-def _expected_review_evidence_refs(supervisor: Supervisor) -> list[str]:
+def _expected_review_evidence_refs(
+    supervisor: Supervisor,
+    *,
+    require_coverage: bool,
+) -> list[str]:
     return [
         _review_evidence_ref(index)
         for index, criterion in enumerate(supervisor.reviewer.criteria, 1)
-        if criterion.independent and criterion.covers
+        if criterion.independent and (criterion.covers or not require_coverage)
     ]
 
 
