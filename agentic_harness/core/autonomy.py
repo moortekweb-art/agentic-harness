@@ -95,7 +95,14 @@ class AutonomousRunner:
         with self.supervisor.store.autonomy_locked() as lease:
             return self._step_unlocked(objective, lease)
 
-    def approve_specification(self, requirements: list[str] | None = None) -> Goal:
+    def approve_specification(
+        self,
+        requirements: list[str] | None = None,
+        *,
+        expected_goal_id: str = "",
+        expected_goal_spec_sha256: str = "",
+        expected_spec_version: int | None = None,
+    ) -> Goal:
         """Approve or edit the pending high-assurance completion conditions."""
 
         with self.supervisor.store.autonomy_locked() as lease:
@@ -107,6 +114,20 @@ class AutonomousRunner:
                     "specification approval is available only in high_assurance mode"
                 )
             autonomy = self._initialize(goal)
+            current_spec = self.supervisor.store.read_goal_spec(goal.id)
+            current_version = self.supervisor.store.read_goal_spec_version(goal.id)
+            if expected_goal_id and goal.id != expected_goal_id:
+                raise GoalConflictError("the reviewed task is no longer current")
+            if (
+                expected_goal_spec_sha256
+                and current_spec.sha256 != expected_goal_spec_sha256
+            ):
+                raise GoalConflictError("the reviewed completion conditions have changed")
+            if (
+                expected_spec_version is not None
+                and current_version != expected_spec_version
+            ):
+                raise GoalConflictError("the reviewed specification revision has changed")
             return SpecificationController(self.supervisor).approve(
                 goal,
                 autonomy,

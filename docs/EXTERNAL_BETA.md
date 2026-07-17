@@ -4,6 +4,13 @@ This beta is for people willing to try Agentic Harness on a real repository and
 report setup failures as well as successes. Do not test on irreplaceable work;
 use a clean branch or disposable clone and review every diff.
 
+The v0.12 readiness gate requires at least five submitted attempts from at
+least two non-maintainer participants across three repository ecosystems.
+Failed and abandoned onboarding attempts count and must not be discarded. At
+least 80% of attempts (and at least four) must reach a verified result without
+maintainer intervention, with zero credential leaks, unsafe unexpected writes,
+false verified completions, or unresolved critical/high defects.
+
 ## Ten-minute path
 
 Browser-first novice path:
@@ -45,3 +52,14 @@ confusing steps, and whether you would use the tool again.
 Submit sanitized feedback through a GitHub issue in this repository. If the
 report cannot be made public safely, keep it local rather than disclosing
 private project material.
+
+Maintainers recording a private sanitized receipt can use
+`evaluation/external_beta_receipt.example.json` as the machine-readable shape.
+Store real receipts outside the repository until participants consent to
+publication, then summarize them without inventing or excluding attempts:
+
+```bash
+python evaluation/summarize_external_beta.py \
+  /path/to/sanitized-receipts \
+  --output /tmp/agentic-harness-v012-beta-summary.json
+```

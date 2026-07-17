@@ -1649,6 +1649,52 @@ def test_gui_server_rejects_cross_origin_task_post() -> None:
     assert bridge.commands == []
 
 
+def test_gui_server_rejects_cross_origin_before_reading_partial_body() -> None:
+    bridge = FakeBridge()
+    with gui_server(bridge) as base_url:
+        host, port = base_url.removeprefix("http://").split(":")
+        with socket.create_connection((host, int(port)), timeout=3) as client:
+            client.settimeout(1)
+            started = time.monotonic()
+            client.sendall(
+                (
+                    "POST /api/tasks HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Origin: https://attacker.example\r\n"
+                    "Content-Type: application/json\r\n"
+                    f"Content-Length: {MAX_REQUEST_BYTES}\r\n"
+                    "Connection: keep-alive\r\n"
+                    "\r\n"
+                    "{"
+                ).encode("ascii")
+            )
+            response = b""
+            while b"cross-origin request rejected" not in response:
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                response += chunk
+            elapsed = time.monotonic() - started
+
+    assert response.startswith(b"HTTP/1.0 403") or response.startswith(b"HTTP/1.1 403")
+    assert b"cross-origin request rejected" in response
+    assert elapsed < 1
+    assert bridge.commands == []
+
+
+def test_gui_spec_approval_requires_reviewed_identity(tmp_path) -> None:
+    with gui_server(EmbeddedExecutionBackend(tmp_path)) as base_url:  # type: ignore[arg-type]
+        result = post_error(
+            base_url,
+            "/api/tasks/current/approve-spec",
+            json.dumps({"requirements": ["Do the work."]}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 400
+    assert "reviewed identity" in str(result.payload["error"])
+
+
 def test_gui_history_selection_survives_live_updates_and_previews_its_own_evidence() -> None:
     app = Path("agentic_harness/gui/static/app.js").read_text(encoding="utf-8")
 

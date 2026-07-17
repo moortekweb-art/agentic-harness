@@ -1,8 +1,13 @@
 # External beta feedback
 
+- Receipt schema: `agentic_harness.external_beta_receipt.v1`
+- Attempt ID (random, no personal information):
 - Date:
 - Harness version:
+- Release commit:
+- Installed wheel SHA-256:
 - Agent and version:
+- Model/runtime:
 - Repository type/language (no private name required):
 - Fresh install, upgrade, or existing install:
 - Attempt completed, failed, blocked, or abandoned:
@@ -16,6 +21,8 @@
 - Attempts and retries:
 - Human assistance required:
 - Unexpected file changes:
+- Credential leak, unsafe unexpected write, or false verified completion? Yes / No
+- Unresolved critical/high defect discovered? Yes / No
 - Most confusing step:
 - What failed or nearly failed:
 - Would you use it again? Why or why not?

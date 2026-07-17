@@ -42,7 +42,10 @@ requirement coverage.
 
 Tool events are issued as `observed` with `covers: []`. Reading a file, editing
 text, or invoking a worker-side check records useful activity without claiming
-that the objective is correct. Evidence from another run or specification hash,
+that the objective is correct. Because event files are inside the worker-writable
+workspace, the completion audit reconstructs their issuer, result, identity, and
+empty coverage from the harness event contract. Serialized `evidence` fields in
+an event file are never trusted as authority. Evidence from another run or specification hash,
 failed evidence, and invalidated evidence are ineligible for completion.
 An approved specification revision changes the GoalSpec hash and persists
 invalidated copies of prior evidence for audit history. New checks issue new

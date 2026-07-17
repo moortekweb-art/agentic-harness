@@ -349,6 +349,19 @@ review:
     assert load_config(tmp_path).review_covers == []
 
 
+def test_review_command_omission_does_not_grant_wildcard_coverage(tmp_path) -> None:
+    _write_config(
+        tmp_path,
+        """
+version: 1
+worker: noop
+review_command: [python, -c, "raise SystemExit(0)"]
+""",
+    )
+
+    assert load_config(tmp_path).review_covers == []
+
+
 def test_duplicate_review_coverage_is_rejected(tmp_path) -> None:
     _write_config(
         tmp_path,

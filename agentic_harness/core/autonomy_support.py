@@ -115,11 +115,38 @@ def durable_event_evidence_records(
         return {}
     records: dict[str, EvidenceRecord] = {}
     for event in events:
-        payload = event.get("evidence")
-        if not isinstance(payload, dict) or event.get("run_id") != run_id:
+        if event.get("run_id") != run_id:
             continue
+        seq = event.get("seq")
+        if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+            continue
+        tool = event.get("tool")
+        tool_status = (
+            str(tool.get("status") or "")
+            if isinstance(tool, dict)
+            else ""
+        )
+        kind = str(event.get("kind") or "progress").strip()[:64] or "progress"
         try:
-            record = EvidenceRecord.from_dict(payload)
+            # Event files live inside the worker-writable workspace. Reconstruct
+            # their evidence semantics from the trusted event contract instead
+            # of accepting serialized issuer, result, or coverage claims.
+            record = EvidenceRecord(
+                id=f"event:{seq}",
+                goal_id=goal.id,
+                run_id=run_id,
+                goal_spec_sha256=str(
+                    goal.metadata.get("autonomy", {}).get("goal_spec_sha256") or ""
+                ),
+                issuer="harness.task_event",
+                kind=kind,
+                result=(
+                    EvidenceResult.OBSERVED
+                    if tool_status in {"passed", "completed"}
+                    else EvidenceResult.FAILED
+                ),
+                covers=(),
+            )
         except ValueError:
             continue
         records[record.id] = record

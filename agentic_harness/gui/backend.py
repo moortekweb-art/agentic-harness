@@ -546,6 +546,7 @@ class EmbeddedExecutionBackend:
                         ),
                     },
                     "review_command": [sys.executable, "-c", _DEMO_CHECK],
+                    "review_covers": ["*"],
                     "review_command_timeout": 30,
                     "autonomy": {
                         "max_cycles": 4,
@@ -695,6 +696,7 @@ class EmbeddedExecutionBackend:
                     3_600,
                 ),
                 **_preserved_configuration_settings(existing),
+                "review_covers": _gui_review_covers(existing),
                 "autonomy": _autonomy_settings(body, existing),
             }
             session_key = entered_key or (self.api_key if preserve_session else None)
@@ -745,6 +747,7 @@ class EmbeddedExecutionBackend:
                     3_600,
                 ),
                 **_preserved_configuration_settings(existing),
+                "review_covers": _gui_review_covers(existing),
                 "autonomy": _autonomy_settings(body, existing),
             }
             fingerprint = _command_fingerprint(command)
@@ -1285,7 +1288,14 @@ class EmbeddedExecutionBackend:
         with self._config_lock:
             return self._continue_task_locked(feedback)
 
-    def approve_specification(self, requirements: list[str] | None = None) -> dict[str, Any]:
+    def approve_specification(
+        self,
+        requirements: list[str] | None = None,
+        *,
+        expected_goal_id: str = "",
+        expected_goal_spec_sha256: str = "",
+        expected_spec_version: int | None = None,
+    ) -> dict[str, Any]:
         """Approve pending high-assurance conditions and resume execution."""
 
         with self._config_lock:
@@ -1311,7 +1321,12 @@ class EmbeddedExecutionBackend:
                     supervisor,
                     policy=policy,
                     cancel_requested=self._cancel.is_set,
-                ).approve_specification(requirements)
+                ).approve_specification(
+                    requirements,
+                    expected_goal_id=expected_goal_id,
+                    expected_goal_spec_sha256=expected_goal_spec_sha256,
+                    expected_spec_version=expected_spec_version,
+                )
                 self._cancel.clear()
                 self._start_thread(review_commands, policy)
                 return self._current_task(goal)
@@ -1727,6 +1742,8 @@ class EmbeddedExecutionBackend:
                 )
                 kind = "amendment"
             return {
+                "goal_id": goal.id,
+                "goal_spec_sha256": spec.sha256,
                 "kind": kind,
                 "reason": redact_secrets(reason),
                 "version": self.store.read_goal_spec_version(goal.id),
@@ -2957,6 +2974,14 @@ def _preserved_configuration_settings(
     if existing.review_git_clean:
         preserved["review_git_clean"] = True
     return preserved
+
+
+def _gui_review_covers(existing: HarnessConfig | None) -> list[str]:
+    """Make the GUI's all-condition check authority explicit in saved config."""
+
+    if existing is not None and existing.review_covers:
+        return list(existing.review_covers)
+    return ["*"]
 
 
 def _assurance_setting(

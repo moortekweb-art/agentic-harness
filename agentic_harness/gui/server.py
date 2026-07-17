@@ -491,7 +491,34 @@ def make_handler(
                         if isinstance(raw_requirements, list)
                         else None
                     )
-                    self._json(active.approve_specification(requirements))
+                    expected_goal_id = body.get("goal_id")
+                    expected_goal_spec_sha256 = body.get("goal_spec_sha256")
+                    expected_spec_version = body.get("version")
+                    if (
+                        not isinstance(expected_goal_id, str)
+                        or not expected_goal_id.strip()
+                        or not isinstance(expected_goal_spec_sha256, str)
+                        or not expected_goal_spec_sha256.strip()
+                        or not isinstance(expected_spec_version, int)
+                        or isinstance(expected_spec_version, bool)
+                        or expected_spec_version < 1
+                    ):
+                        self._json(
+                            {
+                                "ok": False,
+                                "error": "Specification approval is missing its reviewed identity.",
+                            },
+                            status=HTTPStatus.BAD_REQUEST,
+                        )
+                        return
+                    self._json(
+                        active.approve_specification(
+                            requirements,
+                            expected_goal_id=expected_goal_id,
+                            expected_goal_spec_sha256=expected_goal_spec_sha256,
+                            expected_spec_version=expected_spec_version,
+                        )
+                    )
                 else:
                     self._json(
                         {
@@ -657,16 +684,9 @@ def make_handler(
             return False
 
         def _reject_cross_origin(self) -> None:
-            # On Windows, closing a socket with an unread POST body can reset
-            # the connection and discard the 403 response already written.
-            # Drain only an already bounded request body before replying.
-            if self.command == "POST":
-                try:
-                    length = int(self.headers.get("Content-Length", "0"))
-                except ValueError:
-                    length = 0
-                if 0 < length <= MAX_REQUEST_BYTES:
-                    self.rfile.read(length)
+            # Never block on an unauthenticated request body. Closing the
+            # connection after the bounded JSON response safely discards it.
+            self.close_connection = True
             self._json(
                 {"ok": False, "error": "cross-origin request rejected"},
                 status=HTTPStatus.FORBIDDEN,

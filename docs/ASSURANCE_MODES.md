@@ -22,6 +22,11 @@ ordered requirement IDs; ambiguous prose remains one full-objective condition.
 Every frozen requirement must be reported satisfied and must cite eligible
 evidence with predeclared coverage.
 
+Coverage is never inferred from the existence or success of a review command.
+If `review_covers` is omitted, the check still runs but has empty coverage and
+cannot close a frozen requirement. Use explicit IDs when a check is narrow, or
+explicit `review_covers: ["*"]` only when that check verifies every condition.
+
 ## `high_assurance`
 
 The harness writes a specification proposal and pauses before the first worker
@@ -42,6 +47,10 @@ agentic-harness approve-spec \
 Approval creates a separate immutable `goal-spec-approved.json` with a new
 hash. The original proposal remains intact for audit history. Execution uses
 only the approved specification, and no worker runs before approval.
+
+GUI approvals also carry the reviewed goal ID, GoalSpec hash, and revision.
+If the current task or specification changes while the dialog is open, the
+approval is rejected and the operator must review the current conditions.
 
 If the worker later reports `specification_change_required`, execution pauses
 again. The GUI and `approve-spec` command show the proposed conditions and allow

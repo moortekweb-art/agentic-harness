@@ -1,0 +1,66 @@
+name: External beta attempt
+description: Report one completed, failed, blocked, or abandoned Agentic Harness attempt.
+title: "[Beta]: "
+labels: ["external-beta"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Submit one form per attempted repository, including failed or abandoned onboarding. Remove credentials, private paths, proprietary code, and personal information.
+  - type: input
+    id: version
+    attributes:
+      label: Harness version and release commit
+      placeholder: "0.12.0 at full 40-character commit"
+    validations:
+      required: true
+  - type: dropdown
+    id: status
+    attributes:
+      label: Terminal outcome
+      options:
+        - Verified done
+        - Blocked with reason
+        - Failed with evidence
+        - Abandoned onboarding
+    validations:
+      required: true
+  - type: input
+    id: ecosystem
+    attributes:
+      label: Repository ecosystem
+      placeholder: Python, Node.js, Rust, Go, Java, or another ecosystem
+    validations:
+      required: true
+  - type: textarea
+    id: runtime
+    attributes:
+      label: Sanitized runtime
+      description: OS, Python, agent/version, model, browser or terminal path, and fresh install or upgrade.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Attempt details
+      description: Minutes, retries, independent command, assistance required, confusing steps, and what failed or nearly failed.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I observed no credential leak.
+          required: true
+        - label: I observed no unsafe unexpected write.
+          required: true
+        - label: I observed no false verified completion.
+          required: true
+        - label: I found no unresolved critical/high-severity defect.
+          required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: Optional sanitized report, reproduction, or checksums. Do not paste secrets or private source.

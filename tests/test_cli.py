@@ -2512,6 +2512,7 @@ def test_goal_command_requires_structured_completion_and_accepts_it(tmp_path, ca
                 f"  - {sys.executable}",
                 "  - -c",
                 "  - 'raise SystemExit(0)'",
+                "review_covers: ['*']",
                 "",
             ]
         ),
@@ -2672,6 +2673,7 @@ def test_easy_do_uses_portable_project_engine_without_optional_sidecar(
                 f"  - {sys.executable}",
                 "  - -c",
                 "  - \"print('verified')\"",
+                "review_covers: ['*']",
                 "",
             ]
         ),
@@ -2751,6 +2753,7 @@ def test_easy_do_accepts_verify_alias_and_records_command(tmp_path, capsys) -> N
                 "coding_agent_command:",
                 f"  - {sys.executable}",
                 f"  - {worker}",
+                "review_covers: ['*']",
                 "",
             ]
         ),

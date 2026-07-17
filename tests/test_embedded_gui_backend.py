@@ -27,6 +27,7 @@ def _configure_scripted_agent(
     project: Path,
     *,
     assurance_mode: str = "specification_frozen",
+    declare_review_coverage: bool = True,
 ) -> None:
     worker = project / "scripted_agent.py"
     worker.write_text(
@@ -74,6 +75,11 @@ print("HARNESS_RESULT_JSON=" + json.dumps(outcome))
                 f"  - {sys.executable}",
                 "  - -c",
                 "  - \"from pathlib import Path; assert Path('result.txt').read_text() == 'finished'\"",
+                *(
+                    ["review_covers:", "  - '*'"]
+                    if declare_review_coverage
+                    else []
+                ),
                 "",
             ]
         ),
@@ -119,6 +125,26 @@ def test_embedded_backend_runs_public_engine_from_start_to_verified_finish(tmp_p
     assert finished["plan"][0]["status"] == "completed"
     assert finished["requirements"][0]["status"] == "satisfied"
     assert any(row["passed"] is True for row in finished["verification"])
+
+
+def test_embedded_backend_does_not_infer_wildcard_review_coverage(tmp_path) -> None:
+    _configure_scripted_agent(tmp_path, declare_review_coverage=False)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    backend.start(
+        {
+            "objective": "Create result.txt and prove its exact contents",
+            "safe_areas": ["result.txt"],
+            "checks": [],
+        }
+    )
+    finished = _wait_for_terminal(backend)
+
+    assert finished["status"] == "blocked"
+    assert finished["final_result"]["accepted"] is False
+    assert "requirement R1 cites ineligible evidence: review:1" in str(
+        finished["summary"]
+    )
 
 
 def test_embedded_high_assurance_requires_visible_approval_before_worker(
@@ -199,6 +225,8 @@ def test_embedded_high_assurance_exposes_plain_amendment_preview(tmp_path) -> No
     assert task["status"] == "needs_review"
     assert task["allowed_actions"][0]["action"] == "approve_spec"
     assert task["metadata"]["specification_review"] == {
+        "goal_id": "amendment-preview",
+        "goal_spec_sha256": spec.sha256,
         "kind": "amendment",
         "reason": "The requested API is unavailable.",
         "version": 1,
@@ -206,6 +234,47 @@ def test_embedded_high_assurance_exposes_plain_amendment_preview(tmp_path) -> No
             {"id": "R1", "text": "Use the supported replacement API."}
         ],
     }
+
+
+def test_embedded_high_assurance_rejects_stale_review_binding(tmp_path) -> None:
+    _configure_scripted_agent(tmp_path, assurance_mode="high_assurance")
+    backend = EmbeddedExecutionBackend(tmp_path)
+    backend.start(
+        {
+            "objective": "First reviewed task",
+            "safe_areas": ["result.txt"],
+            "checks": [],
+        }
+    )
+    deadline = time.monotonic() + 5
+    reviewed: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        reviewed = backend.status()
+        if reviewed["status"] == "needs_review":
+            break
+        time.sleep(0.02)
+    binding = reviewed["metadata"]["specification_review"]  # type: ignore[index]
+
+    replacement = Goal("Replacement task", id="replacement-task")
+    replacement_spec = GoalSpec(
+        objective=replacement.objective,
+        requirements=(GoalRequirement(id="R1", text="Replacement task"),),
+        derivation="harness_preserved_objective",
+        approval="pending",
+    )
+    backend.store.write_goal_spec(replacement, replacement_spec)
+    backend.store.write_goal(replacement)
+
+    result = backend.approve_specification(
+        ["First reviewed task"],
+        expected_goal_id=str(binding["goal_id"]),
+        expected_goal_spec_sha256=str(binding["goal_spec_sha256"]),
+        expected_spec_version=int(binding["version"]),
+    )
+
+    assert result["status"] == "blocked"
+    assert "no longer current" in str(result["summary"])
+    assert backend.store.read_current_goal().id == "replacement-task"
 
 
 def test_embedded_backend_persists_provider_independent_quick_strategy(tmp_path) -> None:

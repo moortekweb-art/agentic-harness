@@ -1618,6 +1618,8 @@ async function testHighAssuranceAmendmentShowsEditablePlainLanguageReview() {
       allowed_actions: [{ action: "approve_spec", enabled: true }],
       metadata: {
         specification_review: {
+          goal_id: "amendment-run",
+          goal_spec_sha256: "reviewed-spec-sha256",
           kind: "amendment",
           reason: "The requested API is unavailable.",
           version: 1,
@@ -1644,6 +1646,9 @@ async function testHighAssuranceAmendmentShowsEditablePlainLanguageReview() {
   );
   assert.deepEqual(JSON.parse(approval.options.body), {
     requirements: ["Use the supported API.", "Update its documentation."],
+    goal_id: "amendment-run",
+    goal_spec_sha256: "reviewed-spec-sha256",
+    version: 1,
   });
 }
 
