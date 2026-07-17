@@ -214,8 +214,10 @@ goal.
 Worker text is not completion evidence. The GUI derives its trusted result from
 durable state and independent review:
 
-- `Verified done` requires a completed plan, satisfied requirements with
-  evidence, no blockers, and an independent passing review command.
+- `Verified done` indicates check-gated acceptance: a completed structured
+  worker claim, satisfied worker-derived requirements with recognized
+  current-run evidence, no blockers, and an independent passing review command.
+  It does not claim that v1 independently decomposed every objective clause.
 - `Blocked with reason` identifies the missing credential, authority, operator
   decision, repeated blocker, or exhausted resource that prevents progress.
 - `Failed with evidence` records a failed execution, failed independent check,

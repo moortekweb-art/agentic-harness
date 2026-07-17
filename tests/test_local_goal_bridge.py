@@ -108,7 +108,9 @@ def test_build_mode3a_goal_hides_worker_details_behind_plain_objective() -> None
     assert "same blocking condition repeats in three consecutive supervisor cycles" in goal
     assert "honest blocked report" not in goal
     assert "Do not mark the goal complete" in goal
-    assert "requirement-by-requirement completion audit" in goal
+    assert "worker-derived requirements" in goal
+    assert "configured deterministic review passes" in goal
+    assert "completion audit proves the original objective" not in goal
 
 
 def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
