@@ -29,14 +29,16 @@ agentic-harness gui
 The app confirms the current project and opens on **Home**. Describe one result
 in ordinary language; no prompt template or programming vocabulary is required.
 Use **Settings** once to connect an installed coding app, local AI, or cloud AI.
-Agentic Harness detects common project test commands automatically and keeps the
-technical command under an advanced disclosure. The browser separates **Home**,
-**Tasks**, **History**, and **Settings**, and marks work done only after the
-independent project check passes.
+The guided **Choose · Connect · Verify** journey detects supported local servers,
+tests structured actions, and keeps endpoints and commands under advanced
+disclosures. The browser separates **Home**, **Tasks**, **History**, and
+**Settings**, and marks work done only after the independent project check passes.
 
 ![Agentic Harness Home view showing task effort and a plain-language execution expectation](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui.png)
 
 ![Agentic Harness mobile first-run view with a safe no-account demo and a clear path to connect real work](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-mobile.png)
+
+![Agentic Harness verified task showing the outcome, changed files, worker report, and independent evidence](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-verified.png)
 
 ### Run the same verified task from the terminal
 
@@ -102,9 +104,10 @@ to a cloud route.
 <details>
 <summary>Example managed installation</summary>
 
-This example includes installation-specific local and cloud routes plus local
-model profiles. Those choices appear only when the connected backend proves
-that they exist and reports their current availability.
+This example includes installation-specific local and cloud routes. Friendly
+names lead; technical mode identifiers stay in Advanced details. Choices appear
+only when the connected backend proves that they exist and reports their current
+availability, and unavailable routes remain visible with a reason.
 
 ![Managed Agentic Harness installation with execution routes and local model profiles](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-managed.png)
 

@@ -176,9 +176,9 @@ def test_gui_primary_form_uses_plain_language_and_progressive_disclosure() -> No
     safe_areas = html.index('id="safeAreas"')
 
     assert "What would you like done?" in html[:access]
-    assert "Checks · Automatic" in html[:access]
-    assert "Access · Entire project" in html
-    assert "Technical check for this task" in javascript
+    assert "Completion check · Automatic" in html[:access]
+    assert "Work area · Entire project" in html
+    assert "How should completion be checked?" in javascript
     assert 'id="manualConnectionDetails" class="manual-connection"' in html
     assert "function modePresentation(mode)" in javascript
     assert "function technicalModeLabel(option)" in javascript
@@ -220,7 +220,7 @@ def test_gui_compacts_mobile_intake_and_collapses_previous_evidence() -> None:
     assert "els.completedDetails.hidden = !terminal" in javascript
     assert "els.artifactsEvidence.hidden = receipt.terminal" in javascript
     assert "#modes {\n    display: none;" in styles
-    assert "Change how it runs" in html
+    assert "Choose where it runs" in html
     assert ".advanced-mode-details {" in styles
     assert ".route-grid:not(.advanced-mode-grid),\n  .profile-grid {\n    display: none;" in styles
     assert ".mode-select,\n  .choice-select {\n    display: block;" in styles
@@ -250,7 +250,7 @@ def test_gui_primary_actions_and_disabled_cursor_match_interaction_state() -> No
     javascript = (STATIC / "app.js").read_text(encoding="utf-8")
     styles = (STATIC / "styles.css").read_text(encoding="utf-8")
 
-    assert "Coding-agent work, independently verified" in html
+    assert "Plan · Build · Verify" in html
     assert 'id="startButton"' in html
     assert 'id="checkButton"' in html
     assert 'id="undoButton"' not in html

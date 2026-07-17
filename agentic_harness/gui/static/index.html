@@ -212,6 +212,9 @@
         <path d="M8 3 H6.5 a2 2 0 0 0 -2 2 V8 a2 2 0 0 1 -2 2 a2 2 0 0 1 2 2 V17 a2 2 0 0 0 2 2 H8"></path>
         <path d="M16 3 H17.5 a2 2 0 0 1 2 2 V8 a2 2 0 0 0 2 2 a2 2 0 0 0 -2 2 V17 a2 2 0 0 1 -2 2 H16"></path>
       </symbol>
+      <symbol id="icon-sliders" viewBox="0 0 24 24">
+        <path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/>
+      </symbol>
 
       <!-- Clock — footer timestamp / history entry -->
       <symbol id="icon-clock" viewBox="0 0 24 24">
@@ -240,7 +243,7 @@
             <svg class="icon"><use href="#icon-workflow"></use></svg>
           </span>
           <div>
-            <p class="eyebrow">Coding-agent work, independently verified</p>
+            <p class="eyebrow">Plan · Build · Verify</p>
             <h1>Agentic Harness</h1>
           </div>
         </div>
@@ -265,7 +268,7 @@
         <button id="tasksTab" class="nav-tab" type="button" role="tab" aria-selected="false" aria-controls="tasksView">Tasks</button>
         <button id="historyTab" class="nav-tab" type="button" role="tab" aria-selected="false" aria-controls="historyView">History</button>
         <button id="setupButton" class="nav-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsView" title="Open application settings">
-          <svg class="icon" aria-hidden="true"><use href="#icon-braces"></use></svg>
+          <svg class="icon" aria-hidden="true"><use href="#icon-sliders"></use></svg>
           <span>Settings</span>
         </button>
       </nav>
@@ -278,6 +281,7 @@
       </div>
 
       <section id="demoCallout" class="first-success-card" aria-labelledby="demoTitle" hidden>
+        <img class="state-illustration demo-illustration" src="/static/illustrations/verified-archive.webp" alt="" width="220" height="147" loading="lazy" />
         <div>
           <p class="eyebrow">No setup required</p>
           <h2 id="demoTitle">See a verified result in about a minute</h2>
@@ -308,6 +312,12 @@
             placeholder="Example: Add a CSV download to the reports page and show me what changed."
           ></textarea>
           <p class="help-text objective-hint" id="objectiveHint">A normal sentence is enough.</p>
+          <div class="task-starters" aria-label="Task examples">
+            <button type="button" data-task-starter="Build or improve">Build or improve</button>
+            <button type="button" data-task-starter="Fix a problem">Fix a problem</button>
+            <button type="button" data-task-starter="Review safely">Review safely</button>
+            <button type="button" data-task-starter="Long-running task">Long-running task</button>
+          </div>
 
           <section id="modeSection" class="mode-section">
             <div class="mode-heading">
@@ -338,7 +348,7 @@
               </dl>
 
               <details class="expectation-technical-details">
-                <summary>View route details</summary>
+                <summary>Advanced details</summary>
                 <dl class="expectation-facts expectation-facts-technical">
                 <div><dt>Planner</dt><dd id="expectationPlanner">Automatic</dd></div>
                 <div><dt>Executor</dt><dd id="expectationExecutor">Automatic</dd></div>
@@ -348,12 +358,12 @@
               </details>
 
               <details id="expectationDetails" class="expectation-details">
-                <summary>Change how it runs</summary>
+                <summary>Choose where it runs</summary>
                 <section id="routeSection" class="expectation-choice-section" hidden>
                   <div class="choice-heading">
                     <div>
-                      <span class="field-label">Execution route</span>
-                      <p class="help-text">Choose where the task runs and which systems plan, execute, and review it.</p>
+                      <span class="field-label">Where should it run?</span>
+                      <p class="help-text">Choose the execution location. Technical route names stay in Advanced details.</p>
                     </div>
                     <span id="routeRecommendation" class="mode-recommendation"></span>
                   </div>
@@ -384,16 +394,16 @@
           </section>
 
           <details id="verificationDetails" class="verification-details">
-            <summary id="verificationSummary">Checks · Automatic</summary>
-            <label class="field-label" id="verificationLabel" for="checks">Technical check</label>
+            <summary id="verificationSummary">Completion check · Automatic</summary>
+            <label class="field-label" id="verificationLabel" for="checks">How should completion be checked?</label>
             <textarea id="checks" rows="2" required placeholder="Configured automatically when the project has tests"></textarea>
             <p class="help-text" id="verificationHelp">Agentic Harness runs this independently. Technical commands remain available here for advanced users.</p>
           </details>
 
           <details class="boundaries" id="accessDetails">
-            <summary id="accessSummary">Access · Entire project</summary>
-            <p class="help-text" id="scopeHelp">Leave this blank to allow the whole project, or limit the task to specific project folders.</p>
-            <label class="field-label" for="safeAreas">Limit access</label>
+            <summary id="accessSummary">Work area · Entire project</summary>
+            <p class="help-text" id="scopeHelp">Most tasks can use the entire project. Choose folders only when you want a tighter boundary.</p>
+            <label class="field-label" for="safeAreas">Where can it work?</label>
             <textarea id="safeAreas" rows="3" placeholder="Example: docs or src/components — one per line"></textarea>
           </details>
 
@@ -480,8 +490,9 @@
           <details id="completedDetails" class="completed-details" hidden>
             <summary>View evidence from the previous task</summary>
             <section id="finalResult" class="final-result" hidden>
+              <img class="state-illustration result-illustration" src="/static/illustrations/verified-archive.webp" alt="" width="240" height="160" loading="lazy" />
               <p class="eyebrow">Evidence-backed result</p>
-              <h3 id="finalLabel">Result</h3>
+              <h3 id="finalLabel">Outcome</h3>
               <p id="finalReason"></p>
               <div class="receipt-metrics">
                 <div><span>Attempts</span><strong id="finalAttempts">0</strong></div>
@@ -491,7 +502,7 @@
                 <strong id="finalWorkerClaimLabel">Assistant report</strong>
                 <p id="finalWorkerClaim"></p>
               </div>
-              <h4>Changed files</h4>
+              <h4>What changed</h4>
               <ul id="finalChangedFiles"></ul>
               <h4>Independent verification</h4>
               <ul id="finalVerification"></ul>
@@ -532,10 +543,18 @@
             <h2>Previous tasks</h2>
             <p class="help-text">Review completed work and the evidence saved with each task.</p>
           </div>
-          <label class="field-label" for="historySearch">Search tasks</label>
-          <input id="historySearch" type="search" placeholder="Search by task or status" />
-          <div class="actions compact">
+          <div class="history-controls">
+            <label><span class="field-label">Search</span><input id="historySearch" type="search" placeholder="Task or result" /></label>
+            <label><span class="field-label">Status</span><select id="historyStatusFilter"><option value="all">All statuses</option><option value="verified">Verified</option><option value="active">Working</option><option value="blocked">Blocked</option><option value="failed">Failed</option></select></label>
+            <label><span class="field-label">Run with</span><select id="historyRouteFilter"><option value="all">All routes</option></select></label>
+          </div>
+          <div class="actions compact history-actions">
             <button id="exportButton" title="Copy durable task history"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg><span id="exportButtonLabel">Copy history</span></button>
+          </div>
+          <div id="historyEmpty" class="illustrated-empty" hidden>
+            <img class="state-illustration" src="/static/illustrations/verified-archive.webp" alt="" width="260" height="173" loading="lazy" />
+            <strong>No matching tasks</strong>
+            <p>Completed and active work will appear here with its verification evidence.</p>
           </div>
           <ul class="history-list" id="historyList"></ul>
         </div>
@@ -548,6 +567,20 @@
             <button type="button" id="closeSetupButton">Back to Home</button>
           </div>
           <p class="help-text">Configure this project once. API keys entered here last only until the app closes and are never written to the project.</p>
+
+          <section id="setupJourney" class="setup-journey" aria-labelledby="setupJourneyTitle">
+            <img id="setupJourneyImage" class="state-illustration" src="/static/illustrations/local-ai-connection.webp" alt="" width="280" height="187" />
+            <div>
+              <p class="eyebrow">Guided setup</p>
+              <h3 id="setupJourneyTitle">Connect, test, then start</h3>
+              <p id="setupJourneySummary">Choose how the assistant should run. Agentic Harness will test the full connection before saving it.</p>
+              <ol class="setup-steps" aria-label="Setup progress">
+                <li class="current" id="setupStepChoose">1 · Choose</li>
+                <li id="setupStepConnect">2 · Connect</li>
+                <li id="setupStepVerify">3 · Verify</li>
+              </ol>
+            </div>
+          </section>
 
           <div id="managedSettings" class="managed-settings" hidden>
             <span class="managed-badge">Managed by this installation</span>
@@ -567,8 +600,8 @@
 
           <div id="editableSettings">
             <section class="settings-group">
-              <h3>AI connection</h3>
-              <label class="field-label" for="executionChoice">Use</label>
+              <h3>How should the assistant run?</h3>
+              <label class="field-label" for="executionChoice">Execution source</label>
               <select id="executionChoice" required>
                 <option value="coding_agent">An installed coding app</option>
                 <option value="local_model">AI running on my computer</option>
@@ -594,6 +627,7 @@
                   <button type="button" id="checkLocalModelsButton">Find local AI</button>
                 </div>
                 <div class="local-model-guide" id="localModelGuide" hidden>
+                  <img class="state-illustration guide-illustration" src="/static/illustrations/setup-recovery.webp" alt="" width="180" height="120" loading="lazy" />
                   <strong>New to local AI? Start with LM Studio.</strong>
                   <ol>
                     <li><a href="https://lmstudio.ai/download" target="_blank" rel="noreferrer">Install LM Studio</a>.</li>
@@ -624,7 +658,7 @@
             </section>
 
             <section class="settings-group">
-              <h3>Project checks</h3>
+              <h3>How should completion be checked?</h3>
               <div class="automatic-check-card">
                 <strong id="automaticCheckLabel">Automatic project checks</strong>
                 <p id="automaticCheckDetail">Agentic Harness will detect this project's tests and run them independently.</p>
