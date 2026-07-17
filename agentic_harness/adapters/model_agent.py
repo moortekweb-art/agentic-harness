@@ -225,7 +225,9 @@ class EmbeddedModelAgent:
                 if not isinstance(arguments, dict):
                     arguments = {}
                 if name == "report_outcome":
-                    outcome = _validated_outcome(arguments)
+                    outcome = _validated_outcome(
+                        _report_outcome_arguments(action, arguments)
+                    )
                     events.append(
                         self._persist_event(
                             event_store,
@@ -392,6 +394,10 @@ class EmbeddedModelAgent:
                     "For a tool action return action, arguments, plan, requirements, ",
                     "current_subgoal, and checkpoint.",
                     "Use report_outcome only when work is complete or genuinely blocked.",
+                    "For report_outcome, put status, summary, plan, requirements, ",
+                    "current_subgoal, checkpoint, and blockers inside arguments. ",
+                    "Each plan item must be an object with step and status; use ",
+                    "status=completed for every item in a complete outcome. ",
                     "For each satisfied requirement, cite only exact harness-issued evidence IDs: ",
                     "values returned by successful tools or prospective review IDs supplied in the ",
                     "user instruction. Never invent evidence IDs or use prose as evidence.",
@@ -779,15 +785,51 @@ def _validated_outcome(
         raise ValueError("report_outcome requires a summary")
     raw_requirements = arguments.get("requirements")
     requirements: list[Any] = raw_requirements if isinstance(raw_requirements, list) else []
+    raw_plan = arguments.get("plan")
+    plan: list[Any] = raw_plan if isinstance(raw_plan, list) else []
+    if status == "complete":
+        plan = [
+            {"step": item.strip(), "status": "completed"}
+            if isinstance(item, str) and item.strip()
+            else item
+            for item in plan
+        ]
     return {
         "status": status,
         "summary": summary,
-        "plan": arguments.get("plan") if isinstance(arguments.get("plan"), list) else [],
+        "plan": plan,
         "requirements": requirements,
         "current_subgoal": str(arguments.get("current_subgoal") or "").strip(),
         "checkpoint": str(arguments.get("checkpoint") or "").strip(),
         "blockers": arguments.get("blockers") if isinstance(arguments.get("blockers"), list) else [],
     }
+
+
+def _report_outcome_arguments(
+    action: dict[str, Any], arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Preserve validated outcome context emitted beside ``arguments``.
+
+    Tool actions carry their planning context at the action's top level. Some
+    structured-output models consistently keep that shape for ``report_outcome``
+    too. Accept only the known outcome fields when they are absent from
+    ``arguments``; the ordinary strict completion audit still validates every
+    field and evidence reference before accepting the goal.
+    """
+
+    merged = dict(arguments)
+    for outcome_field in (
+        "status",
+        "summary",
+        "plan",
+        "requirements",
+        "current_subgoal",
+        "checkpoint",
+        "blockers",
+    ):
+        if outcome_field not in merged and outcome_field in action:
+            merged[outcome_field] = action[outcome_field]
+    return merged
 
 
 def validate_report_outcome(arguments: dict[str, Any]) -> dict[str, Any]:

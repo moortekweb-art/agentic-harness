@@ -41,3 +41,7 @@ without changing its fail-closed execution contract.
 - `agentic-harness selftest` uses the running interpreter for its internal
   worker and review processes, so an absolute virtual-environment executable
   works even when its `bin` directory is absent from the parent `PATH`.
+- The embedded model worker accepts planning context emitted either beside or
+  inside `report_outcome.arguments`, and normalizes plain completed-plan steps
+  from structured-output models. The strict completion audit still requires a
+  complete claim, verified evidence references, and independent review.

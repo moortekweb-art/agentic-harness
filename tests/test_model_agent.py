@@ -190,6 +190,47 @@ def test_model_agent_executes_bounded_tools_and_returns_strict_outcome(tmp_path)
     assert all("arguments" not in event for event in events)
 
 
+def test_model_agent_preserves_top_level_report_outcome_context(tmp_path) -> None:
+    provider = SequenceProvider(
+        [
+            {
+                "action": "report_outcome",
+                "arguments": {
+                    "status": "complete",
+                    "summary": "Finished with independently checkable evidence.",
+                },
+                "plan": ["Finish the task"],
+                "requirements": [
+                    {
+                        "id": "R1",
+                        "text": "The requested result exists",
+                        "status": "satisfied",
+                        "evidence": ["review:1"],
+                    }
+                ],
+                "current_subgoal": "final verification complete",
+                "checkpoint": "verified",
+                "blockers": [],
+            }
+        ]
+    )
+
+    result = EmbeddedModelAgent(
+        project_dir=tmp_path,
+        provider=provider,
+        model="structured-output-model",
+    ).run(_goal(tmp_path))
+
+    assert result.success is True
+    assert result.outcome["status"] == "complete"
+    assert result.outcome["plan"] == [
+        {"step": "Finish the task", "status": "completed"}
+    ]
+    assert result.outcome["requirements"][0]["evidence"] == ["review:1"]
+    assert result.outcome["checkpoint"] == "verified"
+    assert result.outcome["blockers"] == []
+
+
 def test_model_agent_blocks_write_outside_allowed_paths(tmp_path) -> None:
     (tmp_path / "src").mkdir()
     protected = tmp_path / "protected.txt"
