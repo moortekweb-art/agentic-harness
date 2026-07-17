@@ -1668,7 +1668,12 @@ def test_gui_server_rejects_cross_origin_before_reading_partial_body() -> None:
                     "{"
                 ).encode("ascii")
             )
-            response = client.recv(4096)
+            response = b""
+            while b"cross-origin request rejected" not in response:
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                response += chunk
             elapsed = time.monotonic() - started
 
     assert response.startswith(b"HTTP/1.0 403") or response.startswith(b"HTTP/1.1 403")
