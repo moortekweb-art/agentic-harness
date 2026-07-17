@@ -16,7 +16,7 @@ false verified completions, or unresolved critical/high defects.
 Browser-first novice path:
 
 ```bash
-pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git
+pipx install local-agentic-harness==0.12.0
 cd /path/to/your/project
 agentic-harness gui
 ```
@@ -28,15 +28,16 @@ result. Record whether you had to type a path, command, endpoint, or model ID.
 Terminal comparison path:
 
 ```bash
-pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git
+pipx install local-agentic-harness==0.12.0
 cd /path/to/your/project
 agentic-harness init-agent codex
 agentic-harness do "make one small, reviewable change" --check "YOUR EXISTING CHECK"
 agentic-harness report
 ```
 
-This guide exercises the current source. For the latest published release from
-PyPI, use `pipx install local-agentic-harness` without a hard-coded version.
+This guide deliberately exercises the immutable v0.12.0 release used by the
+current readiness program. For ordinary use after the beta, install the latest
+published release with `pipx install local-agentic-harness`.
 
 Use a deterministic command the project already trusts, such as a focused test,
 lint command, or build. Do not weaken the command merely to obtain a pass.

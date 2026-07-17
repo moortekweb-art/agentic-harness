@@ -72,33 +72,42 @@ def test_killer_demo_contains_runnable_fix_failing_tests_loop() -> None:
     assert not (root / ".agentic-harness" / "config.yml").exists()
 
 
-def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
+def test_readme_public_intro_leads_with_a_short_product_and_install_path() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    quick_start = readme.split("## Quick Start", 1)[1].split("## Product Boundary", 1)[0]
+    public_intro = readme.split("# Agentic Harness", 1)[1].split(
+        "## What you install", 1
+    )[0]
+    normalized_intro = " ".join(public_intro.split())
 
-    assert len(quick_start.split()) <= 300
-    assert "pipx install local-agentic-harness" in quick_start
-    assert "latest published build is 0.7.2" not in quick_start
-    assert "git+https://github.com" not in quick_start
-    assert "agentic-harness gui" in quick_start
+    assert len(public_intro.split()) <= 700
+    assert "Let your coding agent work. Make it prove the result." in public_intro
+    assert "pipx install local-agentic-harness" in public_intro
+    assert "latest published build is 0.7.2" not in public_intro
+    assert "git+https://github.com" not in public_intro
+    assert "agentic-harness gui" in public_intro
     assert (
         'agentic-harness do "fix the failing tests" '
         '--check "python -m pytest tests/ -q"'
-    ) in quick_start
-    assert ".agentic-harness/runs/{goal-id}/report.md" in quick_start
-    assert "agentic-harness-gui.png" in quick_start
-    assert "docs/EXTERNAL_BETA.md" in quick_start
-    assert "docs/EXTERNAL_BETA_FEEDBACK.md" in quick_start
-    assert "agentic-harness run-demo fix-tests" in quick_start
-    assert "controlled mechanics demo" in quick_start
-    assert "agentic-harness create-demo" not in quick_start
-    assert "python -m pip install -r requirements-dev.txt" not in quick_start
-    assert quick_start.index("agentic-harness gui") < quick_start.index("agentic-harness run-demo")
-    assert "docs/demo-script.md" in quick_start
-    assert "agentic-harness selftest" not in quick_start
-    assert "agentic-harness goal" not in quick_start
-    assert "agentic-harness quickstart" not in quick_start
-    assert "agentic-harness run-recipe" not in quick_start
+    ) in public_intro
+    assert ".agentic-harness/runs/{goal-id}/report.md" in public_intro
+    assert "agentic-harness-gui.png" in public_intro
+    assert 'width="420"' in public_intro
+    assert "See the mobile first-run experience" in public_intro
+    assert 'width="220"' in public_intro
+    assert "docs/EXTERNAL_BETA.md" in readme
+    assert "issues/new?template=external-beta.yml" in readme
+    assert "agentic-harness run-demo fix-tests" in public_intro
+    assert "controlled mechanics demo" in normalized_intro
+    assert "agentic-harness create-demo" not in public_intro
+    assert "python -m pip install -r requirements-dev.txt" not in public_intro
+    assert public_intro.index("agentic-harness gui") < public_intro.index(
+        "agentic-harness run-demo"
+    )
+    assert "docs/demo-script.md" in public_intro
+    assert "agentic-harness selftest" not in public_intro
+    assert "agentic-harness goal" not in public_intro
+    assert "agentic-harness quickstart" not in public_intro
+    assert "agentic-harness run-recipe" not in public_intro
     assert "agentic-harness lint-fix" in readme
     assert "agentic-harness typecheck-fix" in readme
     assert "agentic-harness update-docs" in readme
@@ -107,7 +116,8 @@ def test_readme_quick_start_uses_easy_path_not_manual_yaml() -> None:
     assert "python -m agentic_harness.cli release-smoke" in readme
     assert ".agentic-harness/runs/{goal-id}/report.md" in readme
     assert ".agentic-harness/runs/<goal-id>/report.md" not in readme
-    assert "cat > .agentic-harness/config.yml" not in quick_start
+    assert "cat > .agentic-harness/config.yml" not in public_intro
+    assert 'width="720"' in readme
 
 
 def test_readme_documents_released_distribution_install() -> None:
@@ -121,13 +131,14 @@ def test_readme_documents_released_distribution_install() -> None:
     assert "currently 0.7.3" not in installation
 
 
-def test_external_beta_uses_current_source_without_a_false_pypi_pin() -> None:
+def test_external_beta_uses_the_immutable_release_under_evaluation() -> None:
     beta = (REPO_ROOT / "docs/EXTERNAL_BETA.md").read_text(encoding="utf-8")
     normalized = " ".join(beta.split())
 
-    assert "pipx install --force git+https://github.com/moortekweb-art/agentic-harness.git" in beta
-    assert "pipx install local-agentic-harness==0.7.3" not in beta
-    assert "latest published release from PyPI" in normalized
+    assert beta.count("pipx install local-agentic-harness==0.12.0") == 2
+    assert "git+https://github.com" not in beta
+    assert "immutable v0.12.0 release" in normalized
+    assert "install the latest published release" in normalized
 
 
 def test_public_getting_started_docs_use_one_verified_task_story() -> None:

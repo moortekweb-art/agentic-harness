@@ -1,46 +1,91 @@
 # Agentic Harness
 
-![Agentic Harness social preview](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-social-preview.png)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-social-preview.png" width="880" alt="Agentic Harness: plan, execute, independently review, then mark work done">
+</p>
 
-[![CI](https://github.com/moortekweb-art/agentic-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/moortekweb-art/agentic-harness/actions)
-[![Python](https://img.shields.io/badge/python-3.11--3.14-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/moortekweb-art/agentic-harness/blob/main/LICENSE)
+<p align="center">
+  <a href="https://github.com/moortekweb-art/agentic-harness/actions"><img src="https://github.com/moortekweb-art/agentic-harness/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://pypi.org/project/local-agentic-harness/"><img src="https://img.shields.io/pypi/v/local-agentic-harness.svg" alt="PyPI version"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11--3.14-blue.svg" alt="Python 3.11 through 3.14"></a>
+  <a href="https://github.com/moortekweb-art/agentic-harness/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT license"></a>
+</p>
 
-A coding agent saying “done” is not proof that the task is done.
+> Let your coding agent work. Make it prove the result.
 
-Agentic Harness runs a coding agent on one project-local goal, preserves what it
-did, and refuses to accept completion until an independent command passes.
+A coding agent saying “done” is not proof that the task is done. Agentic Harness
+adds a completion gate to Codex, OpenCode, Aider, CodeWhale, or a compatible
+local/cloud model. It keeps the objective, records the work, runs a check you
+control, and only then reports **Verified done**.
 
-## Quick Start
+- **Keep your agent.** The harness wraps the tools and models you already use.
+- **Choose the proof.** Tests, lint, builds, or another deterministic command
+  decide whether the result is accepted.
+- **Keep the evidence.** Every run leaves a project-local, redacted report you
+  can inspect or commit with the work.
+- **Stay local by default.** The GUI binds to loopback, and local model paths do
+  not require a cloud service.
+
+## Try it in two minutes
 
 Install the released CLI and browser interface:
 
 ```bash
 pipx install local-agentic-harness
-```
-
-### Run a verified task in the browser
-
-```bash
 cd /path/to/your/project
 agentic-harness gui
 ```
 
-The app confirms the current project and opens on **Home**. Describe one result
-in ordinary language; no prompt template or programming vocabulary is required.
-Use **Settings** once to connect an installed coding app, local AI, or cloud AI.
-The guided **Choose · Connect · Verify** journey detects supported local servers,
-tests structured actions, and keeps endpoints and commands under advanced
-disclosures. The browser separates **Home**, **Tasks**, **History**, and
-**Settings**, and marks work done only after the independent project check passes.
+The browser opens on **Home**. Describe the result in a normal sentence, choose
+how much effort it deserves, and use **Settings** once to connect an installed
+coding app, local AI, or cloud AI. Commands, endpoints, and model details stay
+under advanced disclosures until you need them.
 
-![Agentic Harness Home view showing task effort and a plain-language execution expectation](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui.png)
+No account or AI setup yet? Click **Try safe demo** in the app, or run:
 
-![Agentic Harness mobile first-run view with a safe no-account demo and a clear path to connect real work](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-mobile.png)
+```bash
+agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
+```
 
-![Agentic Harness verified task showing the outcome, changed files, worker report, and independent evidence](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-verified.png)
+The demo begins with a failing test and a worker that claims success too early.
+The independent gate rejects the claim, a second attempt repairs the project,
+and the final report shows why the result was accepted. It is a controlled
+mechanics demo, not evidence about model quality. See the complete
+[terminal demo script](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/demo-script.md).
 
-### Run the same verified task from the terminal
+## See the workflow
+
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui.png">
+        <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui.png" width="420" alt="Agentic Harness Home screen">
+      </a>
+      <br><sub><strong>Describe the outcome.</strong> Choose an effort level and see what will run before files change.</sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-verified.png">
+        <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-verified.png" width="420" alt="Agentic Harness verified task evidence">
+      </a>
+      <br><sub><strong>Inspect the proof.</strong> Verified done includes changed files, the worker report, and independent evidence.</sub>
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary>See the mobile first-run experience</summary>
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-mobile.png">
+    <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-mobile.png" width="220" alt="Agentic Harness mobile first-run screen">
+  </a>
+</p>
+
+</details>
+
+Click any preview for the full-size screenshot.
+
+## Prefer the terminal?
 
 ```bash
 cd /path/to/your/project
@@ -53,33 +98,31 @@ agentic-harness report
 replace it. The durable report is written to
 `.agentic-harness/runs/{goal-id}/report.md`.
 
-### Try the gate without an agent account
+## Is it for you?
 
-```bash
-agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
-```
+Agentic Harness is for developers who want autonomous help without delegating
+the definition of “finished” to the same agent doing the work. It is especially
+useful for bounded maintenance, test repair, lint/type fixes, documentation
+updates, and longer tasks that need resumable evidence.
 
-The packaged example starts with a failing test. Its mock coding agent claims
-completion too early, the independent check rejects that claim, and a second
-attempt repairs the project. It is a controlled mechanics demo, not evidence
-about model quality. See the complete [terminal demo script](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/demo-script.md).
+The documented security boundary is one trusted user and one workspace. It is
+not a multi-tenant agent platform, an anonymous public service, or proof that an
+underlying model has become more capable. External coding-agent CLIs retain
+their own permissions and runtime policies.
 
-Testing on a real repository? Read the [external beta guide](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EXTERNAL_BETA.md)
-and submit [sanitized feedback](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EXTERNAL_BETA_FEEDBACK.md).
+## What you install
 
-## Product Boundary
-
-`local-agentic-harness` is one Python distribution with a shared engine, project
-state model, packaged static browser assets, and two interfaces:
+`local-agentic-harness` is one Python package with a shared engine and two
+interfaces:
 
 - `agentic-harness` is the CLI.
-- `agentic-harness-gui` is the browser service.
+- `agentic-harness-gui` is the local browser interface.
 
-This is the same install, not two products. Both interfaces use
-`.agentic-harness/` inside the selected workspace. The portable embedded engine
-is the default and does not require an external orchestration service.
+This is the same install, not two products. Both use `.agentic-harness/` inside
+the selected workspace. No separate
+orchestration service is required for the default embedded engine.
 
-The task screen offers four provider-independent run modes:
+The task screen offers four provider-independent approaches:
 
 | Approach | Intended use | Runtime boundary |
 | --- | --- | --- |
@@ -109,9 +152,29 @@ names lead; technical mode identifiers stay in Advanced details. Choices appear
 only when the connected backend proves that they exist and reports their current
 availability, and unavailable routes remain visible with a reason.
 
-![Managed Agentic Harness installation with execution routes and local model profiles](https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-managed.png)
+<p align="center">
+  <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-managed.png">
+    <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-managed.png" width="720" alt="Managed Agentic Harness installation with execution routes and local model profiles">
+  </a>
+</p>
 
 </details>
+
+## Current evidence and open beta
+
+Version 0.12.0 is a released, technically certified self-hosted completion-
+assurance tool. Its frozen specification and evidence boundaries passed a
+preregistered ten-case adversarial matrix with zero false verified completions.
+External usability and real-agent performance validation remain in progress.
+
+- Read the [v0.12.0 release and evidence packet](https://github.com/moortekweb-art/agentic-harness/releases/tag/v0.12.0).
+- Review the [assurance protocol](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/V012_ASSURANCE_PROTOCOL.md).
+- Try it on a disposable branch using the [external beta guide](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EXTERNAL_BETA.md).
+- Count a success, failure, blocked setup, or abandoned attempt through the
+  [beta issue form](https://github.com/moortekweb-art/agentic-harness/issues/new?template=external-beta.yml).
+
+The project does not claim that the harness improves model intelligence or that
+the still-open external beta has already proved broad usability.
 
 ## Advanced Workflows
 
