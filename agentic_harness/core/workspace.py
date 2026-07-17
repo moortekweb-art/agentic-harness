@@ -40,7 +40,13 @@ def capture_workspace_snapshot(project_dir: str | Path) -> dict[str, Any]:
             truncated = True
             break
         rel = path.relative_to(root).as_posix()
-        files[rel] = _file_fingerprint(path)
+        try:
+            files[rel] = _file_fingerprint(path)
+        except FileNotFoundError:
+            # Editors and atomic writers commonly create then rename temporary
+            # files while a snapshot is walking the tree. A vanished path is
+            # not part of the completed snapshot and must not fail the run.
+            continue
     return {
         "schema": SNAPSHOT_SCHEMA,
         "files": files,
