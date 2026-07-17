@@ -7,7 +7,6 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from agentic_harness.core.state import Goal
 from agentic_harness.core.worker import WorkerResult
@@ -68,7 +67,6 @@ class GitHubActionsAdapter:
                 summary="GitHub token is required for workflow dispatch",
                 returncode=2,
             )
-        dispatch_started_at = _utc_timestamp()
         request = urllib.request.Request(
             self.dispatch_url(),
             data=json.dumps(self.dispatch_payload(goal)).encode("utf-8"),
@@ -99,7 +97,14 @@ class GitHubActionsAdapter:
                 direct_run_url = self.run_url(run_id)
             if direct_run_url:
                 return self._wait_for_run_url(direct_run_url)
-            return self._wait_for_completion(created_after=dispatch_started_at)
+            return WorkerResult(
+                success=False,
+                summary=(
+                    "GitHub Actions dispatch was accepted, but the response did not "
+                    "identify the created run; refusing ambiguous workflow polling"
+                ),
+                returncode=2,
+            )
         artifacts = _dispatch_artifacts(response_payload)
         return WorkerResult(
             success=200 <= status < 300,
@@ -154,42 +159,12 @@ class GitHubActionsAdapter:
         )
 
     def _wait_for_completion(self, *, created_after: str | None = None) -> WorkerResult:
-        deadline = time.monotonic() + self.timeout
-        while time.monotonic() <= deadline:
-            request = urllib.request.Request(
-                self.runs_url(created_after=created_after),
-                method="GET",
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "Authorization": f"Bearer {self.token}",
-                    "User-Agent": "agentic-harness",
-                    "X-GitHub-Api-Version": self.api_version,
-                },
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=30) as response:
-                    payload = _read_json_response(response)
-            except (
-                urllib.error.URLError,
-                urllib.error.HTTPError,
-                OSError,
-                json.JSONDecodeError,
-            ) as exc:
-                return WorkerResult(success=False, summary=str(exc), stderr=str(exc), returncode=1)
-            runs_value = payload.get("workflow_runs", [])
-            runs = runs_value if isinstance(runs_value, list) else []
-            run = runs[0] if runs and isinstance(runs[0], dict) else None
-            if run and run.get("status") == "completed":
-                return _workflow_result(run)
-            if self.poll_interval > 0:
-                remaining = deadline - time.monotonic()
-                sleep_time = min(self.poll_interval, max(0, remaining))
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
         return WorkerResult(
             success=False,
-            summary="timed out waiting for GitHub Actions workflow completion",
-            returncode=124,
+            summary=(
+                "cannot securely correlate a workflow run without a run id or run URL"
+            ),
+            returncode=2,
         )
 
 
@@ -230,7 +205,3 @@ def _workflow_result(run: dict[str, object]) -> WorkerResult:
         artifacts=artifacts,
         returncode=0 if conclusion == "success" else 1,
     )
-
-
-def _utc_timestamp() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")

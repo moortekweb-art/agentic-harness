@@ -71,6 +71,7 @@ const state = {
   restoredDraftVersion: 0,
   providerTemplates: [],
   localModelDetection: null,
+  specificationReviewBinding: null,
 };
 
 const byId = (id) => document.getElementById(id);
@@ -2403,7 +2404,7 @@ els.useDetectedModelButton.addEventListener("click", useDetectedLocalModel);
 els.checkLocalModelsButton.addEventListener("click", () => refreshLocalModelDetection());
 els.continueButton.addEventListener("click", () => els.continueDialog.showModal());
 els.approveSpecButton.addEventListener("click", () => {
-  window.HarnessAssurance.populateDialog(state.currentTask, {
+  state.specificationReviewBinding = window.HarnessAssurance.populateDialog(state.currentTask, {
     dialog: els.specificationDialog,
     title: els.specificationTitle,
     help: els.specificationHelp,
@@ -2418,8 +2419,10 @@ els.specificationForm.addEventListener("submit", (event) => {
     els.specificationRequirements.value,
   );
   if (!requirements.length) return;
+  const binding = state.specificationReviewBinding || {};
   els.specificationDialog.close();
-  postAction("/api/tasks/current/approve-spec", { requirements });
+  state.specificationReviewBinding = null;
+  postAction("/api/tasks/current/approve-spec", { requirements, ...binding });
 });
 els.closeContinueButton.addEventListener("click", () => els.continueDialog.close());
 els.continueForm.addEventListener("submit", (event) => {

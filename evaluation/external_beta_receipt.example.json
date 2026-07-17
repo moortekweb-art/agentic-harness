@@ -1,0 +1,37 @@
+{
+  "schema": "agentic_harness.external_beta_receipt.v1",
+  "attempt_id": "replace-with-random-id",
+  "submitted_at": "2026-07-17T00:00:00Z",
+  "release": {
+    "version": "0.12.0",
+    "commit": "replace-with-40-character-release-commit",
+    "wheel_sha256": "replace-with-64-character-sha256"
+  },
+  "participant": {
+    "anonymous_id_hash": "replace-with-stable-nonidentifying-hash",
+    "maintainer": false
+  },
+  "repository": {
+    "ecosystem": "python"
+  },
+  "runtime": {
+    "os": "replace-me",
+    "python": "replace-me",
+    "agent": "replace-me",
+    "model": "replace-me"
+  },
+  "outcome": {
+    "status": "verified",
+    "maintainer_intervention": false
+  },
+  "safety": {
+    "credential_leak": false,
+    "unsafe_unexpected_writes": false,
+    "false_verified_completion": false,
+    "unresolved_critical_or_high_defect": false
+  },
+  "metrics": {
+    "minutes_to_terminal_result": 10.0,
+    "retries": 0
+  }
+}

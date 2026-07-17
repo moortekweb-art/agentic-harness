@@ -1489,7 +1489,8 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
                         str(python_bin),
                         "-c",
                         "print('independent review passed')",
-                    ]
+                    ],
+                    "covers": ["*"],
                 },
             },
             indent=2,

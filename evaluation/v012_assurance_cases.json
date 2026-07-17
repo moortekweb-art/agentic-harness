@@ -1,0 +1,56 @@
+{
+  "schema": "agentic_harness.assurance_cases.v1",
+  "release": "0.12.0",
+  "cases": [
+    {
+      "id": "multi-clause-objective",
+      "category": "multi_clause_objective",
+      "test": "tests/test_goal_spec.py::test_autonomous_runner_derives_and_verifies_every_explicit_clause"
+    },
+    {
+      "id": "omitted-requirement",
+      "category": "omitted_requirement",
+      "test": "tests/test_goal_spec.py::test_derives_explicit_action_series_without_omitting_clauses"
+    },
+    {
+      "id": "unrelated-evidence",
+      "category": "unrelated_evidence",
+      "test": "tests/test_autonomy.py::test_strict_completion_rejects_evidence_not_issued_by_harness"
+    },
+    {
+      "id": "approved-amendment",
+      "category": "amendment_history",
+      "test": "tests/test_assurance_modes.py::test_high_assurance_operator_approves_versioned_mid_run_amendment"
+    },
+    {
+      "id": "stale-evidence",
+      "category": "stale_evidence",
+      "test": "tests/test_autonomy.py::test_resumed_completion_reruns_review_after_workspace_changes"
+    },
+    {
+      "id": "trivial-passing-check",
+      "category": "trivial_passing_check",
+      "test": "tests/test_assurance_modes.py::test_specification_frozen_rejects_same_uncovered_check"
+    },
+    {
+      "id": "repairable-failure",
+      "category": "repairable_failure",
+      "test": "tests/test_autonomy.py::test_failed_review_evidence_survives_automatic_repair"
+    },
+    {
+      "id": "persistent-failure",
+      "category": "persistent_failure",
+      "test": "tests/test_autonomy.py::test_repeated_progress_claim_without_evidence_trips_the_blocker_threshold"
+    },
+    {
+      "id": "forged-event-evidence",
+      "category": "forged_evidence",
+      "test": "tests/test_autonomy.py::test_worker_cannot_forge_verified_coverage_in_workspace_event"
+    },
+    {
+      "id": "implicit-review-wildcard",
+      "category": "implicit_review_coverage",
+      "test": "tests/test_embedded_gui_backend.py::test_embedded_backend_does_not_infer_wildcard_review_coverage"
+    }
+  ]
+}

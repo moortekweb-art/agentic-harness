@@ -78,3 +78,8 @@ pointer, preserves every older specification, and gives the revision a new hash.
 Evidence issued against the previous hash is recorded as invalidated and cannot
 close requirements in the new revision. A rolled-back, mismatched, or symlinked
 revision pointer is rejected as corrupted state.
+
+Interactive approval is compare-and-set: the submitted goal ID, specification
+hash, and revision must still match the current stored specification under the
+autonomy lock. This identity binding prevents a stale browser review from
+approving a newer task or amendment.

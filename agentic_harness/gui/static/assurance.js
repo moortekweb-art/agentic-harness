@@ -24,6 +24,11 @@
       .join("\n");
     elements.submit.textContent = amendment ? "Approve change" : "Approve and start";
     elements.dialog.showModal();
+    return {
+      goal_id: String(review.goal_id || task?.id || ""),
+      goal_spec_sha256: String(review.goal_spec_sha256 || ""),
+      version: Number.isInteger(review.version) ? review.version : -1,
+    };
   }
 
   function requirementsFromText(value) {

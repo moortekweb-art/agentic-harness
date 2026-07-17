@@ -529,7 +529,7 @@ def test_github_actions_adapter_reports_dispatch_only_success(monkeypatch) -> No
     assert "workflow completion not verified" in result.summary
 
 
-def test_github_actions_adapter_can_wait_for_completed_workflow(monkeypatch) -> None:
+def test_github_actions_adapter_refuses_ambiguous_wait_without_run_identity(monkeypatch) -> None:
     calls = []
 
     class Response:
@@ -576,13 +576,13 @@ def test_github_actions_adapter_can_wait_for_completed_workflow(monkeypatch) -> 
 
     result = adapter.run(Goal("ship", id="goal-456"))
 
-    assert result.success is True
-    assert result.summary == "GitHub Actions workflow completed: success"
-    assert result.artifacts == ["https://github.com/owner/repo/actions/runs/123"]
-    assert any("/runs" in url for url in calls)
-    runs_url = next(url for url in calls if "/runs" in url)
-    assert "event=workflow_dispatch" in runs_url
-    assert "created=%3E%3D" in runs_url
+    assert result.success is False
+    assert result.returncode == 2
+    assert "did not identify the created run" in result.summary
+    assert result.artifacts == []
+    assert calls == [
+        "https://api.github.com/repos/owner/repo/actions/workflows/workflow.yml/dispatches"
+    ]
 
 
 def test_github_actions_adapter_waits_on_returned_run_url(monkeypatch) -> None:
@@ -706,6 +706,7 @@ def test_github_actions_adapter_builds_run_url_from_returned_run_id(monkeypatch)
 
 
 def test_github_actions_wait_does_not_report_older_completed_run(monkeypatch) -> None:
+    calls = []
     class Response:
         status = 200
 
@@ -730,7 +731,10 @@ def test_github_actions_wait_does_not_report_older_completed_run(monkeypatch) ->
                 }
             ).encode("utf-8")
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: Response())
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout: calls.append(request.full_url) or Response(),
+    )
     ticks = iter([0.0, 0.0, 1.0])
     monkeypatch.setattr("time.monotonic", lambda: next(ticks))
     adapter = GitHubActionsAdapter(
@@ -746,8 +750,9 @@ def test_github_actions_wait_does_not_report_older_completed_run(monkeypatch) ->
     result = adapter._wait_for_completion()
 
     assert result.success is False
-    assert result.returncode == 124
+    assert result.returncode == 2
     assert result.artifacts == []
+    assert calls == []
 
 
 def test_github_actions_wait_respects_deadline_with_large_poll_interval(monkeypatch) -> None:
@@ -778,7 +783,10 @@ def test_github_actions_wait_respects_deadline_with_large_poll_interval(monkeypa
                 }
             ).encode("utf-8")
 
+    calls = []
+
     def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
         return Response()
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -807,10 +815,9 @@ def test_github_actions_wait_respects_deadline_with_large_poll_interval(monkeypa
     result = adapter._wait_for_completion()
 
     assert result.success is False
-    assert result.returncode == 124
-    # Sleep calls should not exceed remaining time
-    for sleep_time in sleep_calls:
-        assert sleep_time <= 10.0, f"Sleep time {sleep_time} exceeds timeout"
+    assert result.returncode == 2
+    assert sleep_calls == []
+    assert calls == []
 
 
 def test_local_llm_adapter_builds_openai_compatible_payload() -> None:

@@ -181,7 +181,7 @@ class HarnessConfig:
     github_api_version: str = "2026-03-10"
     review_command: list[str] = field(default_factory=list)
     review_command_timeout: int = 60
-    review_covers: list[str] = field(default_factory=lambda: ["*"])
+    review_covers: list[str] = field(default_factory=list)
     review_artifact: str = ""
     review_file_changed: str = ""
     review_git_clean: bool = False
@@ -230,6 +230,8 @@ review_command:
   - pytest
   - tests/
   - -q
+review_covers:
+  - "*"
 review_command_timeout: 120
 """,
     "codex": """# agentic-harness Codex starter config
@@ -249,6 +251,8 @@ review_command:
   - pytest
   - tests/
   - -q
+review_covers:
+  - "*"
 review_command_timeout: 120
 """,
     "opencode": """# agentic-harness OpenCode starter config
@@ -267,6 +271,8 @@ review_command:
   - pytest
   - tests/
   - -q
+review_covers:
+  - "*"
 review_command_timeout: 120
 """,
     "aider": """# agentic-harness Aider starter config
@@ -286,6 +292,8 @@ review_command:
   - pytest
   - tests/
   - -q
+review_covers:
+  - "*"
 review_command_timeout: 120
 """,
     "codewhale": """# agentic-harness CodeWhale starter config
@@ -308,6 +316,8 @@ review_command:
   - pytest
   - tests/
   - -q
+review_covers:
+  - "*"
 review_command_timeout: 120
 """,
 }
@@ -360,9 +370,11 @@ def _tool_config_content(project_dir: Path, tool: str) -> str:
     detected = detect_review_command(project_dir)
     if detected:
         payload["review_command"] = detected
+        payload["review_covers"] = ["*"]
         payload["review_command_timeout"] = 300
     else:
         payload.pop("review_command", None)
+        payload.pop("review_covers", None)
         payload.pop("review_command_timeout", None)
     return f"# agentic-harness {tool} starter config\n" + yaml.safe_dump(
         payload,
@@ -434,6 +446,7 @@ def demo_shell_config(*, python_executable: str | None = None) -> str:
         "worker": "shell",
         "shell_command": [executable, "mock_coding_agent.py"],
         "review_command": [executable, "-m", "pytest", "tests/", "-q"],
+        "review_covers": ["*"],
         "review_command_timeout": 120,
     }
     return "# agentic-harness shell demo config\n" + yaml.safe_dump(
