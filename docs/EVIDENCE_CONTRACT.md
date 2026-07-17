@@ -6,7 +6,11 @@ coding-agent, shell, and custom workers: a structured completion claim must
 reference recognized current-run records, and configured independent review
 must pass.
 
-## Current assurance level
+## Legacy v1 assurance level
+
+This section documents the v0.11 compatibility contract. New v0.12 embedded
+runs use the frozen GoalSpec and immutable evidence v2 contracts documented in
+`GOAL_SPEC.md` and `EVIDENCE_V2.md`.
 
 The v1 contract is **check-gated**, not a complete semantic proof of an
 unrestricted natural-language objective. The worker derives the requirement

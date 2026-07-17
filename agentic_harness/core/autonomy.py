@@ -25,11 +25,11 @@ from agentic_harness.core.autonomy_support import (
     worker_failure as _worker_failure,
 )
 from agentic_harness.core.goal_spec import (
-    GoalRequirement,
     GoalSpec,
-    preserved_objective_spec,
+    derived_objective_spec,
 )
 from agentic_harness.core.state import Goal, GoalStatus, now_iso
+from agentic_harness.core.specification_controller import SpecificationController
 from agentic_harness.core.supervisor import Supervisor
 
 
@@ -107,42 +107,13 @@ class AutonomousRunner:
                     "specification approval is available only in high_assurance mode"
                 )
             autonomy = self._initialize(goal)
-            proposal = self.supervisor.store.read_goal_spec_proposal(goal.id)
-            requirement_text = (
-                [str(item).strip() for item in requirements]
-                if requirements is not None
-                else [item.text for item in proposal.requirements]
+            return SpecificationController(self.supervisor).approve(
+                goal,
+                autonomy,
+                requirements,
+                lease,
+                save=self._save,
             )
-            if not requirement_text or any(not item for item in requirement_text):
-                raise GoalConflictError("approved specification requires completion conditions")
-            approved_path = self.supervisor.store.approved_goal_spec_path(goal)
-            if approved_path.exists():
-                existing = self.supervisor.store.read_goal_spec(goal.id)
-                if requirement_text != [item.text for item in existing.requirements]:
-                    raise GoalConflictError(
-                        "operator-approved specification cannot be edited after approval"
-                    )
-                return goal
-            if autonomy.get("status") != "awaiting_specification_approval":
-                raise GoalConflictError("specification is not awaiting operator approval")
-            approved = GoalSpec(
-                objective=proposal.objective,
-                requirements=tuple(
-                    GoalRequirement(id=f"R{index}", text=text)
-                    for index, text in enumerate(requirement_text, 1)
-                ),
-                derivation=proposal.derivation,
-                approval="operator_approved",
-                created_at=now_iso(),
-            )
-            with self.supervisor.store.locked():
-                self.supervisor.store.write_approved_goal_spec(goal, approved)
-            autonomy["goal_spec_sha256"] = approved.sha256
-            autonomy["status"] = "running"
-            autonomy["operator_intervention_required"] = False
-            autonomy["checkpoint"] = "specification_approved"
-            self._save(goal, lease)
-            return goal
 
     def _step_unlocked(self, objective: str | None, lease: object) -> Goal:
         goal = self._load_or_start(objective, lease)
@@ -152,7 +123,10 @@ class AutonomousRunner:
             _progress_signature(self.supervisor),
         )
         self._save(goal, lease)
-        if autonomy.get("status") == "awaiting_specification_approval":
+        if autonomy.get("status") in {
+            "awaiting_specification_approval",
+            "awaiting_specification_amendment",
+        }:
             return goal
         if goal.status is GoalStatus.DONE:
             return goal
@@ -252,7 +226,14 @@ class AutonomousRunner:
                 "reason": str(outcome.get("reason") or "Specification change requested"),
                 "proposed_changes": proposed if isinstance(proposed, list) else [],
                 "requested_at": now_iso(),
+                "status": "pending",
             }
+            if self.policy.assurance_mode is AssuranceMode.HIGH_ASSURANCE:
+                autonomy["status"] = "awaiting_specification_amendment"
+                autonomy["checkpoint"] = "specification_amendment_approval_required"
+                autonomy["operator_intervention_required"] = True
+                self._save(goal, lease)
+                return goal
             self._save(goal, lease)
             return self._record_blocker(
                 goal,
@@ -329,6 +310,9 @@ class AutonomousRunner:
             if persisted_spec_hash not in {None, goal_spec.sha256}:
                 raise GoalConflictError("persisted goal specification identity changed")
             existing["goal_spec_sha256"] = goal_spec.sha256
+            existing["goal_spec_requirement_ids"] = [
+                item.id for item in goal_spec.requirements
+            ]
             existing["strict_completion"] = bool(persisted_strict) or bool(
                 self.policy.require_completion_claim
             )
@@ -350,6 +334,7 @@ class AutonomousRunner:
             "objective": goal.objective,
             "objective_sha256": hashlib.sha256(goal.objective.encode("utf-8")).hexdigest(),
             "goal_spec_sha256": goal_spec.sha256,
+            "goal_spec_requirement_ids": [item.id for item in goal_spec.requirements],
             "status": (
                 "awaiting_specification_approval"
                 if self.policy.assurance_mode is AssuranceMode.HIGH_ASSURANCE
@@ -392,7 +377,7 @@ class AutonomousRunner:
             if path.exists() or path.is_symlink():
                 spec = store.read_goal_spec(goal.id)
             else:
-                spec = preserved_objective_spec(goal.objective)
+                spec = derived_objective_spec(goal.objective)
                 store.write_goal_spec(goal, spec)
             if spec.objective != goal.objective:
                 raise GoalConflictError(

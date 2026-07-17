@@ -21,6 +21,18 @@ _DERIVATIONS = {
 }
 _APPROVALS = {"automatic", "pending", "operator_approved"}
 
+_ACTION_WORDS = {
+    "add", "allow", "build", "change", "check", "complete", "configure",
+    "create", "delete", "deploy", "document", "enable", "ensure", "fix",
+    "implement", "improve", "include", "keep", "make", "migrate", "move",
+    "prevent", "publish", "refactor", "remove", "rename", "replace", "require",
+    "restore", "run", "split", "support", "test", "update", "upgrade", "use",
+    "validate", "verify",
+}
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)(?P<text>.+?)\s*$")
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+|\s*;\s*")
+_SERIES_BOUNDARY = re.compile(r"\s*,\s*(?:and\s+|then\s+|also\s+)?", re.IGNORECASE)
+
 
 def _is_iso_timestamp(value: str) -> bool:
     try:
@@ -143,3 +155,70 @@ def preserved_objective_spec(objective: str) -> GoalSpec:
         derivation="harness_preserved_objective",
         approval="automatic",
     )
+
+
+def derive_goal_requirements(objective: str) -> tuple[GoalRequirement, ...]:
+    """Derive ordered conditions without guessing when objective prose is ambiguous."""
+
+    normalized = objective.strip()
+    lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+    list_items = [
+        match.group("text").strip()
+        for line in lines
+        if (match := _LIST_ITEM.fullmatch(line)) is not None
+    ]
+    parts: list[str]
+    if len(list_items) >= 2:
+        parts = [
+            match.group("text").strip() if (match := _LIST_ITEM.fullmatch(line)) else line
+            for line in lines
+        ]
+    else:
+        parts = []
+        for sentence in _SENTENCE_BOUNDARY.split(" ".join(normalized.split())):
+            cleaned = sentence.strip()
+            if cleaned:
+                parts.extend(_split_action_series(cleaned))
+    if len(parts) < 2:
+        return (GoalRequirement(id="R1", text=normalized),)
+    return tuple(
+        GoalRequirement(id=f"R{index}", text=_completion_condition(part))
+        for index, part in enumerate(parts, 1)
+    )
+
+
+def derived_objective_spec(objective: str, *, approval: str = "automatic") -> GoalSpec:
+    """Freeze a harness-owned specification before worker execution."""
+
+    normalized = objective.strip()
+    requirements = derive_goal_requirements(normalized)
+    return GoalSpec(
+        objective=normalized,
+        requirements=requirements,
+        derivation=(
+            "harness_derived"
+            if len(requirements) > 1
+            else "harness_preserved_objective"
+        ),
+        approval=approval,
+    )
+
+
+def _split_action_series(text: str) -> list[str]:
+    core = text[:-1] if text[-1:] in {".", "!", "?"} else text
+    comma_parts = [part.strip() for part in _SERIES_BOUNDARY.split(core)]
+    if len(comma_parts) >= 2 and all(_starts_with_action(part) for part in comma_parts):
+        return comma_parts
+    return [text]
+
+
+def _starts_with_action(text: str) -> bool:
+    first = re.match(r"[A-Za-z]+", text)
+    return first is not None and first.group(0).lower() in _ACTION_WORDS
+
+
+def _completion_condition(text: str) -> str:
+    cleaned = text.strip().rstrip(".!?:").strip()
+    if not cleaned:
+        raise ValueError("derived completion condition must not be empty")
+    return cleaned[0].upper() + cleaned[1:] + "."

@@ -33,11 +33,17 @@ review:
   covers: [R1, R3]
 ```
 
-The current one-requirement compatibility derivation proposes `R1` by default.
-Setting `covers: []` explicitly keeps a general command check-gated without
-claiming requirement coverage.
+`covers: ["*"]` declares that the criterion covers every requirement in the
+already-frozen GoalSpec. The wildcard is resolved to concrete IDs before the
+check result is issued, so evidence records never contain a mutable wildcard.
+Explicit IDs remain preferable when checks cover only part of a specification.
+Setting `covers: []` keeps a general command check-gated without claiming
+requirement coverage.
 
 Tool events are issued as `observed` with `covers: []`. Reading a file, editing
 text, or invoking a worker-side check records useful activity without claiming
 that the objective is correct. Evidence from another run or specification hash,
 failed evidence, and invalidated evidence are ineligible for completion.
+An approved specification revision changes the GoalSpec hash and persists
+invalidated copies of prior evidence for audit history. New checks issue new
+records against the revised hash.

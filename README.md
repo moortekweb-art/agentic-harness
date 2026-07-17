@@ -152,18 +152,21 @@ plan -> act -> record progress -> evaluate -> repair if needed
 ```
 
 The original objective remains attached to the goal across cycles and recovery.
-The worker maintains a plan, worker-derived requirement audit, current subgoal,
-and checkpoint. Tool use produces durable redacted events. A completion claim
+The worker maintains a plan, status against harness-frozen requirement IDs,
+the current subgoal, and a checkpoint. Tool use produces durable redacted events. A completion claim
 is accepted only when it is structurally valid, cites recognized current-run
 harness records, and at least one configured independent criterion passes.
 Worker-authored prose alone is not evidence.
 
-In v0.11, the worker also derives the requirement list used by that audit.
-Therefore `Verified done` means **check-gated acceptance**: the structured claim
-and configured independent checks passed. It does not independently establish
-that the worker's requirement decomposition captured every clause of an
-unrestricted natural-language objective. See the
-[evidence contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EVIDENCE_CONTRACT.md).
+Starting in v0.12, the harness owns the acceptance specification before worker
+execution. Explicit objective clauses are conservatively frozen as stable
+requirement IDs; ambiguous prose remains one complete objective requirement.
+Specification-frozen completion requires eligible, current-run, harness-issued
+evidence for every frozen ID. High-assurance runs add operator approval and
+versioned mid-run amendments whose prior evidence is invalidated. See the
+[GoalSpec](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GOAL_SPEC.md)
+and [evidence v2](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EVIDENCE_V2.md)
+contracts.
 
 Limits on cycles, elapsed time, model tokens, provider calls, and tool calls are
 resource budgets, not success conditions. Exhausting a budget produces a

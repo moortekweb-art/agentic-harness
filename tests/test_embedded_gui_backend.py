@@ -14,9 +14,10 @@ import pytest
 from agentic_harness.gui import backend as gui_backend_module
 from agentic_harness.cli import write_goal_report
 from agentic_harness.core.artifacts import ArtifactStore
-from agentic_harness.core.autonomy import AutonomousRunner
+from agentic_harness.core.autonomy import AUTONOMY_CONTRACT, AutonomousRunner
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.core.factory import build_supervisor
+from agentic_harness.core.goal_spec import GoalRequirement, GoalSpec
 from agentic_harness.core.providers import ProviderProfile
 from agentic_harness.core.safety import split_command
 from agentic_harness.core.state import Goal, GoalStatus
@@ -156,6 +157,55 @@ def test_embedded_high_assurance_requires_visible_approval_before_worker(
     assert finished["allowed_actions"] == [{"action": "new_task", "enabled": True}]
     assert finished["metadata"]["budget"]["limits"]["max_cycles"] == 20
     assert "stdout" not in json.dumps(finished).lower()
+
+
+def test_embedded_high_assurance_exposes_plain_amendment_preview(tmp_path) -> None:
+    _configure_scripted_agent(tmp_path, assurance_mode="high_assurance")
+    backend = EmbeddedExecutionBackend(tmp_path)
+    goal = Goal("Use the requested API.", id="amendment-preview")
+    goal.transition(GoalStatus.PLANNING, reason="started")
+    goal.transition(GoalStatus.IN_PROGRESS, reason="planned")
+    goal.transition(GoalStatus.REVIEW, reason="worker requested amendment")
+    spec = GoalSpec(
+        objective=goal.objective,
+        requirements=(GoalRequirement(id="R1", text="Use the requested API."),),
+        derivation="harness_preserved_objective",
+        approval="operator_approved",
+    )
+    goal.metadata["autonomy"] = {
+        "contract": AUTONOMY_CONTRACT,
+        "status": "awaiting_specification_amendment",
+        "goal_spec_sha256": spec.sha256,
+        "requirement_status": [],
+        "operator_intervention_required": True,
+        "specification_amendment": {
+            "reason": "The requested API is unavailable.",
+            "proposed_changes": [
+                {
+                    "operation": "replace",
+                    "requirement_id": "R1",
+                    "new_text": "Use the supported replacement API.",
+                }
+            ],
+        },
+    }
+    backend.store.init()
+    backend.store.write_goal_spec(goal, spec)
+    backend.store.write_approved_goal_spec(goal, spec)
+    backend.store.write_goal(goal)
+
+    task = backend.status()
+
+    assert task["status"] == "needs_review"
+    assert task["allowed_actions"][0]["action"] == "approve_spec"
+    assert task["metadata"]["specification_review"] == {
+        "kind": "amendment",
+        "reason": "The requested API is unavailable.",
+        "version": 1,
+        "conditions": [
+            {"id": "R1", "text": "Use the supported replacement API."}
+        ],
+    }
 
 
 def test_embedded_backend_persists_provider_independent_quick_strategy(tmp_path) -> None:

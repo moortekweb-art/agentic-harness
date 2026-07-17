@@ -181,7 +181,7 @@ class HarnessConfig:
     github_api_version: str = "2026-03-10"
     review_command: list[str] = field(default_factory=list)
     review_command_timeout: int = 60
-    review_covers: list[str] = field(default_factory=lambda: ["R1"])
+    review_covers: list[str] = field(default_factory=lambda: ["*"])
     review_artifact: str = ""
     review_file_changed: str = ""
     review_git_clean: bool = False
@@ -213,7 +213,7 @@ assurance_mode: specification_frozen
 #   - -m
 #   - pytest
 # review_covers:
-#   - R1
+#   - "*"  # resolve to every already-frozen requirement before the check runs
 """
 
 TOOL_CONFIGS: dict[str, str] = {

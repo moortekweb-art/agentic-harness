@@ -52,6 +52,7 @@ jobs:
         run: |
           node --check agentic_harness/gui/static/app.js
           node --check agentic_harness/gui/static/auth.js
+          node --check agentic_harness/gui/static/assurance.js
           node tests/frontend_token_race_test.js
 
       - name: Build package

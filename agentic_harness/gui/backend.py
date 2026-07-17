@@ -36,6 +36,7 @@ from agentic_harness.core.errors import ConfigError, HarnessError, StateLockErro
 from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.factory import autonomy_policy_from_config, build_supervisor
 from agentic_harness.core.state import Goal, GoalStatus
+from agentic_harness.core.specification_amendment import amended_requirements
 from agentic_harness.core.providers import (
     PROVIDER_TEMPLATES,
     ProviderProfile,
@@ -1661,6 +1662,7 @@ class EmbeddedExecutionBackend:
                 "budget": autonomy.get("budget")
                 if isinstance(autonomy.get("budget"), dict)
                 else {},
+                "specification_review": self._specification_review(goal, autonomy),
             },
         }
 
@@ -1694,6 +1696,44 @@ class EmbeddedExecutionBackend:
             }
             for requirement in spec.requirements
         ]
+
+    def _specification_review(
+        self,
+        goal: Goal,
+        autonomy: dict[str, Any],
+    ) -> dict[str, Any]:
+        status = str(autonomy.get("status") or "")
+        if status not in {
+            "awaiting_specification_approval",
+            "awaiting_specification_amendment",
+        }:
+            return {}
+        try:
+            spec = self.store.read_goal_spec(goal.id)
+            conditions = spec.requirements
+            reason = "Review the completion conditions before any work starts."
+            kind = "initial"
+            if status == "awaiting_specification_amendment":
+                amendment = autonomy.get("specification_amendment")
+                if not isinstance(amendment, dict):
+                    return {}
+                conditions = amended_requirements(
+                    spec,
+                    amendment.get("proposed_changes"),
+                )
+                reason = str(
+                    amendment.get("reason")
+                    or "The worker requested a change to the frozen completion conditions."
+                )
+                kind = "amendment"
+            return {
+                "kind": kind,
+                "reason": redact_secrets(reason),
+                "version": self.store.read_goal_spec_version(goal.id),
+                "conditions": [item.to_dict() for item in conditions],
+            }
+        except (HarnessError, OSError, ValueError):
+            return {}
 
     def _policy_for_strategy(
         self,
@@ -2011,7 +2051,10 @@ def _task_status(goal: Goal, autonomy: dict[str, Any]) -> str:
         return "stopped"
     if goal.status is GoalStatus.DONE:
         return "done"
-    if autonomy.get("status") == "awaiting_specification_approval":
+    if autonomy.get("status") in {
+        "awaiting_specification_approval",
+        "awaiting_specification_amendment",
+    }:
         return "needs_review"
     if autonomy.get("operator_intervention_required") is True:
         return "blocked"

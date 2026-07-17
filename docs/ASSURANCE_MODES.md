@@ -17,8 +17,10 @@ checks passed; it does not claim every natural-language clause was proven.
 ## `specification_frozen`
 
 This is the default. The harness freezes the completion conditions before the
-first worker cycle. Every frozen requirement must be reported satisfied and
-must cite eligible evidence with predeclared coverage.
+first worker cycle. Explicit objective clauses are conservatively derived into
+ordered requirement IDs; ambiguous prose remains one full-objective condition.
+Every frozen requirement must be reported satisfied and must cite eligible
+evidence with predeclared coverage.
 
 ## `high_assurance`
 
@@ -40,3 +42,10 @@ agentic-harness approve-spec \
 Approval creates a separate immutable `goal-spec-approved.json` with a new
 hash. The original proposal remains intact for audit history. Execution uses
 only the approved specification, and no worker runs before approval.
+
+If the worker later reports `specification_change_required`, execution pauses
+again. The GUI and `approve-spec` command show the proposed conditions and allow
+plain-language edits. Approval appends a new immutable specification revision;
+rejection or an invalid proposal leaves the current specification unchanged.
+All evidence tied to the previous specification hash becomes ineligible and is
+recorded as invalidated before execution resumes.

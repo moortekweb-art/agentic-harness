@@ -119,8 +119,8 @@ Strict acceptance requires all of the following:
 - a structured `complete` claim;
 - non-empty summary, current subgoal, and checkpoint;
 - a non-empty plan with every item completed;
-- at least one worker-derived requirement;
-- every worker-derived requirement satisfied with non-empty recognized
+- at least one harness-frozen requirement;
+- every harness-frozen requirement satisfied with non-empty recognized
   current-run evidence;
 - an explicit empty blocker list;
 - at least one deterministic review criterion executed;
@@ -131,11 +131,12 @@ If a condition fails, the goal returns to repair. It becomes human-blocked only
 when the same no-progress condition reaches the configured threshold or a hard
 boundary already requires a person.
 
-This gate is intentionally described as check-gated acceptance. Because the
-worker supplies the v1 requirement decomposition, passing it does not by itself
+Check-gated mode intentionally makes only a check-gated acceptance claim.
+Specification-frozen and high-assurance embedded runs instead use the v0.12
+harness-owned GoalSpec and typed coverage contract. Legacy external or v1
+worker-derived requirement paths do not by themselves
 prove that every semantic clause of the original objective appears in that
-decomposition. A future frozen specification contract must move ownership of
-acceptance requirements to the harness before execution begins.
+decomposition.
 
 ## Resource budgets
 

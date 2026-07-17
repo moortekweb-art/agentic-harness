@@ -36,13 +36,17 @@ different specification at the same path. A changed objective, requirement,
 derivation, approval state, timestamp, or hash is therefore observable instead
 of silently replacing the acceptance contract.
 
-## Foundation boundary
+## Derivation boundary
 
-The first implementation uses one requirement containing the complete original
-objective. This is a conservative no-shrink baseline named
-`harness_preserved_objective`; it is not presented as semantic clause
-decomposition. Later assurance work may derive multiple plain-language
-requirements before freezing them.
+Before worker execution, the harness derives ordered conditions from explicit
+numbered or bulleted lists, sentence and semicolon boundaries, and comma-separated
+imperative action series. The example objective "Add input validation, update
+documentation, and add regression tests" becomes `R1`, `R2`, and `R3` in source
+order. Ambiguous prose is never guessed at: it remains one complete
+`harness_preserved_objective` requirement, retaining the entire original scope.
+
+This deterministic, conservative derivation is harness-owned. The worker reports
+status against the frozen IDs but cannot add, remove, reorder, or rewrite them.
 
 ## Worker status contract
 
@@ -63,5 +67,14 @@ requirement text. The GUI hydrates the immutable text from `goal-spec.json` and
 combines it with the separate mutable status projection.
 
 Evidence coverage follows the immutable `agentic_harness.evidence.v2` contract
-documented in `EVIDENCE_V2.md`. Assurance modes and specification amendments
-remain separate behavior changes built on this storage identity.
+documented in `EVIDENCE_V2.md`.
+
+## Versioned amendments
+
+In high-assurance mode a worker may request a change, but it cannot apply one.
+The task pauses and shows the proposed plain-language conditions to the operator.
+Approval appends `goal-spec-v<N>.json`, advances a validated current-revision
+pointer, preserves every older specification, and gives the revision a new hash.
+Evidence issued against the previous hash is recorded as invalidated and cannot
+close requirements in the new revision. A rolled-back, mismatched, or symlinked
+revision pointer is rejected as corrupted state.

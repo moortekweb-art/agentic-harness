@@ -15,6 +15,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 
+from agentic_harness.cli_assurance import add_approval_parser, approve_pending_specification
 from agentic_harness.core.autonomy import AutonomousRunner, AutonomyPolicy
 from agentic_harness.core.config import (
     CONFIG_DIR,
@@ -302,16 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format. Default: text.",
     )
     sub.add_parser("continue", help="Advance the active goal")
-    approve_spec = sub.add_parser(
-        "approve-spec",
-        help="Approve pending high-assurance completion conditions",
-    )
-    approve_spec.add_argument(
-        "--requirement",
-        action="append",
-        default=None,
-        help="Replace the proposed conditions with this plain-language condition; repeatable.",
-    )
+    add_approval_parser(sub)
     review = sub.add_parser("review", help="Run deterministic independent review")
     review.add_argument(
         "--check",
@@ -645,10 +637,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "approve-spec":
             config = load_config(project_dir)
             supervisor = build_supervisor(project_dir)
-            policy = autonomy_policy_from_config(config)
-            goal = AutonomousRunner(supervisor, policy=policy).approve_specification(
-                args.requirement
-            )
+            goal = approve_pending_specification(supervisor, config, args.requirement)
             print(json.dumps(public_goal_payload(goal), indent=2, sort_keys=True))
             return 0
         if args.command == "review":
@@ -1377,7 +1366,7 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
                 "from importlib.resources import files; "
                 "root = files('agentic_harness.gui.static'); "
                 "assert all(root.joinpath(name).is_file() for name in "
-                "('index.html', 'app.js', 'auth.js', 'styles.css')); "
+                "('index.html', 'app.js', 'auth.js', 'assurance.js', 'styles.css')); "
                 "art = root.joinpath('illustrations'); "
                 "assert all(art.joinpath(name).is_file() for name in "
                 "('local-ai-connection.webp', 'verified-archive.webp', "
