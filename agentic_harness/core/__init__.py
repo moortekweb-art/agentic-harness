@@ -2,6 +2,7 @@
 
 from agentic_harness.core.artifacts import ArtifactStore
 from agentic_harness.core.autonomy import AutonomousRunner, AutonomyPolicy
+from agentic_harness.core.goal_spec import GoalRequirement, GoalSpec
 from agentic_harness.core.loop_guard import LoopGuard
 from agentic_harness.core.review import (
     DeterministicReviewer,
@@ -22,6 +23,8 @@ __all__ = [
     "AutonomyPolicy",
     "DeterministicReviewer",
     "Goal",
+    "GoalRequirement",
+    "GoalSpec",
     "GoalStatus",
     "LoopGuard",
     "ReviewCriterion",

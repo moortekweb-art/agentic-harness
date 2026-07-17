@@ -11,6 +11,7 @@ from typing import Any
 
 from agentic_harness.core.errors import GoalConflictError, NoActiveGoalError
 from agentic_harness.core.events import TaskEventStore
+from agentic_harness.core.goal_spec import GoalSpec, preserved_objective_spec
 from agentic_harness.core.state import Goal, GoalStatus, now_iso
 from agentic_harness.core.supervisor import Supervisor
 from agentic_harness.core.workspace import capture_workspace_snapshot
@@ -227,6 +228,7 @@ class AutonomousRunner:
         return goal
 
     def _initialize(self, goal: Goal) -> dict[str, Any]:
+        goal_spec = self._ensure_goal_spec(goal)
         existing = goal.metadata.get("autonomy")
         if isinstance(existing, dict) and existing.get("contract") == AUTONOMY_CONTRACT:
             original_objective = str(existing.get("objective") or "")
@@ -242,6 +244,10 @@ class AutonomousRunner:
             persisted_strict = existing.get("strict_completion")
             if persisted_strict is not None and not isinstance(persisted_strict, bool):
                 raise GoalConflictError("persisted strict completion policy is malformed")
+            persisted_spec_hash = existing.get("goal_spec_sha256")
+            if persisted_spec_hash not in {None, goal_spec.sha256}:
+                raise GoalConflictError("persisted goal specification identity changed")
+            existing["goal_spec_sha256"] = goal_spec.sha256
             existing["strict_completion"] = bool(persisted_strict) or bool(
                 self.policy.require_completion_claim
             )
@@ -251,6 +257,7 @@ class AutonomousRunner:
             "contract": AUTONOMY_CONTRACT,
             "objective": goal.objective,
             "objective_sha256": hashlib.sha256(goal.objective.encode("utf-8")).hexdigest(),
+            "goal_spec_sha256": goal_spec.sha256,
             "status": "running",
             "cycle": 0,
             "heartbeat": now_iso(),
@@ -266,6 +273,26 @@ class AutonomousRunner:
         goal.metadata["autonomy"] = autonomy
         goal.metadata.setdefault("accepted", False)
         return autonomy
+
+    def _ensure_goal_spec(self, goal: Goal) -> GoalSpec:
+        store = self.supervisor.store
+        with store.locked():
+            current = store.read_current_goal()
+            if current is None or current.id != goal.id:
+                raise GoalConflictError(
+                    "active goal changed while freezing its acceptance specification"
+                )
+            path = store.goal_spec_path(goal)
+            if path.exists() or path.is_symlink():
+                spec = store.read_goal_spec(goal.id)
+            else:
+                spec = preserved_objective_spec(goal.objective)
+                store.write_goal_spec(goal, spec)
+            if spec.objective != goal.objective:
+                raise GoalConflictError(
+                    "frozen goal specification no longer matches the original objective"
+                )
+            return spec
 
     def _prepare_instruction(self, goal: Goal, autonomy: dict[str, Any]) -> None:
         current_subgoal = str(
