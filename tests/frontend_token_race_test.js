@@ -4,7 +4,8 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const appPath = process.env.APP_JS_PATH || path.join(process.cwd(), "agentic_harness/gui/static/app.js");
-const appSource = fs.readFileSync(appPath, "utf8");
+const authPath = process.env.AUTH_JS_PATH || path.join(path.dirname(appPath), "auth.js");
+const appSource = `${fs.readFileSync(authPath, "utf8")}\n${fs.readFileSync(appPath, "utf8")}`;
 
 class HeadersShim {
   constructor(headers = {}) {
