@@ -46,7 +46,10 @@ never establish completion by themselves.
 
 The interfaces present the same trusted result categories:
 
-- `Verified done` means the independent completion gate passed.
+- `Verified done` means the structured worker claim and configured independent
+  completion gate passed. In the v1 contract, requirements are worker-derived;
+  this category is check-gated acceptance, not independent proof that every
+  objective clause was captured.
 - `Blocked with reason` names the operator decision, authority, credential, or
   resource required before useful progress can continue.
 - `Failed with evidence` preserves the failed execution or verification result
@@ -116,8 +119,9 @@ Strict acceptance requires all of the following:
 - a structured `complete` claim;
 - non-empty summary, current subgoal, and checkpoint;
 - a non-empty plan with every item completed;
-- at least one derived requirement;
-- every requirement satisfied with non-empty evidence;
+- at least one worker-derived requirement;
+- every worker-derived requirement satisfied with non-empty recognized
+  current-run evidence;
 - an explicit empty blocker list;
 - at least one deterministic review criterion executed;
 - every deterministic criterion passed; and
@@ -126,6 +130,12 @@ Strict acceptance requires all of the following:
 If a condition fails, the goal returns to repair. It becomes human-blocked only
 when the same no-progress condition reaches the configured threshold or a hard
 boundary already requires a person.
+
+This gate is intentionally described as check-gated acceptance. Because the
+worker supplies the v1 requirement decomposition, passing it does not by itself
+prove that every semantic clause of the original objective appears in that
+decomposition. A future frozen specification contract must move ownership of
+acceptance requirements to the harness before execution begins.
 
 ## Resource budgets
 

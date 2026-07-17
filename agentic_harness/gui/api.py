@@ -238,7 +238,7 @@ _EXECUTION_EFFORTS: tuple[dict[str, Any], ...] = (
     {
         "key": "thorough",
         "label": "Thorough",
-        "summary": "Use checkpoints, persistent repair, and a requirement-by-requirement completion audit.",
+        "summary": "Use checkpoints, persistent repair, and a structured completion audit.",
         "policy": "Continue through recoverable failures and preserve durable evidence across attempts.",
         "recommended": False,
     },
@@ -800,7 +800,7 @@ def _objective_with_effort(objective: str, effort: str) -> str:
         ),
         "thorough": (
             "Use durable checkpoints, persist through recoverable failures, and finish with a "
-            "requirement-by-requirement audit plus recorded verification evidence."
+            "structured completion audit plus recorded independent-check evidence."
         ),
     }
     return "\n".join(
@@ -1312,14 +1312,14 @@ def _task(
     final_result: dict[str, Any] = {}
     if status == "done":
         final_result = {
-            "label": "Verified complete",
+            "label": "Checks passed",
             "accepted": True,
             "summary": summary,
             "reason": summary,
             "worker_claim": {
                 "label": "Worker claim (untrusted)",
                 "trusted": False,
-                "summary": "The worker reported completion; the managed reviewer accepted the evidence.",
+                "summary": "The worker reported completion; the configured managed checks passed.",
             },
             "attempts": max(1, runtime_context["current"]["cycle"]),
             "retries": 0,
