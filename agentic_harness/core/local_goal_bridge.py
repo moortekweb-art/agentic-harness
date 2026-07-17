@@ -764,7 +764,7 @@ def build_mode3a_goal(options: Mode3AGoalOptions) -> str:
             "",
             "Done when:",
             "- The requested task is fully implemented, not narrowed to an easier substitute.",
-            "- A requirement-by-requirement completion audit proves the original objective.",
+            "- The structured completion claim covers its worker-derived requirements and the configured deterministic review passes.",
             "- Changed files are listed.",
             "- Verification commands and results are recorded.",
             "- The local supervisor independently reviews and accepts the result.",
