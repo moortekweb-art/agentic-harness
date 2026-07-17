@@ -703,7 +703,9 @@ def make_handler(
                 return
             static_root = files("agentic_harness.gui.static")
             try:
-                resource = static_root.joinpath(*parts)
+                resource = static_root
+                for part in parts:
+                    resource = resource.joinpath(part)
                 data = resource.read_bytes()
             except (FileNotFoundError, IsADirectoryError):
                 self.send_error(HTTPStatus.NOT_FOUND)
