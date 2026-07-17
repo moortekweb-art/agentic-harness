@@ -152,6 +152,7 @@ def policy_for_strategy(
             strategy.repeated_blocker_limit,
         ),
         require_completion_claim=True,
+        assurance_mode=base.assurance_mode,
         max_cycles=_bounded_limit(base.max_cycles, strategy.max_cycles),
         max_elapsed_seconds=_bounded_limit(
             base.max_elapsed_seconds,

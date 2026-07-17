@@ -134,6 +134,11 @@ class ArtifactStore:
 
         return self.goal_dir(goal) / "goal-spec.json"
 
+    def approved_goal_spec_path(self, goal: Goal | str) -> Path:
+        """Return the separate operator-approved specification path."""
+
+        return self.goal_dir(goal) / "goal-spec-approved.json"
+
     def write_goal_spec(self, goal: Goal, spec: GoalSpec) -> Path:
         """Create a goal specification once and reject replacement attempts."""
 
@@ -143,7 +148,7 @@ class ArtifactStore:
         if path.is_symlink():
             raise GoalConflictError("goal specification path must not be a symlink")
         if path.exists():
-            existing = self.read_goal_spec(goal.id)
+            existing = self.read_goal_spec_proposal(goal.id)
             if existing != spec:
                 raise GoalConflictError(
                     "frozen goal specification already exists and cannot be replaced"
@@ -153,14 +158,51 @@ class ArtifactStore:
         self._write_json(path, spec.to_dict())
         return path
 
+    def write_approved_goal_spec(self, goal: Goal, spec: GoalSpec) -> Path:
+        """Freeze one explicitly approved specification without replacing its proposal."""
+
+        if spec.objective != goal.objective:
+            raise GoalConflictError("approved specification objective does not match the goal")
+        if spec.approval != "operator_approved":
+            raise GoalConflictError("approved specification requires operator_approved state")
+        proposal = self.read_goal_spec_proposal(goal.id)
+        if proposal.objective != spec.objective:
+            raise GoalConflictError("approved specification does not match its proposal")
+        path = self.approved_goal_spec_path(goal)
+        if path.is_symlink():
+            raise GoalConflictError("approved specification path must not be a symlink")
+        if path.exists():
+            existing = GoalSpec.from_dict(self._read_json(path))
+            if existing != spec:
+                raise GoalConflictError(
+                    "operator-approved specification already exists and cannot be replaced"
+                )
+            return path
+        self._write_json(path, spec.to_dict())
+        return path
+
     def read_goal_spec(self, goal_id: str) -> GoalSpec:
         """Read and validate the immutable specification for one goal."""
+
+        try:
+            approved = self.approved_goal_spec_path(goal_id)
+            if approved.is_symlink():
+                raise OSError("approved specification path must not be a symlink")
+            path = approved if approved.exists() else self.goal_spec_path(goal_id)
+            return GoalSpec.from_dict(self._read_json(path))
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            raise StateLockError(
+                f"corrupted or missing goal specification for {goal_id}"
+            ) from exc
+
+    def read_goal_spec_proposal(self, goal_id: str) -> GoalSpec:
+        """Read the original pre-approval specification proposal."""
 
         try:
             return GoalSpec.from_dict(self._read_json(self.goal_spec_path(goal_id)))
         except (json.JSONDecodeError, OSError, ValueError) as exc:
             raise StateLockError(
-                f"corrupted or missing goal specification for {goal_id}"
+                f"corrupted or missing goal specification proposal for {goal_id}"
             ) from exc
 
     def read_goal(self, goal_id: str) -> Goal:

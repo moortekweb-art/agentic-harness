@@ -26,6 +26,7 @@ ALLOWED_KEYS = {
     "coding_agent_timeout",
     "coding_agent_transcript",
     "allow_noop_success",
+    "assurance_mode",
     "tmux_command",
     "tmux_session_prefix",
     "llm_endpoint",
@@ -151,6 +152,7 @@ class HarnessConfig:
     coding_agent_timeout: int = 1800
     coding_agent_transcript: str = ".agentic-harness/runs/{goal_id}/coding-agent.log"
     allow_noop_success: bool = False
+    assurance_mode: str = "specification_frozen"
     tmux_command: str = ""
     tmux_session_prefix: str = "agentic-harness"
     llm_endpoint: str = ""
@@ -192,6 +194,7 @@ class HarnessConfig:
 DEFAULT_CONFIG = """# agentic-harness project config
 version: 1
 worker: noop
+assurance_mode: specification_frozen
 # For shell execution, set:
 # worker: shell
 # shell_command:
@@ -529,6 +532,14 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
         raise ConfigError("github_actions worker requires github_repo")
     if config.worker == "github_actions" and not config.github_workflow_id:
         raise ConfigError("github_actions worker requires github_workflow_id")
+    if config.assurance_mode not in {
+        "check_gated",
+        "specification_frozen",
+        "high_assurance",
+    }:
+        raise ConfigError(
+            "assurance_mode must be check_gated, specification_frozen, or high_assurance"
+        )
     if len(config.review_covers) != len(set(config.review_covers)):
         raise ConfigError("review_covers contains duplicate requirement ids")
     if any(not requirement_id.strip() for requirement_id in config.review_covers):

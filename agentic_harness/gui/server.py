@@ -483,6 +483,23 @@ def make_handler(
                     task = command_task(bridge, "continue", body)
                     task = session.record(task)
                     self._json(task)
+            elif route == "/api/tasks/current/approve-spec":
+                if active is not None:
+                    raw_requirements = body.get("requirements")
+                    requirements = (
+                        [str(item) for item in raw_requirements]
+                        if isinstance(raw_requirements, list)
+                        else None
+                    )
+                    self._json(active.approve_specification(requirements))
+                else:
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "Specification approval requires embedded mode.",
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
             elif route == "/api/tasks/current/stop":
                 if active is not None:
                     self._json(active.stop())

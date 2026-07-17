@@ -13,6 +13,7 @@ from agentic_harness.adapters.shell import ShellWorker
 from agentic_harness.adapters.tmux import TmuxWorker
 from agentic_harness.core.config import HarnessConfig, load_config
 from agentic_harness.core.autonomy import AutonomyPolicy
+from agentic_harness.core.assurance import AssuranceMode
 from agentic_harness.core.errors import ConfigError
 from agentic_harness.core.providers import resolve_api_key
 from agentic_harness.core.review import (
@@ -180,6 +181,7 @@ def autonomy_policy_from_config(
     return AutonomyPolicy(
         repeated_blocker_limit=repeated_blocker_limit,
         require_completion_claim=require_completion_claim,
+        assurance_mode=AssuranceMode(config.assurance_mode),
         max_cycles=config.goal_max_cycles,
         max_elapsed_seconds=config.goal_max_elapsed_seconds,
         max_total_tokens=config.goal_max_total_tokens,
