@@ -20,7 +20,8 @@ def test_real_world_recipes_cover_supported_runtime_paths() -> None:
     assert "type: coding_agent" in recipes
     assert "worker: shell" in recipes
     assert "worker: tmux" in recipes
-    assert "worker: local_llm" in recipes
+    assert "worker: model_agent" in recipes
+    assert "local_llm" in recipes and "deprecated" in recipes
     assert "worker: github_actions" in recipes
     assert "review_command:" in recipes
 

@@ -1335,9 +1335,9 @@ def test_managed_gui_runs_and_dismisses_isolated_demo_without_changing_real_task
 def test_gui_frontend_plumbs_token_without_persisting_or_exporting_it() -> None:
     app = Path("agentic_harness/gui/static/app.js").read_text(encoding="utf-8")
 
-    assert "new URLSearchParams(window.location.search)" in app
-    assert 'const TOKEN_PARAM = "token";' in app
-    assert "history.replaceState" in app
+    assert "new URLSearchParams(window.location.search)" not in app
+    assert 'const TOKEN_PARAM = "token";' not in app
+    assert "history.replaceState" not in app
     assert "sessionStorage" in app
     assert "Authorization" in app
     assert "Bearer" in app

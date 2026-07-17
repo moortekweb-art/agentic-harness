@@ -7,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 import json
 import os
+import re
 import sys
 from typing import Any
 
@@ -43,6 +44,7 @@ ALLOWED_KEYS = {
     "github_repo",
     "github_workflow_id",
     "github_token",
+    "github_token_env",
     "github_ref",
     "github_wait",
     "github_poll_interval",
@@ -82,6 +84,7 @@ ALLOWED_WORKER_DICT_KEYS = {
     "github_repo",
     "github_workflow_id",
     "github_token",
+    "github_token_env",
     "github_ref",
     "github_wait",
     "github_poll_interval",
@@ -94,6 +97,7 @@ ALLOWED_GITHUB_DICT_KEYS = {
     "repo",
     "workflow_id",
     "token",
+    "token_env",
     "ref",
     "wait",
     "poll_interval",
@@ -169,6 +173,7 @@ class HarnessConfig:
     github_repo: str = ""
     github_workflow_id: str = ""
     github_token: str | None = None
+    github_token_env: str = ""
     github_ref: str = "main"
     github_wait: bool = False
     github_poll_interval: float = 5.0
@@ -532,6 +537,15 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
         raise ConfigError("github_actions worker requires github_repo")
     if config.worker == "github_actions" and not config.github_workflow_id:
         raise ConfigError("github_actions worker requires github_workflow_id")
+    if config.github_token and config.github_token_env:
+        raise ConfigError(
+            "github_actions credentials must use either github_token_env or "
+            "github_token, not both"
+        )
+    if config.github_token_env and not re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_]*", config.github_token_env
+    ):
+        raise ConfigError("github_token_env must be a valid environment variable name")
     if config.assurance_mode not in {
         "check_gated",
         "specification_frozen",

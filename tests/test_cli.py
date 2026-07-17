@@ -1930,7 +1930,8 @@ def test_build_supervisor_wires_local_llm_worker_from_config(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    supervisor = build_supervisor(tmp_path)
+    with pytest.warns(DeprecationWarning, match="model_agent"):
+        supervisor = build_supervisor(tmp_path)
 
     assert isinstance(supervisor.worker, LocalLLMAdapter)
 
@@ -1960,6 +1961,55 @@ def test_build_supervisor_wires_github_actions_worker_from_config(tmp_path) -> N
     assert isinstance(supervisor.worker, GitHubActionsAdapter)
     assert supervisor.worker.wait_for_completion is True
     assert supervisor.worker.api_version == "2026-03-10"
+
+
+def test_build_supervisor_resolves_github_token_from_environment(
+    monkeypatch, tmp_path
+) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: github_actions",
+                "github_owner: owner",
+                "github_repo: repo",
+                "github_workflow_id: workflow.yml",
+                "github_token_env: HARNESS_TEST_GITHUB_TOKEN",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HARNESS_TEST_GITHUB_TOKEN", "resolved-token")
+
+    supervisor = build_supervisor(tmp_path)
+
+    assert isinstance(supervisor.worker, GitHubActionsAdapter)
+    assert supervisor.worker.token == "resolved-token"
+
+
+def test_build_supervisor_rejects_missing_github_token_environment(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "worker: github_actions",
+                "github_owner: owner",
+                "github_repo: repo",
+                "github_workflow_id: workflow.yml",
+                "github_token_env: HARNESS_DEFINITELY_MISSING_TOKEN",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="HARNESS_DEFINITELY_MISSING_TOKEN is not set"):
+        build_supervisor(tmp_path)
 
 
 def test_build_supervisor_wires_coding_agent_worker_from_config(tmp_path) -> None:

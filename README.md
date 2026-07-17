@@ -408,8 +408,9 @@ required.
 
 ## Other Adapters
 
-The shared engine also supports shell, tmux, GitHub Actions, the legacy
-single-response local LLM adapter, and custom Python workers. See
+The shared engine also supports shell, tmux, GitHub Actions, and custom Python
+workers. `LocalLLMAdapter` remains importable for compatibility but is
+deprecated; new local and remote model profiles should use `model_agent`. See
 [examples](https://github.com/moortekweb-art/agentic-harness/tree/main/examples) for project-local configurations and safety notes.
 
 The small public API remains available:
