@@ -11,7 +11,8 @@ from tempfile import NamedTemporaryFile
 import time
 from typing import Any, Iterator, cast
 
-from agentic_harness.core.errors import StateLockError
+from agentic_harness.core.errors import GoalConflictError, StateLockError
+from agentic_harness.core.goal_spec import GoalSpec
 from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.state import Goal, SAFE_GOAL_ID
 from agentic_harness.core.workspace import workspace_change_summary
@@ -127,6 +128,40 @@ class ArtifactStore:
         if make_current:
             self._write_json(self.current_path, {"goal_id": goal.id})
         return state_path
+
+    def goal_spec_path(self, goal: Goal | str) -> Path:
+        """Return the separate canonical specification path for one goal."""
+
+        return self.goal_dir(goal) / "goal-spec.json"
+
+    def write_goal_spec(self, goal: Goal, spec: GoalSpec) -> Path:
+        """Create a goal specification once and reject replacement attempts."""
+
+        if spec.objective != goal.objective:
+            raise GoalConflictError("goal specification objective does not match the goal")
+        path = self.goal_spec_path(goal)
+        if path.is_symlink():
+            raise GoalConflictError("goal specification path must not be a symlink")
+        if path.exists():
+            existing = self.read_goal_spec(goal.id)
+            if existing != spec:
+                raise GoalConflictError(
+                    "frozen goal specification already exists and cannot be replaced"
+                )
+            return path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_json(path, spec.to_dict())
+        return path
+
+    def read_goal_spec(self, goal_id: str) -> GoalSpec:
+        """Read and validate the immutable specification for one goal."""
+
+        try:
+            return GoalSpec.from_dict(self._read_json(self.goal_spec_path(goal_id)))
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            raise StateLockError(
+                f"corrupted or missing goal specification for {goal_id}"
+            ) from exc
 
     def read_goal(self, goal_id: str) -> Goal:
         try:
