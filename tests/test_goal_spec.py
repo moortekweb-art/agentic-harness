@@ -134,7 +134,7 @@ class CompleteWorker:
                 "checkpoint": "checked",
                 "current_subgoal": "final audit",
                 "plan": [{"step": "work", "status": "completed"}],
-                "requirements": [
+                "requirement_status": [
                     {"id": "R1", "status": "satisfied", "evidence": ["review:1"]}
                 ],
                 "blockers": [],

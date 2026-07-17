@@ -239,7 +239,7 @@ def test_real_agent_wrapper_emits_complete_external_contract(
     assert payload["current_subgoal"]
     assert payload["checkpoint"]
     assert payload["plan"]
-    assert payload["requirements"][0]["evidence"] == ["review:1"]
+    assert payload["requirement_status"][0]["evidence"] == ["review:1"]
     assert payload["blockers"] == []
 
 

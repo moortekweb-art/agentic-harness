@@ -143,10 +143,9 @@ outcome = {
     ],
     "current_subgoal": "Prove the repaired calculator returns the expected result",
     "checkpoint": "repair_submitted_for_independent_review",
-    "requirements": [
+    "requirement_status": [
         {
-            "id": "calculator-result",
-            "text": "Adding 2 and 3 returns 5",
+            "id": "R1",
             "status": "satisfied",
             "evidence": ["review:1"],
         }
@@ -1530,8 +1529,7 @@ class EmbeddedExecutionBackend:
             outcome = {}
         plan_value = autonomy.get("plan")
         plan: list[Any] = plan_value if isinstance(plan_value, list) else []
-        requirements_value = autonomy.get("requirements")
-        requirements: list[Any] = requirements_value if isinstance(requirements_value, list) else []
+        requirements = self._requirement_rows(goal, autonomy)
         events = TaskEventStore(self.project_dir, goal.id).read()
         frozen_changes = goal.metadata.get("terminal_workspace_changes")
         changes = (
@@ -1629,6 +1627,37 @@ class EmbeddedExecutionBackend:
                 else {},
             },
         }
+
+    def _requirement_rows(
+        self, goal: Goal, autonomy: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Hydrate mutable status from the separate frozen GoalSpec."""
+
+        status_value = autonomy.get("requirement_status")
+        status_rows = status_value if isinstance(status_value, list) else []
+        by_id = {
+            str(row.get("id") or ""): row
+            for row in status_rows
+            if isinstance(row, dict) and str(row.get("id") or "")
+        }
+        try:
+            spec = self.store.read_goal_spec(goal.id)
+        except StateLockError:
+            legacy = autonomy.get("requirements")
+            return legacy if isinstance(legacy, list) else []
+        return [
+            {
+                "id": requirement.id,
+                "text": requirement.text,
+                "status": str(by_id.get(requirement.id, {}).get("status") or "pending"),
+                "evidence": (
+                    list(by_id.get(requirement.id, {}).get("evidence") or [])
+                    if isinstance(by_id.get(requirement.id, {}).get("evidence"), list)
+                    else []
+                ),
+            }
+            for requirement in spec.requirements
+        ]
 
     def _policy_for_strategy(
         self,

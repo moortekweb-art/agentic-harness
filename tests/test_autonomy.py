@@ -40,9 +40,9 @@ def complete_outcome(
             {"step": "implement", "status": "completed"},
             {"step": "verify", "status": "completed"},
         ],
-        "requirements": [
+        "requirement_status": [
             {
-                "id": "requested-outcome",
+                "id": "R1",
                 "status": "satisfied",
                 "evidence": [evidence_ref],
             }
@@ -202,7 +202,7 @@ def test_strict_completion_rejects_evidence_not_issued_by_harness(
     evidence: list[str],
 ) -> None:
     outcome = complete_outcome()
-    outcome["requirements"][0]["evidence"] = evidence
+    outcome["requirement_status"][0]["evidence"] = evidence
     supervisor = Supervisor(
         project_dir=tmp_path,
         worker=SequenceWorker(
@@ -221,7 +221,7 @@ def test_strict_completion_rejects_evidence_not_issued_by_harness(
 
 def test_coding_agent_cannot_promote_its_own_evidence_prose(tmp_path: Path) -> None:
     outcome = complete_outcome()
-    outcome["requirements"][0]["evidence"] = ["the worker says its tests passed"]
+    outcome["requirement_status"][0]["evidence"] = ["the worker says its tests passed"]
     script = tmp_path / "claim.py"
     script.write_text(
         "import json\n"
@@ -403,9 +403,9 @@ def test_autonomous_runner_continues_partial_progress_and_accepts_proven_complet
                         {"step": "implement", "status": "completed"},
                         {"step": "verify", "status": "in_progress"},
                     ],
-                    "requirements": [
+                    "requirement_status": [
                         {
-                            "id": "requested-outcome",
+                            "id": "R1",
                             "status": "pending",
                             "evidence": ["implementation exists"],
                         }
@@ -432,8 +432,9 @@ def test_autonomous_runner_continues_partial_progress_and_accepts_proven_complet
     assert "finish verification" in worker.instructions[1]
     assert "Persisted plan:" in worker.instructions[1]
     assert '"step": "implement"' in worker.instructions[1]
-    assert "Persisted requirements:" in worker.instructions[1]
-    assert '"id": "requested-outcome"' in worker.instructions[1]
+    assert "Frozen requirements (ids and text are immutable):" in worker.instructions[1]
+    assert "Persisted requirement status:" in worker.instructions[1]
+    assert '"id": "R1"' in worker.instructions[1]
 
 
 def test_current_run_passed_event_is_persisted_as_typed_requirement_evidence(
@@ -457,7 +458,7 @@ def test_current_run_passed_event_is_persisted_as_typed_requirement_evidence(
         "id": "event:1",
         "goal_id": goal.id,
         "run_id": goal.metadata["worker_run_id"],
-        "requirement_ids": ["requested-outcome"],
+        "requirement_ids": ["R1"],
         "kind": "durable_event",
         "result": "passed",
         "issuer": "harness.task_event",
@@ -513,7 +514,7 @@ def test_strict_completion_rejects_cross_run_or_failed_event_evidence(
 
 def test_strict_completion_rejects_duplicate_evidence_references(tmp_path: Path) -> None:
     outcome = complete_outcome()
-    outcome["requirements"][0]["evidence"] = [
+    outcome["requirement_status"][0]["evidence"] = [
         "review:1",
         "review:1",
     ]
@@ -542,7 +543,7 @@ def test_meaningful_progress_does_not_consume_the_no_progress_circuit_breaker(
                 "checkpoint": f"checkpoint-{index}",
                 "current_subgoal": f"subgoal {index + 1}",
                 "plan": [{"step": f"part-{index}", "status": "completed"}],
-                "requirements": [],
+                "requirement_status": [],
             },
         )
         for index in range(6)
@@ -578,7 +579,7 @@ def test_repeated_progress_claim_without_evidence_trips_the_blocker_threshold(
                     "checkpoint": "goal_started",
                     "current_subgoal": "same step",
                     "plan": [{"step": "same step", "status": "in_progress"}],
-                    "requirements": [],
+                    "requirement_status": [],
                 },
             )
             for _ in range(3)
@@ -614,7 +615,7 @@ def test_runtime_progress_token_counts_bounded_tool_observation_as_progress(
                     "checkpoint": "source_inspected",
                     "current_subgoal": "apply the focused change",
                     "plan": [{"step": "Inspect source", "status": "completed"}],
-                    "requirements": [],
+                    "requirement_status": [],
                     "progress_token": "trusted-tool-event-sha256",
                 },
             )
@@ -644,7 +645,7 @@ def test_cycle_budget_blocks_resumably_instead_of_running_forever(tmp_path: Path
                     "checkpoint": "first_cycle",
                     "current_subgoal": "continue",
                     "plan": [{"step": "Continue", "status": "in_progress"}],
-                    "requirements": [],
+                    "requirement_status": [],
                     "progress_token": "cycle-1",
                 },
             )
@@ -831,7 +832,7 @@ def test_autonomous_runner_resumes_same_goal_after_process_restart(tmp_path: Pat
                     "checkpoint": "halfway",
                     "current_subgoal": "finish the second half",
                     "plan": [{"step": "finish", "status": "in_progress"}],
-                    "requirements": [],
+                    "requirement_status": [],
                 },
             )
         ]
@@ -1215,7 +1216,7 @@ def test_autonomous_runner_rejects_a_changed_persisted_objective(tmp_path: Path)
                     "checkpoint": "halfway",
                     "current_subgoal": "finish",
                     "plan": [{"step": "finish", "status": "in_progress"}],
-                    "requirements": [],
+                    "requirement_status": [],
                 },
             )
         ]
@@ -1363,7 +1364,7 @@ def test_strict_completion_cannot_be_downgraded_when_resumed(tmp_path: Path) -> 
                         "checkpoint": "partial",
                         "current_subgoal": "finish",
                         "plan": [{"step": "finish", "status": "in_progress"}],
-                        "requirements": [],
+                        "requirement_status": [],
                     },
                 )
             ]

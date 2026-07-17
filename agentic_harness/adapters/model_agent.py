@@ -285,7 +285,7 @@ class EmbeddedModelAgent:
                             "status": "blocked",
                             "summary": summary,
                             "plan": action.get("plan") or [],
-                            "requirements": action.get("requirements") or [],
+                            "requirement_status": action.get("requirement_status") or [],
                             "current_subgoal": str(
                                 action.get("current_subgoal") or "resolve the safety blocker"
                             ),
@@ -339,7 +339,7 @@ class EmbeddedModelAgent:
             "status": "progress",
             "summary": f"Completed {len(events)} bounded tool steps; more work remains.",
             "plan": last_action.get("plan") or [],
-            "requirements": last_action.get("requirements") or [],
+            "requirement_status": last_action.get("requirement_status") or [],
             "current_subgoal": str(last_action.get("current_subgoal") or "continue the task"),
             "checkpoint": str(last_action.get("checkpoint") or "tool_step_budget_reached"),
             "blockers": [],
@@ -391,18 +391,20 @@ class EmbeddedModelAgent:
                     "replace_text, git_status, git_diff, run_check, report_outcome.",
                     "There is no arbitrary shell, delete, install, or network tool.",
                     "Read a file first, then pass its returned sha256 as expected_sha256 to replace_text.",
-                    "For a tool action return action, arguments, plan, requirements, ",
+                    "For a tool action return action, arguments, plan, requirement_status, ",
                     "current_subgoal, and checkpoint.",
                     "Use report_outcome only when work is complete or genuinely blocked.",
-                    "For report_outcome, put status, summary, plan, requirements, ",
+                    "For report_outcome, put status, summary, plan, requirement_status, ",
                     "current_subgoal, checkpoint, and blockers inside arguments. ",
                     "Each plan item must be an object with step and status; use ",
                     "status=completed for every item in a complete outcome. ",
-                    "For each satisfied requirement, cite only exact harness-issued evidence IDs: ",
+                    "Never return replacement requirement ids or text. For each frozen requirement ",
+                    "status, cite only exact harness-issued evidence IDs: ",
                     "values returned by successful tools or prospective review IDs supplied in the ",
                     "user instruction. Never invent evidence IDs or use prose as evidence.",
                     "A complete outcome must include status=complete, summary, completed plan, ",
-                    "satisfied requirements with evidence, current_subgoal, checkpoint, and blockers=[]",
+                    "one satisfied requirement_status entry per frozen id with evidence, ",
+                    "current_subgoal, checkpoint, and blockers=[]",
                     f"Model identifier: {self.model}",
                     "Allowed paths: " + json.dumps(safety["allowed_paths"]),
                     "Configured checks: " + json.dumps(checks, sort_keys=True),
@@ -783,8 +785,10 @@ def _validated_outcome(
     summary = str(arguments.get("summary") or "").strip()
     if not summary:
         raise ValueError("report_outcome requires a summary")
-    raw_requirements = arguments.get("requirements")
-    requirements: list[Any] = raw_requirements if isinstance(raw_requirements, list) else []
+    raw_requirement_status = arguments.get("requirement_status")
+    requirement_status: list[Any] = (
+        raw_requirement_status if isinstance(raw_requirement_status, list) else []
+    )
     raw_plan = arguments.get("plan")
     plan: list[Any] = raw_plan if isinstance(raw_plan, list) else []
     if status == "complete":
@@ -798,7 +802,7 @@ def _validated_outcome(
         "status": status,
         "summary": summary,
         "plan": plan,
-        "requirements": requirements,
+        "requirement_status": requirement_status,
         "current_subgoal": str(arguments.get("current_subgoal") or "").strip(),
         "checkpoint": str(arguments.get("checkpoint") or "").strip(),
         "blockers": arguments.get("blockers") if isinstance(arguments.get("blockers"), list) else [],
@@ -822,7 +826,7 @@ def _report_outcome_arguments(
         "status",
         "summary",
         "plan",
-        "requirements",
+        "requirement_status",
         "current_subgoal",
         "checkpoint",
         "blockers",

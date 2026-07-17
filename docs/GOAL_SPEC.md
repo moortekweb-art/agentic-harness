@@ -44,7 +44,23 @@ objective. This is a conservative no-shrink baseline named
 decomposition. Later assurance work may derive multiple plain-language
 requirements before freezing them.
 
-This foundation does not yet make the frozen requirements authoritative in the
-completion audit. Worker-status validation, typed evidence coverage, assurance
-modes, and specification amendments are separate behavior changes built on
-this storage identity.
+## Worker status contract
+
+The frozen requirements are authoritative in strict completion. Workers report
+mutable progress only through `requirement_status`:
+
+```json
+{
+  "requirement_status": [
+    {"id": "R1", "status": "satisfied", "evidence": ["review:1"]}
+  ]
+}
+```
+
+The completion audit rejects replacement `requirements` lists, unknown IDs,
+missing frozen IDs, duplicates, and any status row containing replacement
+requirement text. The GUI hydrates the immutable text from `goal-spec.json` and
+combines it with the separate mutable status projection.
+
+Typed evidence coverage, assurance modes, and specification amendments remain
+separate behavior changes built on this storage identity.

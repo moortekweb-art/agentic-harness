@@ -238,7 +238,7 @@ def test_coding_agent_worker_extracts_structured_harness_outcome(monkeypatch, tm
     outcome = {
         "status": "complete",
         "summary": "implemented and verified",
-        "requirements": [
+        "requirement_status": [
             {
                 "id": "tests",
                 "status": "satisfied",
@@ -267,7 +267,7 @@ def test_coding_agent_worker_extracts_json_wrapped_harness_outcome(
     outcome = {
         "status": "completed",
         "summary": "implemented and verified",
-        "requirements": [],
+        "requirement_status": [],
         "blockers": [],
     }
 
@@ -291,7 +291,7 @@ def test_coding_agent_worker_extracts_multiline_marker_and_skips_malformed_lates
     outcome = {
         "status": "complete",
         "summary": "valid earlier result",
-        "requirements": [],
+        "requirement_status": [],
         "blockers": [],
     }
 
