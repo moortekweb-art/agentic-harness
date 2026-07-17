@@ -23,6 +23,7 @@ def passing_reviewer() -> DeterministicReviewer:
                 name="deterministic_check",
                 check=lambda goal: (True, "focused check passed"),
                 description="Focused check must pass",
+                covers=("R1",),
             )
         ]
     )
@@ -183,6 +184,7 @@ def test_review_evidence_ids_do_not_embed_secret_shaped_criterion_names(
                 ReviewCriterion(
                     name=f"api_key={secret}",
                     check=lambda goal: (True, "passed"),
+                    covers=("R1",),
                 )
             ]
         ),
@@ -304,6 +306,7 @@ class EventEvidenceWorker:
             self.project_dir,
             goal.id,
             run_id=self.run_id or str(goal.metadata["worker_run_id"]),
+            goal_spec_sha256=str(goal.metadata["autonomy"]["goal_spec_sha256"]),
         ).append(
             stage="check",
             kind="check_finished",
@@ -337,6 +340,7 @@ class LongHistoryEventEvidenceWorker:
             self.project_dir,
             goal.id,
             run_id=str(goal.metadata["worker_run_id"]),
+            goal_spec_sha256=str(goal.metadata["autonomy"]["goal_spec_sha256"]),
         ).append(
             stage="check",
             kind="check_finished",
@@ -437,7 +441,7 @@ def test_autonomous_runner_continues_partial_progress_and_accepts_proven_complet
     assert '"id": "R1"' in worker.instructions[1]
 
 
-def test_current_run_passed_event_is_persisted_as_typed_requirement_evidence(
+def test_current_run_tool_event_is_observed_but_cannot_verify_requirement(
     tmp_path: Path,
 ) -> None:
     supervisor = Supervisor(
@@ -446,23 +450,24 @@ def test_current_run_passed_event_is_persisted_as_typed_requirement_evidence(
         reviewer=passing_reviewer(),
     )
 
-    goal = AutonomousRunner(supervisor).run("accept current-run evidence")
+    goal = AutonomousRunner(supervisor).step("reject activity-only evidence")
 
-    assert goal.status is GoalStatus.DONE
+    assert goal.status is not GoalStatus.DONE
     audit = goal.metadata["autonomy"]["completion_audit"]
+    assert "requirement R1 cites ineligible evidence: event:1" in audit["failures"]
     event_record = next(
         record for record in audit["evidence_registry"] if record["id"] == "event:1"
     )
     assert event_record == {
-        "schema": "agentic_harness.evidence.v1",
+        "schema": "agentic_harness.evidence.v2",
         "id": "event:1",
         "goal_id": goal.id,
         "run_id": goal.metadata["worker_run_id"],
-        "requirement_ids": ["R1"],
-        "kind": "durable_event",
-        "result": "passed",
+        "goal_spec_sha256": goal.metadata["autonomy"]["goal_spec_sha256"],
         "issuer": "harness.task_event",
-        "validation": {"level": "harness_verified"},
+        "kind": "check_finished",
+        "result": "observed",
+        "covers": [],
     }
 
 
@@ -475,9 +480,9 @@ def test_current_run_evidence_is_not_truncated_after_long_event_history(
         reviewer=passing_reviewer(),
     )
 
-    goal = AutonomousRunner(supervisor).run("accept evidence after long history")
+    goal = AutonomousRunner(supervisor).step("inspect evidence after long history")
 
-    assert goal.status is GoalStatus.DONE
+    assert goal.status is not GoalStatus.DONE
     audit = goal.metadata["autonomy"]["completion_audit"]
     assert any(record["id"] == "event:501" for record in audit["evidence_registry"])
 
@@ -486,7 +491,7 @@ def test_current_run_evidence_is_not_truncated_after_long_event_history(
     ("worker", "expected_fragment"),
     [
         ("wrong_run", "unverified evidence"),
-        ("failed_event", "unverified evidence"),
+        ("failed_event", "ineligible evidence"),
     ],
 )
 def test_strict_completion_rejects_cross_run_or_failed_event_evidence(
@@ -908,7 +913,13 @@ def test_autonomous_runner_reruns_review_after_interrupted_completion_audit(
     resumed = Supervisor(
         project_dir=tmp_path,
         reviewer=DeterministicReviewer(
-            [ReviewCriterion(name="replacement_review", check=replacement_review)]
+            [
+                ReviewCriterion(
+                    name="replacement_review",
+                    check=replacement_review,
+                    covers=("R1",),
+                )
+            ]
         ),
     )
 
@@ -1128,7 +1139,13 @@ def test_autonomous_runner_reruns_review_after_resumed_check_override(
             ]
         ),
         reviewer=DeterministicReviewer(
-            [ReviewCriterion(name="command_passes", check=baseline_review)]
+            [
+                ReviewCriterion(
+                    name="command_passes",
+                    check=baseline_review,
+                    covers=("R1",),
+                )
+            ]
         ),
     )
     first.start(
@@ -1183,7 +1200,13 @@ def test_autonomous_runner_reruns_review_after_resumed_check_override(
     resumed = Supervisor(
         project_dir=tmp_path,
         reviewer=DeterministicReviewer(
-            [ReviewCriterion(name="command_passes", check=override_review)]
+            [
+                ReviewCriterion(
+                    name="command_passes",
+                    check=override_review,
+                    covers=("R1",),
+                )
+            ]
         ),
     )
 
@@ -1285,7 +1308,13 @@ def test_failed_review_evidence_survives_automatic_repair(tmp_path: Path) -> Non
         return True, "focused review passed after repair"
 
     reviewer = DeterministicReviewer(
-        [ReviewCriterion(name="focused_review", check=check_review)]
+        [
+            ReviewCriterion(
+                name="focused_review",
+                check=check_review,
+                covers=("R1",),
+            )
+        ]
     )
     worker = SequenceWorker(
         [

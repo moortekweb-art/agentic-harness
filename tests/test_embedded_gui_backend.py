@@ -634,7 +634,7 @@ def test_embedded_backend_local_model_edits_checks_and_finishes_end_to_end(tmp_p
                 "summary": "Updated and verified the value.",
                 "plan": [{"step": "Update value", "status": "completed"}],
                 "requirement_status": [
-                    {"id": "R1", "status": "satisfied", "evidence": ["event:3"]}
+                        {"id": "R1", "status": "satisfied", "evidence": ["review:1"]}
                 ],
                 "current_subgoal": "final verification complete",
                 "checkpoint": "verified",

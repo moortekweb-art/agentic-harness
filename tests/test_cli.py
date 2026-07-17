@@ -2003,6 +2003,7 @@ def test_build_supervisor_wires_review_command_from_config(tmp_path) -> None:
                 "  - python",
                 "  - -c",
                 "  - \"print('ok')\"",
+                "review_covers: [R2]",
                 "",
             ]
         ),
@@ -2016,6 +2017,7 @@ def test_build_supervisor_wires_review_command_from_config(tmp_path) -> None:
 
     assert reviewed.status == "done"
     assert [item["name"] for item in reviewed.review["criteria"]] == ["command_passes"]
+    assert reviewed.review["criteria"][0]["covers"] == ["R2"]
 
 
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])

@@ -192,6 +192,11 @@ class EmbeddedModelAgent:
             self.project_dir,
             goal.id,
             run_id=str(goal.metadata.get("worker_run_id") or ""),
+            goal_spec_sha256=(
+                str(goal.metadata.get("autonomy", {}).get("goal_spec_sha256") or "")
+                if isinstance(goal.metadata.get("autonomy"), dict)
+                else ""
+            ),
         )
         autonomy = goal.metadata.get("autonomy")
         cycle = int(autonomy.get("cycle") or 0) + 1 if isinstance(autonomy, dict) else 1

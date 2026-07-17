@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from agentic_harness.core.errors import GoalConflictError, NoActiveGoalError
+from agentic_harness.core.evidence import EvidenceRecord, EvidenceResult
 from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.goal_spec import GoalSpec, preserved_objective_spec
 from agentic_harness.core.state import Goal, GoalStatus, now_iso
@@ -19,7 +20,6 @@ from agentic_harness.core.workspace import capture_workspace_snapshot
 
 AUTONOMY_CONTRACT = "agentic_harness.autonomy.v1"
 COMPLETION_AUDIT_CONTRACT = "agentic_harness.completion_audit.v1"
-EVIDENCE_CONTRACT = "agentic_harness.evidence.v1"
 _COMPLETE_OUTCOME_STATUSES = {"complete", "completed", "done"}
 
 
@@ -513,7 +513,6 @@ class AutonomousRunner:
             self.supervisor,
             goal,
             review,
-            requirement_ids=requirement_ids,
         )
 
         strict_completion = autonomy.get("strict_completion") is True
@@ -592,7 +591,7 @@ class AutonomousRunner:
                         or not any(str(item).strip() for item in evidence)
                     ):
                         failures.append(
-                            f"requirement {requirement.get('id') or index + 1} has no evidence"
+                            f"requirement {requirement_id} has no evidence"
                         )
                     else:
                         normalized = [
@@ -602,7 +601,7 @@ class AutonomousRunner:
                         ]
                         if len(normalized) != len(set(normalized)):
                             failures.append(
-                                f"requirement {requirement.get('id') or index + 1} "
+                                f"requirement {requirement_id} "
                                 "contains duplicate evidence references"
                             )
                         invalid = sorted(
@@ -619,15 +618,21 @@ class AutonomousRunner:
                                 "cites unverified evidence: " + ", ".join(invalid)
                             )
                         else:
-                            for evidence_id in normalized:
-                                covered = evidence_registry[evidence_id].get(
-                                    "requirement_ids"
+                            ineligible = [
+                                evidence_id
+                                for evidence_id in normalized
+                                if not evidence_registry[evidence_id].verifies(
+                                    requirement_id,
+                                    goal_id=goal.id,
+                                    run_id=str(goal.metadata.get("worker_run_id") or ""),
+                                    goal_spec_sha256=goal_spec.sha256,
                                 )
-                                if (
-                                    isinstance(covered, list)
-                                    and requirement_id not in covered
-                                ):
-                                    covered.append(requirement_id)
+                            ]
+                            if ineligible:
+                                failures.append(
+                                    f"requirement {requirement_id} cites ineligible evidence: "
+                                    + ", ".join(ineligible)
+                                )
             blockers = outcome.get("blockers")
             if not isinstance(blockers, list):
                 failures.append("blockers list is missing")
@@ -642,7 +647,9 @@ class AutonomousRunner:
             "review": review,
             "goal_spec_sha256": goal_spec.sha256,
             "requirement_status": outcome.get("requirement_status") or [],
-            "evidence_registry": list(evidence_registry.values()),
+            "evidence_registry": [
+                record.to_dict() for record in evidence_registry.values()
+            ],
         }
 
     def _record_blocker(
@@ -782,72 +789,73 @@ def _expected_review_evidence_refs(supervisor: Supervisor) -> list[str]:
     return [
         _review_evidence_ref(index)
         for index, criterion in enumerate(supervisor.reviewer.criteria, 1)
-        if criterion.independent
+        if criterion.independent and criterion.covers
     ]
 
 
-def _durable_event_evidence_refs(supervisor: Supervisor, goal: Goal) -> set[str]:
+def _durable_event_evidence_records(
+    supervisor: Supervisor,
+    goal: Goal,
+) -> dict[str, EvidenceRecord]:
     run_id = str(goal.metadata.get("worker_run_id") or "")
     if not run_id:
-        return set()
+        return {}
     try:
         events = TaskEventStore(supervisor.project_dir, goal.id).read(limit=None)
     except (OSError, ValueError):
-        return set()
-    return {
-        str(event["evidence_id"])
-        for event in events
-        if isinstance(event.get("tool"), dict)
-        and event["tool"].get("status") in {"passed", "completed"}
-        and isinstance(event.get("evidence_id"), str)
-        and event.get("run_id") == run_id
-    }
+        return {}
+    records: dict[str, EvidenceRecord] = {}
+    for event in events:
+        payload = event.get("evidence")
+        if not isinstance(payload, dict) or event.get("run_id") != run_id:
+            continue
+        try:
+            record = EvidenceRecord.from_dict(payload)
+        except ValueError:
+            continue
+        records[record.id] = record
+    return records
 
 
 def _evidence_registry(
     supervisor: Supervisor,
     goal: Goal,
     review: dict[str, Any],
-    *,
-    requirement_ids: list[str],
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, EvidenceRecord]:
     run_id = str(goal.metadata.get("worker_run_id") or "")
-    registry: dict[str, dict[str, Any]] = {
-        evidence_id: {
-            "schema": EVIDENCE_CONTRACT,
-            "id": evidence_id,
-            "goal_id": goal.id,
-            "run_id": run_id,
-            "requirement_ids": [],
-            "kind": "durable_event",
-            "result": "passed",
-            "issuer": "harness.task_event",
-            "validation": {"level": "harness_verified"},
-        }
-        for evidence_id in sorted(_durable_event_evidence_refs(supervisor, goal))
-    }
+    registry = _durable_event_evidence_records(supervisor, goal)
     criteria = review.get("criteria")
     if not isinstance(criteria, list):
         return registry
     for index, criterion in enumerate(criteria, 1):
         if (
             not isinstance(criterion, dict)
-            or criterion.get("passed") is not True
             or criterion.get("independent") is not True
         ):
             continue
+        covers = criterion.get("covers")
+        if not isinstance(covers, list) or not all(
+            isinstance(item, str) for item in covers
+        ):
+            covers = []
         evidence_id = _review_evidence_ref(index)
-        registry[evidence_id] = {
-            "schema": EVIDENCE_CONTRACT,
-            "id": evidence_id,
-            "goal_id": goal.id,
-            "run_id": run_id,
-            "requirement_ids": list(requirement_ids),
-            "kind": "independent_review",
-            "result": "passed",
-            "issuer": "harness.review",
-            "validation": {"level": "harness_verified"},
-        }
+        try:
+            registry[evidence_id] = EvidenceRecord(
+                id=evidence_id,
+                goal_id=goal.id,
+                run_id=run_id,
+                goal_spec_sha256=str(criterion.get("goal_spec_sha256") or ""),
+                issuer="harness.review",
+                kind="deterministic_check",
+                result=(
+                    EvidenceResult.VERIFIED
+                    if criterion.get("passed") is True
+                    else EvidenceResult.FAILED
+                ),
+                covers=tuple(covers),
+            )
+        except ValueError:
+            continue
     return registry
 
 

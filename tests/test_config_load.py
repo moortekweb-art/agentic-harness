@@ -317,6 +317,52 @@ review_command:
     assert config.review_command == ["python", "-m", "pytest"]
 
 
+def test_nested_review_coverage_is_loaded_before_checks_run(tmp_path) -> None:
+    _write_config(
+        tmp_path,
+        """
+version: 1
+worker: noop
+review:
+  command: [python, -m, pytest]
+  covers: [R1, R3]
+""",
+    )
+
+    config = load_config(tmp_path)
+
+    assert config.review_covers == ["R1", "R3"]
+
+
+def test_review_coverage_may_be_explicitly_empty(tmp_path) -> None:
+    _write_config(
+        tmp_path,
+        """
+version: 1
+worker: noop
+review:
+  command: [python, -c, "raise SystemExit(0)"]
+  covers: []
+""",
+    )
+
+    assert load_config(tmp_path).review_covers == []
+
+
+def test_duplicate_review_coverage_is_rejected(tmp_path) -> None:
+    _write_config(
+        tmp_path,
+        """
+version: 1
+worker: noop
+review_covers: [R1, R1]
+""",
+    )
+
+    with pytest.raises(ConfigError, match="duplicate"):
+        load_config(tmp_path)
+
+
 # --- Worker validation ---
 
 

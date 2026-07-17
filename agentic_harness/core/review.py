@@ -24,6 +24,14 @@ class ReviewCriterion:
     check: CriterionCheck
     description: str = ""
     independent: bool = True
+    covers: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "covers", tuple(self.covers))
+        if len(self.covers) != len(set(self.covers)):
+            raise ValueError("review criterion coverage contains duplicate requirement ids")
+        if any(not isinstance(item, str) or not item.strip() for item in self.covers):
+            raise ValueError("review criterion coverage contains an empty requirement id")
 
 
 @dataclass
@@ -58,6 +66,12 @@ class DeterministicReviewer:
                 "add at least one criterion or use a default reviewer"
             )
         results: list[dict[str, object]] = []
+        autonomy = goal.metadata.get("autonomy")
+        goal_spec_sha256 = (
+            str(autonomy.get("goal_spec_sha256") or "")
+            if isinstance(autonomy, dict)
+            else ""
+        )
         for criterion in self.criteria:
             passed, message = criterion.check(goal)
             results.append(
@@ -67,6 +81,8 @@ class DeterministicReviewer:
                     "passed": bool(passed),
                     "message": redact_secrets(str(message)),
                     "independent": criterion.independent,
+                    "covers": list(criterion.covers),
+                    "goal_spec_sha256": goal_spec_sha256,
                 }
             )
         return ReviewResult(
@@ -79,7 +95,12 @@ class DeterministicReviewer:
         return success, "worker reported success" if success else "worker did not report success"
 
 
-def artifact_exists(project_dir: str | Path, artifact_path: str) -> ReviewCriterion:
+def artifact_exists(
+    project_dir: str | Path,
+    artifact_path: str,
+    *,
+    covers: tuple[str, ...] = (),
+) -> ReviewCriterion:
     """Require a recorded artifact to exist below the project directory."""
     root = Path(project_dir).resolve()
     rel = Path(artifact_path)
@@ -100,6 +121,7 @@ def artifact_exists(project_dir: str | Path, artifact_path: str) -> ReviewCriter
         "artifact_exists",
         check,
         f"Artifact must be recorded and exist: {artifact_path}",
+        covers=covers,
     )
 
 
@@ -109,6 +131,7 @@ def command_passes(
     cwd: str | Path = ".",
     timeout: int = 60,
     secret_env_names: list[str] | tuple[str, ...] = (),
+    covers: tuple[str, ...] = (),
 ) -> ReviewCriterion:
     """Require a command to exit successfully."""
 
@@ -137,10 +160,16 @@ def command_passes(
         "command_passes",
         check,
         "Configured independent command must pass.",
+        covers=covers,
     )
 
 
-def file_changed(project_dir: str | Path, path: str) -> ReviewCriterion:
+def file_changed(
+    project_dir: str | Path,
+    path: str,
+    *,
+    covers: tuple[str, ...] = (),
+) -> ReviewCriterion:
     """Require git to report a path as changed."""
 
     def check(goal: Goal) -> tuple[bool, str]:
@@ -160,10 +189,19 @@ def file_changed(project_dir: str | Path, path: str) -> ReviewCriterion:
         changed = bool(proc.stdout.strip())
         return changed, f"file changed: {path}" if changed else f"file clean: {path}"
 
-    return ReviewCriterion("file_changed", check, f"File must be changed: {path}")
+    return ReviewCriterion(
+        "file_changed",
+        check,
+        f"File must be changed: {path}",
+        covers=covers,
+    )
 
 
-def git_clean(project_dir: str | Path = ".") -> ReviewCriterion:
+def git_clean(
+    project_dir: str | Path = ".",
+    *,
+    covers: tuple[str, ...] = (),
+) -> ReviewCriterion:
     """Require the git worktree to be clean."""
 
     def check(goal: Goal) -> tuple[bool, str]:
@@ -183,7 +221,12 @@ def git_clean(project_dir: str | Path = ".") -> ReviewCriterion:
         clean = not proc.stdout.strip()
         return clean, "git worktree clean" if clean else "git worktree has changes"
 
-    return ReviewCriterion("git_clean", check, "Git worktree must be clean")
+    return ReviewCriterion(
+        "git_clean",
+        check,
+        "Git worktree must be clean",
+        covers=covers,
+    )
 
 
 def goal_status_is(status: str) -> ReviewCriterion:

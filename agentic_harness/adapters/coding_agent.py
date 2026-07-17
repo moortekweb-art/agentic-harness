@@ -211,6 +211,11 @@ class CodingAgentWorker:
                 self.cwd,
                 goal.id,
                 run_id=str(goal.metadata.get("worker_run_id") or ""),
+                goal_spec_sha256=(
+                    str(autonomy.get("goal_spec_sha256") or "")
+                    if isinstance(autonomy, dict)
+                    else ""
+                ),
             ).append(
                 stage="act",
                 kind=kind,

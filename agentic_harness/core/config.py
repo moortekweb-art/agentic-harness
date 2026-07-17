@@ -49,6 +49,7 @@ ALLOWED_KEYS = {
     "github_api_version",
     "review_command",
     "review_command_timeout",
+    "review_covers",
     "review_artifact",
     "review_file_changed",
     "review_git_clean",
@@ -111,6 +112,7 @@ ALLOWED_LLM_DICT_KEYS = {
 ALLOWED_REVIEW_DICT_KEYS = {
     "command",
     "command_timeout",
+    "covers",
     "artifact",
     "file_changed",
     "git_clean",
@@ -131,7 +133,12 @@ ALLOWED_WORKERS = {
     "model_agent",
     "github_actions",
 }
-LIST_KEYS = {"shell_command", "coding_agent_command", "review_command"}
+LIST_KEYS = {
+    "shell_command",
+    "coding_agent_command",
+    "review_command",
+    "review_covers",
+}
 _IS_WINDOWS = os.name == "nt"
 
 
@@ -167,6 +174,7 @@ class HarnessConfig:
     github_api_version: str = "2026-03-10"
     review_command: list[str] = field(default_factory=list)
     review_command_timeout: int = 60
+    review_covers: list[str] = field(default_factory=lambda: ["R1"])
     review_artifact: str = ""
     review_file_changed: str = ""
     review_git_clean: bool = False
@@ -196,6 +204,8 @@ worker: noop
 #   - python
 #   - -m
 #   - pytest
+# review_covers:
+#   - R1
 """
 
 TOOL_CONFIGS: dict[str, str] = {
@@ -519,6 +529,10 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
         raise ConfigError("github_actions worker requires github_repo")
     if config.worker == "github_actions" and not config.github_workflow_id:
         raise ConfigError("github_actions worker requires github_workflow_id")
+    if len(config.review_covers) != len(set(config.review_covers)):
+        raise ConfigError("review_covers contains duplicate requirement ids")
+    if any(not requirement_id.strip() for requirement_id in config.review_covers):
+        raise ConfigError("review_covers contains an empty requirement id")
     for key in (
         "goal_max_cycles",
         "goal_max_elapsed_seconds",
@@ -553,6 +567,7 @@ def _flatten_config(payload: dict[str, Any]) -> dict[str, Any]:
         aliases = {
             "command": "review_command",
             "command_timeout": "review_command_timeout",
+            "covers": "review_covers",
             "artifact": "review_artifact",
             "file_changed": "review_file_changed",
             "git_clean": "review_git_clean",

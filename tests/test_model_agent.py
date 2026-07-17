@@ -591,7 +591,13 @@ def test_model_completion_uses_common_audit_for_invented_evidence(tmp_path) -> N
         project_dir=tmp_path,
         worker=worker,
         reviewer=DeterministicReviewer(
-            [ReviewCriterion("deterministic_check", lambda goal: (True, "passed"))]
+            [
+                ReviewCriterion(
+                    "deterministic_check",
+                    lambda goal: (True, "passed"),
+                    covers=("R1",),
+                )
+            ]
         ),
     )
 
@@ -630,7 +636,13 @@ def test_model_completion_accepts_prospective_harness_review_evidence(tmp_path) 
         project_dir=tmp_path,
         worker=EmbeddedModelAgent(project_dir=tmp_path, provider=provider, model="model"),
         reviewer=DeterministicReviewer(
-            [ReviewCriterion("deterministic_check", lambda goal: (True, "passed"))]
+            [
+                ReviewCriterion(
+                    "deterministic_check",
+                    lambda goal: (True, "passed"),
+                    covers=("R1",),
+                )
+            ]
         ),
     )
 
