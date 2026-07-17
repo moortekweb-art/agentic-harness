@@ -1,7 +1,6 @@
 const STORAGE_KEY = "agentic-harness-gui-form";
 const THEME_KEY = "agentic-harness-theme";
 const TOKEN_KEY = "agentic-harness-gui-session-token";
-const TOKEN_PARAM = "token";
 const ICON_PREFIX = "#icon-";
 const API_TIMEOUT_MS = 20000;
 // Managed local-model profile changes can include a guarded model swap and startup probe.
@@ -262,16 +261,8 @@ function iconMarkup(name) {
   return `<svg class="icon" aria-hidden="true"><use href="${iconHref(name)}"></use></svg>`;
 }
 
-function captureTokenFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const token = params.get(TOKEN_PARAM) || "";
-  if (token) {
-    sessionStorage.setItem(TOKEN_KEY, token);
-    params.delete(TOKEN_PARAM);
-    const query = params.toString();
-    history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
-  }
-  state.authToken = token || sessionStorage.getItem(TOKEN_KEY) || "";
+function restoreAuthToken() {
+  state.authToken = sessionStorage.getItem(TOKEN_KEY) || "";
 }
 
 function clearAuthToken() {
@@ -2519,7 +2510,7 @@ document.addEventListener("visibilitychange", recoverVisibleSession);
 window.addEventListener("pageshow", recoverVisibleSession);
 window.addEventListener("online", recoverVisibleSession);
 
-captureTokenFromUrl();
+restoreAuthToken();
 applyTheme(localStorage.getItem(THEME_KEY) || "light");
 showView("home");
 restoreForm();

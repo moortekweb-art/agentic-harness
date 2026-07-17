@@ -36,8 +36,6 @@ class GitHubActionsAdapter:
                 "objective": goal.objective,
             },
         }
-        if self.wait_for_completion:
-            payload["return_run_details"] = True
         return payload
 
     def dispatch_url(self) -> str:

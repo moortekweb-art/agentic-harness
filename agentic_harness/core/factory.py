@@ -90,11 +90,16 @@ def build_supervisor(
             secret_values=[resolved_key],
         )
     elif config.worker == "github_actions":
+        github_token = (
+            resolve_api_key(config.github_token_env)
+            if config.github_token_env
+            else config.github_token
+        )
         worker = GitHubActionsAdapter(
             owner=config.github_owner,
             repo=config.github_repo,
             workflow_id=config.github_workflow_id,
-            token=config.github_token,
+            token=github_token,
             ref=config.github_ref,
             wait_for_completion=config.github_wait,
             poll_interval=config.github_poll_interval,
@@ -137,9 +142,11 @@ def review_criteria_from_config(
         commands = [command] if command else []
     for command in commands:
         if command:
-            secret_env_names = (
-                [config.llm_api_key_env] if config.llm_api_key_env else []
-            )
+            secret_env_names = [
+                name
+                for name in (config.llm_api_key_env, config.github_token_env)
+                if name
+            ]
             criteria.append(
                 command_passes(
                     command,

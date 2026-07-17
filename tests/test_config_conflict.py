@@ -146,6 +146,61 @@ github_token: test
     assert config.github_repo == "myrepo"
 
 
+def test_github_token_environment_reference_loads_from_nested_config(tmp_path) -> None:
+    _write_config(
+        tmp_path,
+        """
+version: 1
+worker: github_actions
+github:
+  owner: owner
+  repo: repo
+  workflow_id: ci.yml
+  token_env: AGENTIC_HARNESS_GITHUB_TOKEN
+""",
+    )
+
+    config = load_config(tmp_path)
+
+    assert config.github_token is None
+    assert config.github_token_env == "AGENTIC_HARNESS_GITHUB_TOKEN"
+
+
+def test_github_token_and_environment_reference_conflict(tmp_path) -> None:
+    _write_config(
+        tmp_path,
+        """
+version: 1
+worker: github_actions
+github_owner: owner
+github_repo: repo
+github_workflow_id: ci.yml
+github_token: plaintext
+github_token_env: AGENTIC_HARNESS_GITHUB_TOKEN
+""",
+    )
+
+    with pytest.raises(ConfigError, match="either github_token_env or github_token"):
+        load_config(tmp_path)
+
+
+def test_github_token_environment_reference_must_be_valid_name(tmp_path) -> None:
+    _write_config(
+        tmp_path,
+        """
+version: 1
+worker: github_actions
+github_owner: owner
+github_repo: repo
+github_workflow_id: ci.yml
+github_token_env: NOT-A-NAME
+""",
+    )
+
+    with pytest.raises(ConfigError, match="valid environment variable name"):
+        load_config(tmp_path)
+
+
 def test_llm_conflict_raises_config_error(tmp_path) -> None:
     """Both top-level llm_endpoint and llm.endpoint must raise ConfigError."""
     _write_config(

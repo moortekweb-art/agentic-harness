@@ -5,9 +5,8 @@ pass.
 
 ## Highlights
 
-- GitHub Actions wait mode now requests `return_run_details: true`, so modern
-  workflow dispatch responses can return exact run IDs/URLs instead of forcing
-  recent-run polling.
+- GitHub Actions wait mode polls for the matching workflow run after a standard
+  workflow dispatch request.
 - `ShellWorker` now returns structured `WorkerResult` failures for timeouts and
   missing executables instead of raising subprocess exceptions.
 - `TmuxWorker` shell-quotes `{goal_id}` and `{objective}` placeholders, and the

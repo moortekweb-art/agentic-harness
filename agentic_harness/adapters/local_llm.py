@@ -6,6 +6,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +24,12 @@ class LocalLLMAdapter:
     retry_delay: float = 1.0
 
     def __post_init__(self) -> None:
+        warnings.warn(
+            "LocalLLMAdapter is deprecated; use the model_agent worker for "
+            "structured, tool-capable OpenAI-compatible models.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if self.timeout < 1:
             raise ValueError(f"timeout must be >= 1, got {self.timeout}")
         if self.retries < 0:

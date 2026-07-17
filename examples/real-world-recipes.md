@@ -101,11 +101,13 @@ coding_agent_command: [opencode, run, "{objective}"]
 
 ## Local LLM Endpoint
 
-Use this when an OpenAI-compatible local endpoint can produce a bounded result.
+Use `model_agent` when an OpenAI-compatible local endpoint can execute bounded,
+structured tool steps. The older `local_llm` single-response worker remains
+available for compatibility but is deprecated.
 
 ```yaml
 version: 1
-worker: local_llm
+worker: model_agent
 llm_endpoint: http://127.0.0.1:4000/v1/chat/completions
 llm_model: local-model
 review_command:
@@ -118,9 +120,8 @@ review_command:
 ## GitHub Actions Worker
 
 Use GitHub Actions when execution should happen in CI instead of on the local
-machine. `github_wait: true` waits on the exact workflow run URL returned by
-GitHub's modern workflow dispatch API. Older API responses without a run URL
-fall back to polling workflow_dispatch runs created after dispatch.
+machine. `github_wait: true` polls for the matching workflow run after the
+standard workflow dispatch request.
 
 ```yaml
 version: 1
@@ -128,7 +129,7 @@ worker: github_actions
 github_owner: moortekweb-art
 github_repo: agentic-harness
 github_workflow_id: ci.yml
-github_token: token-from-your-secret-store
+github_token_env: AGENTIC_HARNESS_GITHUB_TOKEN
 github_wait: true
 github_api_version: 2026-03-10
 github_timeout: 600
@@ -138,6 +139,12 @@ review_command:
   - pytest
   - tests/
   - -q
+```
+
+Set the referenced token outside the project before starting the harness:
+
+```bash
+export AGENTIC_HARNESS_GITHUB_TOKEN=github_pat_your_token
 ```
 
 The target workflow should accept `goal_id` and `objective` inputs if it needs

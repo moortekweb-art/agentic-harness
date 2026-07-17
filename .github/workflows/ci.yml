@@ -47,6 +47,12 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'
         run: python -m compileall agentic_harness
 
+      - name: Run frontend checks
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'
+        run: |
+          node --check agentic_harness/gui/static/app.js
+          node tests/frontend_token_race_test.js
+
       - name: Build package
         if: matrix.python-version == '3.14' && (matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest')
         run: |

@@ -490,7 +490,7 @@ def test_github_actions_adapter_builds_dispatch_payload() -> None:
     assert adapter.run(goal).success is False
 
 
-def test_github_actions_adapter_requests_run_details_when_waiting() -> None:
+def test_github_actions_adapter_keeps_standard_dispatch_payload_when_waiting() -> None:
     goal = Goal("ship", id="goal-1")
     adapter = GitHubActionsAdapter(
         "owner",
@@ -503,7 +503,6 @@ def test_github_actions_adapter_requests_run_details_when_waiting() -> None:
     assert adapter.dispatch_payload(goal) == {
         "ref": "dev",
         "inputs": {"goal_id": "goal-1", "objective": "ship"},
-        "return_run_details": True,
     }
 
 
@@ -649,7 +648,6 @@ def test_github_actions_adapter_waits_on_returned_run_url(monkeypatch) -> None:
         {
             "ref": "main",
             "inputs": {"goal_id": "goal-456", "objective": "ship"},
-            "return_run_details": True,
         }
     ]
     assert ("GET", "https://api.github.com/repos/owner/repo/actions/runs/456") == calls[1][:2]
