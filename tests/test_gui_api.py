@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import mimetypes
 import socket
 import subprocess
 import sys
@@ -1109,7 +1110,8 @@ def test_gui_token_mode_keeps_static_shell_public_and_gates_api(monkeypatch) -> 
     assert unknown_authenticated.payload == {"ok": False, "error": "not found"}
 
 
-def test_gui_serves_only_approved_nested_illustration_assets() -> None:
+def test_gui_serves_only_approved_nested_illustration_assets(monkeypatch) -> None:
+    monkeypatch.setattr(mimetypes, "guess_type", lambda _name: (None, None))
     with gui_server(FakeBridge()) as base_url:
         with urllib.request.urlopen(
             base_url + "/static/illustrations/local-ai-connection.webp",
