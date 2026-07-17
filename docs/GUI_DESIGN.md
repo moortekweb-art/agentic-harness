@@ -108,6 +108,9 @@ and tool-call limits. Reaching a limit produces `Blocked with reason` or
 ### Verified done
 
 - Show `Verified done` only after independent verification passes.
+- Explain that the v1 label means the structured claim and configured checks
+  passed; the requirement list is worker-derived and is not yet a frozen,
+  independently approved interpretation of every objective clause.
 - Show the accepted result summary.
 - List changed files and independent checks.
 - Link to bounded previews of changed text and recorded artifacts.

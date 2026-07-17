@@ -1,9 +1,24 @@
 # Evidence Contract
 
-Agentic Harness does not treat worker-authored prose as completion evidence.
-Strict completion converges at one engine boundary for embedded, coding-agent,
-shell, and custom workers: every satisfied requirement must reference a current-
-run record issued or verified by the harness.
+Agentic Harness does not treat worker-authored prose alone as completion
+evidence. Strict completion converges at one engine boundary for embedded,
+coding-agent, shell, and custom workers: a structured completion claim must
+reference recognized current-run records, and configured independent review
+must pass.
+
+## Current assurance level
+
+The v1 contract is **check-gated**, not a complete semantic proof of an
+unrestricted natural-language objective. The worker derives the requirement
+list that the completion audit inspects. The harness preserves the original
+objective and rejects malformed, stale, prose-only, and check-failing claims,
+but it does not independently establish that the worker-derived list captured
+every clause of that objective.
+
+Likewise, v1 requirement coverage is normalized by the completion audit after
+the worker cites a recognized record. It is not immutable issuer-declared
+coverage. The record shape below is the durable normalized audit record, not a
+claim that the issuer independently determined the semantic mapping.
 
 ## Record
 
@@ -29,7 +44,7 @@ reference is accepted only when its record:
 - belongs to the same `goal_id` and current `run_id`;
 - is unique within the requirement claim;
 - has `result: passed` and `validation.level: harness_verified`; and
-- covers the requirement through `requirement_ids`.
+- is linked to the cited worker-derived requirement through `requirement_ids`.
 
 Missing IDs, failed events, duplicate references, previous-run events, and
 free-form descriptions fail the audit.
@@ -38,7 +53,9 @@ free-form descriptions fail the audit.
 
 The embedded model agent receives durable `event:<sequence>` IDs after bounded
 tools finish. The common audit re-reads those records and requires a passed
-current-run tool event; the model cannot mint an accepted ID itself.
+current-run tool event; the model cannot mint an accepted ID itself. A v1 tool
+event proves that the recorded activity completed. It does not independently
+prove that the activity semantically satisfies an objective clause.
 
 Coding-agent and custom workers receive the stable IDs of configured
 independent criteria in their completion instruction. Those IDs resolve only
@@ -63,4 +80,7 @@ This is a local integrity contract, not a cryptographic attestation system. A
 user with permission to rewrite the workspace's `.agentic-harness/` state can
 also rewrite its evidence. The contract prevents a worker result from being
 accepted merely because it supplied convincing text, and prevents evidence
-from another goal cycle from satisfying the current one.
+from another goal cycle from satisfying the current one. It does not yet freeze
+acceptance requirements before execution or give evidence immutable,
+issuer-defined semantic coverage; those are the target of the next evidence
+contract.
