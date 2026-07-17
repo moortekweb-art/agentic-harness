@@ -2432,8 +2432,8 @@ def test_goal_command_requires_structured_completion_and_accepts_it(tmp_path, ca
                 "    'checkpoint': 'verified',",
                 "    'current_subgoal': 'final audit',",
                 "    'plan': [{'step': 'verify', 'status': 'completed'}],",
-                "    'requirements': [{",
-                "        'id': 'requested-outcome',",
+                "    'requirement_status': [{",
+                "        'id': 'R1',",
                 "        'status': 'satisfied',",
                     "        'evidence': ['review:1'],",
                 "    }],",
@@ -2601,7 +2601,7 @@ def test_easy_do_uses_portable_project_engine_without_optional_sidecar(
         "outcome = {\"status\": \"complete\", \"summary\": \"portable done\", "
         "\"checkpoint\": \"verified\", \"current_subgoal\": \"audit complete\", "
         "\"plan\": [{\"step\": \"work\", \"status\": \"completed\"}], "
-        "\"requirements\": [{\"id\": \"R1\", \"status\": \"satisfied\", "
+        "\"requirement_status\": [{\"id\": \"R1\", \"status\": \"satisfied\", "
         "\"evidence\": [\"review:1\"]}], \"blockers\": []}\n"
         "print('HARNESS_RESULT_JSON=' + json.dumps(outcome))\n",
         encoding="utf-8",
@@ -2684,7 +2684,7 @@ def test_easy_do_accepts_verify_alias_and_records_command(tmp_path, capsys) -> N
         "outcome = {\"status\": \"complete\", \"summary\": \"claimed done\", "
         "\"checkpoint\": \"ready\", \"current_subgoal\": \"final audit\", "
         "\"plan\": [{\"step\": \"work\", \"status\": \"completed\"}], "
-        "\"requirements\": [{\"id\": \"R1\", \"status\": \"satisfied\", "
+        "\"requirement_status\": [{\"id\": \"R1\", \"status\": \"satisfied\", "
         "\"evidence\": [\"review:1\"]}], \"blockers\": []}\n"
         "print('HARNESS_RESULT_JSON=' + json.dumps(outcome))\n",
         encoding="utf-8",

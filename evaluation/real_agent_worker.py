@@ -57,9 +57,9 @@ def main() -> int:
         "current_subgoal": "independent verification",
         "checkpoint": "real coding-agent process completed",
         "plan": [{"step": "apply the requested maintenance change", "status": "completed"}],
-        "requirements": [
+        "requirement_status": [
             {
-                "id": "requested-change",
+                "id": "R1",
                 "status": "satisfied",
                 "evidence": ["review:1"],
             }

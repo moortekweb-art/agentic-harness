@@ -262,8 +262,8 @@ class AutonomousRunner:
             "cycle": 0,
             "heartbeat": now_iso(),
             "plan": [],
-            "requirements": [],
-            "current_subgoal": "derive the plan and requirements",
+            "requirement_status": [],
+            "current_subgoal": "execute the frozen requirements",
             "checkpoint": "goal_started",
             "blocker": {"signature": "", "consecutive_count": 0, "reason": ""},
             "operator_intervention_required": False,
@@ -295,6 +295,7 @@ class AutonomousRunner:
             return spec
 
     def _prepare_instruction(self, goal: Goal, autonomy: dict[str, Any]) -> None:
+        goal_spec = self.supervisor.store.read_goal_spec(goal.id)
         current_subgoal = str(
             autonomy.get("current_subgoal") or "derive the next concrete subgoal"
         )
@@ -307,20 +308,28 @@ class AutonomousRunner:
             f"Checkpoint: {autonomy.get('checkpoint') or 'none'}",
             "Persisted plan: "
             + json.dumps(autonomy.get("plan") or [], sort_keys=True, default=str),
-            "Persisted requirements: "
+            f"Frozen GoalSpec SHA-256: {goal_spec.sha256}",
+            "Frozen requirements (ids and text are immutable): "
             + json.dumps(
-                autonomy.get("requirements") or [], sort_keys=True, default=str
+                [item.to_dict() for item in goal_spec.requirements],
+                sort_keys=True,
+                default=str,
+            ),
+            "Persisted requirement status: "
+            + json.dumps(
+                autonomy.get("requirement_status") or [], sort_keys=True, default=str
             ),
             f"Prior feedback: {feedback or 'none'}",
             "",
             "Continue autonomously while meaningful progress is possible.",
             "Treat failed checks and review findings as repair input, not completion.",
             "Do not ask for routine decisions or claim completion from effort, time, or token use.",
-            "Completion requires every derived requirement to be satisfied with concrete evidence.",
+            "Completion requires every frozen requirement to be satisfied with concrete evidence.",
             "Return one HARNESS_RESULT_JSON object with status, plan, current_subgoal, ",
-            "checkpoint, requirements, blockers, summary, and verification evidence.",
-            "Use status complete for finished work. Every requirement must include a stable id, ",
-            "status satisfied, and an evidence list.",
+            "checkpoint, requirement_status, blockers, summary, and verification evidence.",
+            "Do not return a requirements list or change requirement ids or text. ",
+            "Use status complete for finished work. requirement_status must contain exactly one ",
+            "entry for every frozen requirement id, with status satisfied and an evidence list.",
             "Requirement evidence must contain only the exact harness-issued identifiers listed ",
             "below, never your own tool-call IDs or prose.",
         ]
@@ -364,7 +373,7 @@ class AutonomousRunner:
     def _record_outcome(self, autonomy: dict[str, Any], outcome: dict[str, Any]) -> None:
         for source, target in (
             ("plan", "plan"),
-            ("requirements", "requirements"),
+            ("requirement_status", "requirement_status"),
             ("current_subgoal", "current_subgoal"),
             ("checkpoint", "checkpoint"),
         ):
@@ -494,17 +503,12 @@ class AutonomousRunner:
         criteria = review.get("criteria")
         if not isinstance(criteria, list) or not criteria:
             failures.append("deterministic review produced no criteria evidence")
-        requirements = outcome.get("requirements")
-        requirement_ids = (
-            [
-                str(requirement.get("id") or "").strip()
-                for requirement in requirements
-                if isinstance(requirement, dict)
-                and str(requirement.get("id") or "").strip()
-            ]
-            if isinstance(requirements, list)
-            else []
-        )
+        goal_spec = self.supervisor.store.read_goal_spec(goal.id)
+        autonomy = _autonomy(goal)
+        if autonomy.get("goal_spec_sha256") != goal_spec.sha256:
+            failures.append("frozen goal specification identity changed")
+        requirement_ids = [item.id for item in goal_spec.requirements]
+        requirement_status = outcome.get("requirement_status")
         evidence_registry = _evidence_registry(
             self.supervisor,
             goal,
@@ -512,7 +516,7 @@ class AutonomousRunner:
             requirement_ids=requirement_ids,
         )
 
-        strict_completion = _autonomy(goal).get("strict_completion") is True
+        strict_completion = autonomy.get("strict_completion") is True
         if strict_completion:
             has_independent_criterion = isinstance(criteria, list) and any(
                 isinstance(item, dict) and item.get("independent") is True
@@ -539,22 +543,47 @@ class AutonomousRunner:
                     item_status = str(item.get("status") or "").strip().lower()
                     if item_status not in {"complete", "completed", "done"}:
                         failures.append(f"plan item {index + 1} is not completed")
-            if not isinstance(requirements, list) or not requirements:
-                failures.append("structured completion claim has no requirements")
+            if "requirements" in outcome:
+                failures.append(
+                    "worker returned a mutable requirements list; use requirement_status"
+                )
+            if not isinstance(requirement_status, list) or not requirement_status:
+                failures.append("structured completion claim has no requirement status")
             else:
-                for index, requirement in enumerate(requirements):
+                rows_by_id: dict[str, dict[str, Any]] = {}
+                seen_ids: set[str] = set()
+                for index, requirement in enumerate(requirement_status):
                     if not isinstance(requirement, dict):
-                        failures.append(f"requirement {index + 1} is malformed")
+                        failures.append(f"requirement status {index + 1} is malformed")
                         continue
                     requirement_id = str(requirement.get("id") or "").strip()
                     if not requirement_id:
-                        failures.append(f"requirement {index + 1} has no id")
-                    requirement_status = str(
+                        failures.append(f"requirement status {index + 1} has no id")
+                        continue
+                    if requirement_id in seen_ids:
+                        failures.append(f"requirement {requirement_id} is duplicated")
+                        continue
+                    seen_ids.add(requirement_id)
+                    if requirement_id not in requirement_ids:
+                        failures.append(f"unknown frozen requirement id: {requirement_id}")
+                        continue
+                    if "text" in requirement:
+                        failures.append(
+                            f"requirement {requirement_id} attempts to replace frozen text"
+                        )
+                    rows_by_id[requirement_id] = requirement
+                for missing_id in sorted(set(requirement_ids) - seen_ids):
+                    failures.append(f"frozen requirement {missing_id} is missing")
+                for requirement_id in requirement_ids:
+                    requirement = rows_by_id.get(requirement_id)
+                    if requirement is None:
+                        continue
+                    reported_status = str(
                         requirement.get("status") or ""
                     ).strip().lower()
-                    if requirement_status != "satisfied":
+                    if reported_status != "satisfied":
                         failures.append(
-                            f"requirement {requirement.get('id') or index + 1} is not satisfied"
+                            f"requirement {requirement_id} is not satisfied"
                         )
                     evidence = requirement.get("evidence")
                     if (
@@ -586,10 +615,10 @@ class AutonomousRunner:
                         )
                         if invalid:
                             failures.append(
-                                f"requirement {requirement.get('id') or index + 1} "
+                                f"requirement {requirement_id} "
                                 "cites unverified evidence: " + ", ".join(invalid)
                             )
-                        elif requirement_id:
+                        else:
                             for evidence_id in normalized:
                                 covered = evidence_registry[evidence_id].get(
                                     "requirement_ids"
@@ -611,7 +640,8 @@ class AutonomousRunner:
             "passed": not failures,
             "failures": failures,
             "review": review,
-            "requirements": outcome.get("requirements") or [],
+            "goal_spec_sha256": goal_spec.sha256,
+            "requirement_status": outcome.get("requirement_status") or [],
             "evidence_registry": list(evidence_registry.values()),
         }
 

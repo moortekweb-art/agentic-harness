@@ -59,9 +59,9 @@ def main() -> int:
         "current_subgoal": "independent verification",
         "checkpoint": f"structured completion claim emitted on attempt {attempt}",
         "plan": [{"step": "apply maintenance change", "status": "completed"}],
-        "requirements": [
+        "requirement_status": [
             {
-                "id": task_id,
+                "id": "R1",
                 "status": "satisfied",
                 "evidence": [EVIDENCE_REF],
             }

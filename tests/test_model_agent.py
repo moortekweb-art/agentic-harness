@@ -85,7 +85,7 @@ def _goal(tmp_path: Path) -> Goal:
         "strict_completion": True,
         "cycle": 0,
         "plan": [],
-        "requirements": [],
+        "requirement_status": [],
         "current_subgoal": "inspect the greeting",
         "checkpoint": "goal_started",
     }
@@ -103,7 +103,7 @@ def test_model_agent_executes_bounded_tools_and_returns_strict_outcome(tmp_path)
                 "action": "read_file",
                 "arguments": {"path": "src/greeting.txt"},
                 "plan": [{"step": "Update greeting", "status": "in_progress"}],
-                "requirements": [],
+                "requirement_status": [],
                 "current_subgoal": "inspect the greeting",
                 "checkpoint": "goal_started",
             },
@@ -116,10 +116,9 @@ def test_model_agent_executes_bounded_tools_and_returns_strict_outcome(tmp_path)
                     "expected_sha256": hashlib.sha256(b"hi").hexdigest(),
                 },
                 "plan": [{"step": "Update greeting", "status": "in_progress"}],
-                "requirements": [
+                "requirement_status": [
                     {
                         "id": "R1",
-                        "text": "Greeting is hello",
                         "status": "in_progress",
                         "evidence": [],
                     }
@@ -131,10 +130,9 @@ def test_model_agent_executes_bounded_tools_and_returns_strict_outcome(tmp_path)
                 "action": "run_check",
                 "arguments": {"check_id": "check-1"},
                 "plan": [{"step": "Update greeting", "status": "completed"}],
-                "requirements": [
+                "requirement_status": [
                     {
                         "id": "R1",
-                        "text": "Greeting is hello",
                         "status": "in_progress",
                         "evidence": ["src/greeting.txt updated"],
                     }
@@ -148,10 +146,9 @@ def test_model_agent_executes_bounded_tools_and_returns_strict_outcome(tmp_path)
                     "status": "complete",
                     "summary": "Updated and verified the greeting.",
                     "plan": [{"step": "Update greeting", "status": "completed"}],
-                    "requirements": [
+                    "requirement_status": [
                         {
                             "id": "R1",
-                            "text": "Greeting is hello",
                             "status": "satisfied",
                             "evidence": ["event:3"],
                         }
@@ -200,10 +197,9 @@ def test_model_agent_preserves_top_level_report_outcome_context(tmp_path) -> Non
                     "summary": "Finished with independently checkable evidence.",
                 },
                 "plan": ["Finish the task"],
-                "requirements": [
+                "requirement_status": [
                     {
                         "id": "R1",
-                        "text": "The requested result exists",
                         "status": "satisfied",
                         "evidence": ["review:1"],
                     }
@@ -226,7 +222,7 @@ def test_model_agent_preserves_top_level_report_outcome_context(tmp_path) -> Non
     assert result.outcome["plan"] == [
         {"step": "Finish the task", "status": "completed"}
     ]
-    assert result.outcome["requirements"][0]["evidence"] == ["review:1"]
+    assert result.outcome["requirement_status"][0]["evidence"] == ["review:1"]
     assert result.outcome["checkpoint"] == "verified"
     assert result.outcome["blockers"] == []
 
@@ -330,7 +326,7 @@ def test_configured_check_does_not_inherit_provider_secret_environment(
                     "status": "complete",
                     "summary": "Secret isolation verified.",
                     "plan": [{"step": "Verify isolation", "status": "completed"}],
-                    "requirements": [
+                    "requirement_status": [
                         {
                             "id": "R1",
                             "status": "satisfied",
@@ -451,7 +447,7 @@ def test_git_diff_excludes_protected_file_contents(tmp_path) -> None:
                     "status": "blocked",
                     "summary": "Diff inspected safely.",
                     "plan": [],
-                    "requirements": [],
+                    "requirement_status": [],
                     "current_subgoal": "finish",
                     "checkpoint": "diff_inspected",
                     "blockers": ["fixture stops here"],
@@ -576,7 +572,7 @@ def test_model_completion_uses_common_audit_for_invented_evidence(tmp_path) -> N
                     "status": "complete",
                     "summary": "Claims completion.",
                     "plan": [{"step": "Inspect", "status": "completed"}],
-                    "requirements": [
+                    "requirement_status": [
                         {
                             "id": "R1",
                             "status": "satisfied",
@@ -616,7 +612,7 @@ def test_model_completion_accepts_prospective_harness_review_evidence(tmp_path) 
                     "status": "complete",
                     "summary": "Ready for independent review.",
                     "plan": [{"step": "Verify", "status": "completed"}],
-                    "requirements": [
+                    "requirement_status": [
                         {
                             "id": "R1",
                             "status": "satisfied",
@@ -719,7 +715,7 @@ def test_model_agent_scrubs_exact_provider_key_before_tools_and_outcomes(tmp_pat
                     "status": "blocked",
                     "summary": f"Provider reflected Bearer {secret}",
                     "plan": [],
-                    "requirements": [],
+                    "requirement_status": [],
                     "current_subgoal": "credential isolation",
                     "checkpoint": "blocked",
                     "blockers": [f"Bearer {secret}"],

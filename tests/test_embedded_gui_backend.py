@@ -39,10 +39,9 @@ outcome = {
         {"step": "Create result", "status": "completed"},
         {"step": "Verify result", "status": "completed"},
     ],
-    "requirements": [
+    "requirement_status": [
         {
             "id": "R1",
-            "text": "result.txt contains finished",
             "status": "satisfied",
             "evidence": ["review:1"],
         }
@@ -599,7 +598,7 @@ def test_embedded_backend_local_model_edits_checks_and_finishes_end_to_end(tmp_p
             "action": "read_file",
             "arguments": {"path": "src/value.txt"},
             "plan": [{"step": "Update value", "status": "in_progress"}],
-            "requirements": [],
+            "requirement_status": [],
             "current_subgoal": "inspect the value",
             "checkpoint": "goal_started",
         },
@@ -612,7 +611,9 @@ def test_embedded_backend_local_model_edits_checks_and_finishes_end_to_end(tmp_p
                 "expected_sha256": hashlib.sha256(b"before").hexdigest(),
             },
             "plan": [{"step": "Update value", "status": "in_progress"}],
-            "requirements": [{"id": "R1", "status": "pending", "evidence": []}],
+            "requirement_status": [
+                {"id": "R1", "status": "pending", "evidence": []}
+            ],
             "current_subgoal": "update the value",
             "checkpoint": "source_read",
         },
@@ -620,7 +621,9 @@ def test_embedded_backend_local_model_edits_checks_and_finishes_end_to_end(tmp_p
             "action": "run_check",
             "arguments": {"check_id": "check-1"},
             "plan": [{"step": "Update value", "status": "completed"}],
-            "requirements": [{"id": "R1", "status": "pending", "evidence": []}],
+            "requirement_status": [
+                {"id": "R1", "status": "pending", "evidence": []}
+            ],
             "current_subgoal": "verify the value",
             "checkpoint": "source_updated",
         },
@@ -630,7 +633,9 @@ def test_embedded_backend_local_model_edits_checks_and_finishes_end_to_end(tmp_p
                 "status": "complete",
                 "summary": "Updated and verified the value.",
                 "plan": [{"step": "Update value", "status": "completed"}],
-                "requirements": [{"id": "R1", "status": "satisfied", "evidence": ["event:3"]}],
+                "requirement_status": [
+                    {"id": "R1", "status": "satisfied", "evidence": ["event:3"]}
+                ],
                 "current_subgoal": "final verification complete",
                 "checkpoint": "verified",
                 "blockers": [],
@@ -837,7 +842,7 @@ print("HARNESS_RESULT_JSON=" + json.dumps({
     "checkpoint": "late",
     "current_subgoal": "late",
     "plan": [{"step": "work", "status": "completed"}],
-    "requirements": [{"id": "R1", "status": "satisfied", "evidence": ["late"]}],
+    "requirement_status": [{"id": "R1", "status": "satisfied", "evidence": ["late"]}],
     "blockers": [],
 }))
 """.strip()

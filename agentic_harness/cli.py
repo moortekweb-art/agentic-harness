@@ -1448,9 +1448,9 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
         "current_subgoal": "final audit",
         "checkpoint": "verified",
         "plan": [{"step": "smoke installed goal", "status": "done"}],
-        "requirements": [
+        "requirement_status": [
             {
-                "id": "installed-goal",
+                "id": "R1",
                 "status": "satisfied",
                 "evidence": ["review:1"],
             }
