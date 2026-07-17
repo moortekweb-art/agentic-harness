@@ -644,10 +644,7 @@ def make_handler(
         def _same_origin(self) -> bool:
             fetch_site = self.headers.get("Sec-Fetch-Site", "").strip().lower()
             if fetch_site and fetch_site not in {"same-origin", "none"}:
-                self._json(
-                    {"ok": False, "error": "cross-origin request rejected"},
-                    status=HTTPStatus.FORBIDDEN,
-                )
+                self._reject_cross_origin()
                 return False
             origin = self.headers.get("Origin", "").strip()
             if not origin:
@@ -656,11 +653,24 @@ def make_handler(
             host = self.headers.get("Host", "").strip().lower()
             if parsed.scheme in {"http", "https"} and parsed.netloc.lower() == host:
                 return True
+            self._reject_cross_origin()
+            return False
+
+        def _reject_cross_origin(self) -> None:
+            # On Windows, closing a socket with an unread POST body can reset
+            # the connection and discard the 403 response already written.
+            # Drain only an already bounded request body before replying.
+            if self.command == "POST":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    length = 0
+                if 0 < length <= MAX_REQUEST_BYTES:
+                    self.rfile.read(length)
             self._json(
                 {"ok": False, "error": "cross-origin request rejected"},
                 status=HTTPStatus.FORBIDDEN,
             )
-            return False
 
         def _websocket_status(self) -> None:
             if self.headers.get("Upgrade", "").lower() != "websocket":
