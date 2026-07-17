@@ -9,7 +9,11 @@ import pytest
 from agentic_harness import Goal, GoalStatus, Supervisor
 from agentic_harness.core.autonomy import AutonomousRunner
 from agentic_harness.core.goal_spec import GoalRequirement, GoalSpec
-from agentic_harness.core.review import DeterministicReviewer, ReviewCriterion
+from agentic_harness.core.review import (
+    DeterministicReviewer,
+    ReviewCriterion,
+    ReviewResult,
+)
 from agentic_harness.core.worker import WorkerResult
 
 
@@ -54,6 +58,14 @@ class OutcomeWorker:
         return WorkerResult(success=True, summary="reported", outcome=deepcopy(self.outcome))
 
 
+class MismatchedHashReviewer(DeterministicReviewer):
+    def review(self, goal: Goal) -> ReviewResult:
+        result = super().review(goal)
+        for criterion in result.criteria:
+            criterion["goal_spec_sha256"] = "b" * 64
+        return result
+
+
 def passing_reviewer() -> DeterministicReviewer:
     return DeterministicReviewer(
         [
@@ -61,6 +73,7 @@ def passing_reviewer() -> DeterministicReviewer:
                 name="check",
                 check=lambda goal: (True, "passed"),
                 description="Independent check",
+                covers=("R1", "R2", "R3"),
             )
         ]
     )
@@ -137,6 +150,84 @@ def test_completion_accepts_exact_frozen_requirement_status(tmp_path: Path) -> N
     audit = goal.metadata["autonomy"]["completion_audit"]
     assert audit["passed"] is True
     assert audit["goal_spec_sha256"] == frozen_spec().sha256
+
+
+def test_passing_check_cannot_cover_an_undeclared_requirement(tmp_path: Path) -> None:
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=OutcomeWorker(complete_outcome()),
+        reviewer=DeterministicReviewer(
+            [
+                ReviewCriterion(
+                    name="partial-check",
+                    check=lambda goal: (True, "passed"),
+                    covers=("R1", "R3"),
+                )
+            ]
+        ),
+    )
+    goal = supervisor.start(OBJECTIVE)
+    supervisor.store.write_goal_spec(goal, frozen_spec())
+
+    audited = AutonomousRunner(supervisor).step()
+
+    assert audited.status is not GoalStatus.DONE
+    audit = audited.metadata["autonomy"]["completion_audit"]
+    assert "requirement R2 cites ineligible evidence: review:1" in audit["failures"]
+    review_record = next(
+        item for item in audit["evidence_registry"] if item["id"] == "review:1"
+    )
+    assert review_record["covers"] == ["R1", "R3"]
+
+
+def test_passing_general_check_with_no_coverage_does_not_prove_objective(
+    tmp_path: Path,
+) -> None:
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=OutcomeWorker(complete_outcome()),
+        reviewer=DeterministicReviewer(
+            [
+                ReviewCriterion(
+                    name="true",
+                    check=lambda goal: (True, "passed"),
+                    covers=(),
+                )
+            ]
+        ),
+    )
+    goal = supervisor.start(OBJECTIVE)
+    supervisor.store.write_goal_spec(goal, frozen_spec())
+
+    audited = AutonomousRunner(supervisor).step()
+
+    assert audited.status is not GoalStatus.DONE
+    failures = audited.metadata["autonomy"]["completion_audit"]["failures"]
+    assert "requirement R1 cites ineligible evidence: review:1" in failures
+
+
+def test_evidence_for_different_goal_spec_hash_is_rejected(tmp_path: Path) -> None:
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=OutcomeWorker(complete_outcome()),
+        reviewer=MismatchedHashReviewer(
+            [
+                ReviewCriterion(
+                    name="wrong-spec-check",
+                    check=lambda goal: (True, "passed"),
+                    covers=("R1", "R2", "R3"),
+                )
+            ]
+        ),
+    )
+    goal = supervisor.start(OBJECTIVE)
+    supervisor.store.write_goal_spec(goal, frozen_spec())
+
+    audited = AutonomousRunner(supervisor).step()
+
+    assert audited.status is not GoalStatus.DONE
+    failures = audited.metadata["autonomy"]["completion_audit"]["failures"]
+    assert "requirement R1 cites ineligible evidence: review:1" in failures
 
 
 @pytest.mark.parametrize("field", ["requirement_status", "blockers"])

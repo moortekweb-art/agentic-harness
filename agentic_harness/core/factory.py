@@ -145,14 +145,29 @@ def review_criteria_from_config(
                     cwd=project_dir,
                     timeout=timeout,
                     secret_env_names=secret_env_names,
+                    covers=tuple(config.review_covers),
                 )
             )
     if config.review_artifact:
-        criteria.append(artifact_exists(project_dir, config.review_artifact))
+        criteria.append(
+            artifact_exists(
+                project_dir,
+                config.review_artifact,
+                covers=tuple(config.review_covers),
+            )
+        )
     if config.review_file_changed:
-        criteria.append(file_changed(project_dir, config.review_file_changed))
+        criteria.append(
+            file_changed(
+                project_dir,
+                config.review_file_changed,
+                covers=tuple(config.review_covers),
+            )
+        )
     if config.review_git_clean:
-        criteria.append(git_clean(project_dir))
+        criteria.append(
+            git_clean(project_dir, covers=tuple(config.review_covers))
+        )
     return criteria
 
 

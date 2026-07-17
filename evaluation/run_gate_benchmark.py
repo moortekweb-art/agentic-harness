@@ -262,7 +262,9 @@ def run_harness(
 ) -> dict[str, Any]:
     started = time.perf_counter()
     worker = CodingAgentWorker(agent_command, cwd=workspace, timeout=30)
-    reviewer = DeterministicReviewer([command_passes(verifier_command, cwd=workspace, timeout=30)])
+    reviewer = DeterministicReviewer(
+        [command_passes(verifier_command, cwd=workspace, timeout=30, covers=("R1",))]
+    )
     supervisor = Supervisor(project_dir=workspace, worker=worker, reviewer=reviewer)
     policy = AutonomyPolicy(repeated_blocker_limit=3, max_cycles=4)
     goal = AutonomousRunner(supervisor, policy=policy).run(str(task["objective"]))

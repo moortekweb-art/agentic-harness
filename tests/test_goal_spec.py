@@ -149,6 +149,7 @@ def test_autonomous_runner_freezes_spec_before_worker_execution(tmp_path: Path) 
                 name="check",
                 check=lambda goal: (True, "passed"),
                 description="Independent check",
+                covers=("R1",),
             )
         ]
     )

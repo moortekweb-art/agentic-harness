@@ -62,5 +62,6 @@ missing frozen IDs, duplicates, and any status row containing replacement
 requirement text. The GUI hydrates the immutable text from `goal-spec.json` and
 combines it with the separate mutable status projection.
 
-Typed evidence coverage, assurance modes, and specification amendments remain
-separate behavior changes built on this storage identity.
+Evidence coverage follows the immutable `agentic_harness.evidence.v2` contract
+documented in `EVIDENCE_V2.md`. Assurance modes and specification amendments
+remain separate behavior changes built on this storage identity.

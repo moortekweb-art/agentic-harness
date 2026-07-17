@@ -9,6 +9,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 from agentic_harness.core.artifacts import ArtifactStore
+from agentic_harness.core.evidence import EvidenceRecord, EvidenceResult
 from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.state import SAFE_GOAL_ID, now_iso
 
@@ -26,6 +27,7 @@ class TaskEventStore:
         goal_id: str,
         *,
         run_id: str = "",
+        goal_spec_sha256: str = "",
     ) -> None:
         if SAFE_GOAL_ID.fullmatch(goal_id) is None:
             raise ValueError("goal id contains unsafe path characters")
@@ -34,6 +36,7 @@ class TaskEventStore:
         self.project_dir = Path(project_dir).resolve()
         self.goal_id = goal_id
         self.run_id = run_id
+        self.goal_spec_sha256 = goal_spec_sha256
         self._artifact_store = ArtifactStore(self.project_dir / ".agentic-harness")
         self.events_dir = self._contained_events_dir()
 
@@ -68,6 +71,21 @@ class TaskEventStore:
         }
         if self.run_id:
             event["run_id"] = self.run_id
+        if self.run_id and self.goal_spec_sha256:
+            event["evidence"] = EvidenceRecord(
+                id=f"event:{seq}",
+                goal_id=self.goal_id,
+                run_id=self.run_id,
+                goal_spec_sha256=self.goal_spec_sha256,
+                issuer="harness.task_event",
+                kind=_safe_label(kind, "progress"),
+                result=(
+                    EvidenceResult.OBSERVED
+                    if tool_status in {"passed", "completed"}
+                    else EvidenceResult.FAILED
+                ),
+                covers=(),
+            ).to_dict()
         if tool_name:
             event["tool"] = {
                 "name": _safe_label(tool_name, "tool"),

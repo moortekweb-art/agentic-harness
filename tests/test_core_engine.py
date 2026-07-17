@@ -487,6 +487,8 @@ def test_deterministic_reviewer_reports_typed_criteria() -> None:
             "passed": True,
             "message": "objective is present",
             "independent": True,
+            "covers": [],
+            "goal_spec_sha256": "",
         }
     ]
 

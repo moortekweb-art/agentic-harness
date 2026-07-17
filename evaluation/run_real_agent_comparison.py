@@ -169,7 +169,9 @@ def run_harness(
     os.environ["REAL_AGENT_MODEL"] = model
     try:
         worker = CodingAgentWorker([sys.executable, str(WORKER)], cwd=workspace, timeout=210)
-        reviewer = DeterministicReviewer([command_passes(review, cwd=workspace, timeout=30)])
+        reviewer = DeterministicReviewer(
+            [command_passes(review, cwd=workspace, timeout=30, covers=("R1",))]
+        )
         supervisor = Supervisor(project_dir=workspace, worker=worker, reviewer=reviewer)
         started = time.perf_counter()
         goal = AutonomousRunner(
