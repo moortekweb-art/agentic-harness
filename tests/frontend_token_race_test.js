@@ -5,7 +5,8 @@ const vm = require("node:vm");
 
 const appPath = process.env.APP_JS_PATH || path.join(process.cwd(), "agentic_harness/gui/static/app.js");
 const authPath = process.env.AUTH_JS_PATH || path.join(path.dirname(appPath), "auth.js");
-const appSource = `${fs.readFileSync(authPath, "utf8")}\n${fs.readFileSync(appPath, "utf8")}`;
+const assurancePath = path.join(path.dirname(appPath), "assurance.js");
+const appSource = `${fs.readFileSync(authPath, "utf8")}\n${fs.readFileSync(assurancePath, "utf8")}\n${fs.readFileSync(appPath, "utf8")}`;
 
 class HeadersShim {
   constructor(headers = {}) {
@@ -1601,6 +1602,51 @@ async function testRawDoneWithoutTrustedReceiptRemainsUnverified() {
   assert.equal(app.elements.get("taskContext").hidden, true);
 }
 
+async function testHighAssuranceAmendmentShowsEditablePlainLanguageReview() {
+  const app = await runApp({
+    publicAccess: true,
+    taskPayload: {
+      id: "amendment-run",
+      objective: "Use the requested API",
+      status: "needs_review",
+      status_label: "Needs review",
+      result_category: "in_progress",
+      summary: "The requested API is unavailable.",
+      progress: { determinate: true, completed: 0, total: 1, percent: 0 },
+      current: { cycle: 1, checkpoint: "specification_amendment_approval_required" },
+      requirements: [{ id: "R1", text: "Use the requested API.", status: "pending" }],
+      allowed_actions: [{ action: "approve_spec", enabled: true }],
+      metadata: {
+        specification_review: {
+          kind: "amendment",
+          reason: "The requested API is unavailable.",
+          version: 1,
+          conditions: [{ id: "R1", text: "Use the supported replacement API." }],
+        },
+      },
+    },
+  });
+
+  assert.equal(app.elements.get("approveSpecButtonLabel").textContent, "Review changed conditions");
+  app.elements.get("approveSpecButton").listeners.click();
+  assert.equal(app.elements.get("specificationDialog").open, true);
+  assert.equal(app.elements.get("specificationTitle").textContent, "Approve changed completion conditions");
+  assert.equal(
+    app.elements.get("specificationRequirements").value,
+    "Use the supported replacement API.",
+  );
+  app.elements.get("specificationRequirements").value = "Use the supported API.\nUpdate its documentation.";
+  app.elements.get("specificationForm").listeners.submit({ preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const approval = app.fetchCalls.find(
+    (call) => call.url === "/api/tasks/current/approve-spec" && call.options.method === "POST",
+  );
+  assert.deepEqual(JSON.parse(approval.options.body), {
+    requirements: ["Use the supported API.", "Update its documentation."],
+  });
+}
+
 async function testManagedWorkingTaskShowsRealPassAndIndeterminateProgress() {
   const app = await runApp({
     publicAccess: true,
@@ -1863,6 +1909,7 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
   await testPausedBackgroundAssistantIsNotCalledAnActiveTask();
   await testTerminalReceiptOverridesRawDoneAndRendersTrustedEvidence();
   await testRawDoneWithoutTrustedReceiptRemainsUnverified();
+  await testHighAssuranceAmendmentShowsEditablePlainLanguageReview();
   await testManagedWorkingTaskShowsRealPassAndIndeterminateProgress();
   await testReturningToSafariRefreshesStatusWithoutOpeningAnotherStream();
   await testPendingStartIgnoresThePreviousGoalsLiveStatus();

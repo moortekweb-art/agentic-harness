@@ -10,7 +10,7 @@ the next version. For example, the historical v0.7.2 notes at
 evidence, but neither identifies the current candidate. Resolve every candidate
 from package metadata and live registry readback.
 
-Current candidate: v0.11.0, with notes at `docs/RELEASE_NOTES_0.11.0.md`.
+Current candidate: v0.12.0, with notes at `docs/RELEASE_NOTES_0.12.0.md`.
 
 ## Local candidate
 

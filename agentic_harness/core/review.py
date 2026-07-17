@@ -74,6 +74,14 @@ class DeterministicReviewer:
         )
         for criterion in self.criteria:
             passed, message = criterion.check(goal)
+            covers = list(criterion.covers)
+            if covers == ["*"] and isinstance(autonomy, dict):
+                requirement_ids = autonomy.get("goal_spec_requirement_ids")
+                covers = (
+                    [str(item) for item in requirement_ids]
+                    if isinstance(requirement_ids, list)
+                    else []
+                )
             results.append(
                 {
                     "name": redact_secrets(criterion.name),
@@ -81,7 +89,7 @@ class DeterministicReviewer:
                     "passed": bool(passed),
                     "message": redact_secrets(str(message)),
                     "independent": criterion.independent,
-                    "covers": list(criterion.covers),
+                    "covers": covers,
                     "goal_spec_sha256": goal_spec_sha256,
                 }
             )

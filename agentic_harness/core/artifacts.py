@@ -7,6 +7,7 @@ import importlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 from tempfile import NamedTemporaryFile
 import time
 from typing import Any, Iterator, cast
@@ -139,6 +140,18 @@ class ArtifactStore:
 
         return self.goal_dir(goal) / "goal-spec-approved.json"
 
+    def current_goal_spec_pointer_path(self, goal: Goal | str) -> Path:
+        """Return the mutable pointer to the newest immutable specification revision."""
+
+        return self.goal_dir(goal) / "goal-spec-current.json"
+
+    def goal_spec_revision_path(self, goal: Goal | str, version: int) -> Path:
+        """Return one immutable post-start specification revision path."""
+
+        if not isinstance(version, int) or isinstance(version, bool) or version < 2:
+            raise ValueError("goal specification revision must be at least 2")
+        return self.goal_dir(goal) / f"goal-spec-v{version}.json"
+
     def write_goal_spec(self, goal: Goal, spec: GoalSpec) -> Path:
         """Create a goal specification once and reject replacement attempts."""
 
@@ -181,10 +194,79 @@ class ArtifactStore:
         self._write_json(path, spec.to_dict())
         return path
 
+    def write_goal_spec_revision(
+        self,
+        goal: Goal,
+        spec: GoalSpec,
+        *,
+        previous_sha256: str,
+    ) -> tuple[Path, int]:
+        """Append an immutable revision and atomically advance the current pointer."""
+
+        if spec.objective != goal.objective:
+            raise GoalConflictError("revised specification objective does not match the goal")
+        if spec.approval != "operator_approved":
+            raise GoalConflictError("revised specification requires operator approval")
+        current = self.read_goal_spec(goal.id)
+        if current.sha256 != previous_sha256:
+            raise GoalConflictError("specification changed before the revision was approved")
+        version = self.read_goal_spec_version(goal.id) + 1
+        path = self.goal_spec_revision_path(goal, version)
+        if path.is_symlink() or path.exists():
+            raise GoalConflictError("goal specification revision path already exists")
+        self._write_json(path, spec.to_dict())
+        pointer = self.current_goal_spec_pointer_path(goal)
+        if pointer.is_symlink():
+            raise GoalConflictError("goal specification pointer must not be a symlink")
+        self._write_json(
+            pointer,
+            {
+                "version": version,
+                "sha256": spec.sha256,
+                "file": path.name,
+                "previous_sha256": previous_sha256,
+            },
+        )
+        return path, version
+
     def read_goal_spec(self, goal_id: str) -> GoalSpec:
         """Read and validate the immutable specification for one goal."""
 
         try:
+            pointer = self.current_goal_spec_pointer_path(goal_id)
+            if pointer.is_symlink():
+                raise OSError("goal specification pointer must not be a symlink")
+            if pointer.exists():
+                payload = self._read_json(pointer)
+                version = payload.get("version")
+                if not isinstance(version, int) or isinstance(version, bool) or version < 2:
+                    raise ValueError("goal specification pointer version is invalid")
+                expected_path = self.goal_spec_revision_path(goal_id, version)
+                if payload.get("file") != expected_path.name or expected_path.is_symlink():
+                    raise ValueError("goal specification pointer file is invalid")
+                revisions = [
+                    int(match.group(1))
+                    for candidate in self.goal_dir(goal_id).glob("goal-spec-v*.json")
+                    if (match := re.fullmatch(r"goal-spec-v(\d+)\.json", candidate.name))
+                ]
+                if not revisions or version != max(revisions):
+                    raise ValueError("goal specification pointer is not the newest revision")
+                spec = GoalSpec.from_dict(self._read_json(expected_path))
+                if payload.get("sha256") != spec.sha256:
+                    raise ValueError("goal specification pointer hash does not match revision")
+                previous_path = (
+                    self.goal_spec_revision_path(goal_id, version - 1)
+                    if version > 2
+                    else (
+                        self.approved_goal_spec_path(goal_id)
+                        if self.approved_goal_spec_path(goal_id).exists()
+                        else self.goal_spec_path(goal_id)
+                    )
+                )
+                previous = GoalSpec.from_dict(self._read_json(previous_path))
+                if payload.get("previous_sha256") != previous.sha256:
+                    raise ValueError("goal specification revision chain is invalid")
+                return spec
             approved = self.approved_goal_spec_path(goal_id)
             if approved.is_symlink():
                 raise OSError("approved specification path must not be a symlink")
@@ -193,6 +275,23 @@ class ArtifactStore:
         except (json.JSONDecodeError, OSError, ValueError) as exc:
             raise StateLockError(
                 f"corrupted or missing goal specification for {goal_id}"
+            ) from exc
+
+    def read_goal_spec_version(self, goal_id: str) -> int:
+        """Return the current immutable specification revision number."""
+
+        pointer = self.current_goal_spec_pointer_path(goal_id)
+        if not pointer.exists():
+            return 1
+        try:
+            payload = self._read_json(pointer)
+            version = payload.get("version")
+            if not isinstance(version, int) or isinstance(version, bool) or version < 2:
+                raise ValueError("goal specification pointer version is invalid")
+            return version
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            raise StateLockError(
+                f"corrupted goal specification pointer for {goal_id}"
             ) from exc
 
     def read_goal_spec_proposal(self, goal_id: str) -> GoalSpec:

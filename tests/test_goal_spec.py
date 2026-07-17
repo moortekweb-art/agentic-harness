@@ -11,6 +11,8 @@ from agentic_harness.core.errors import GoalConflictError, StateLockError
 from agentic_harness.core.goal_spec import (
     GoalRequirement,
     GoalSpec,
+    derive_goal_requirements,
+    derived_objective_spec,
     preserved_objective_spec,
 )
 from agentic_harness.core.review import DeterministicReviewer, ReviewCriterion
@@ -18,6 +20,52 @@ from agentic_harness.core.worker import WorkerResult
 
 
 FIXED_TIME = "2026-07-17T00:00:00Z"
+
+
+def test_derives_explicit_action_series_without_omitting_clauses() -> None:
+    requirements = derive_goal_requirements(
+        "Add input validation, update documentation, and add regression tests."
+    )
+
+    assert [item.to_dict() for item in requirements] == [
+        {"id": "R1", "text": "Add input validation."},
+        {"id": "R2", "text": "Update documentation."},
+        {"id": "R3", "text": "Add regression tests."},
+    ]
+
+
+def test_derives_numbered_completion_conditions_in_source_order() -> None:
+    spec = derived_objective_spec(
+        "Complete the release:\n1. Run the full test suite\n2. Update the release notes"
+    )
+
+    assert spec.derivation == "harness_derived"
+    assert [item.text for item in spec.requirements] == [
+        "Complete the release.",
+        "Run the full test suite.",
+        "Update the release notes.",
+    ]
+
+
+def test_list_derivation_keeps_trailing_scope_in_source_order() -> None:
+    requirements = derive_goal_requirements(
+        "Release requirements:\n- Run tests\n- Update notes\nKeep the existing API compatible."
+    )
+
+    assert [item.text for item in requirements] == [
+        "Release requirements.",
+        "Run tests.",
+        "Update notes.",
+        "Keep the existing API compatible.",
+    ]
+
+
+def test_ambiguous_prose_remains_one_full_objective_requirement() -> None:
+    objective = "Improve the interface for new users and the existing local workflow."
+
+    requirements = derive_goal_requirements(objective)
+
+    assert requirements == (GoalRequirement(id="R1", text=objective),)
 
 
 def make_spec(*, requirement_text: str = "Add validation.") -> GoalSpec:
@@ -111,6 +159,86 @@ def test_artifact_store_rejects_symlinked_spec(tmp_path: Path) -> None:
         store.read_goal_spec(goal.id)
 
 
+def test_artifact_store_appends_and_reads_newest_spec_revision(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    goal = Goal("Add validation.", id="goal-spec-revision")
+    store.write_goal(goal)
+    original = make_spec()
+    store.write_goal_spec(goal, original)
+    revised = GoalSpec(
+        objective=goal.objective,
+        requirements=(GoalRequirement(id="R1", text="Reject invalid input."),),
+        derivation="operator_authored",
+        approval="operator_approved",
+        created_at="2026-07-17T00:01:00Z",
+    )
+
+    path, version = store.write_goal_spec_revision(
+        goal,
+        revised,
+        previous_sha256=original.sha256,
+    )
+
+    assert (path.name, version) == ("goal-spec-v2.json", 2)
+    assert store.read_goal_spec(goal.id) == revised
+    assert store.read_goal_spec_version(goal.id) == 2
+    with pytest.raises(GoalConflictError, match="changed before"):
+        store.write_goal_spec_revision(
+            goal,
+            revised,
+            previous_sha256=original.sha256,
+        )
+
+
+def test_artifact_store_rejects_revision_pointer_rollback(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    goal = Goal("Add validation.", id="goal-spec-pointer-rollback")
+    store.write_goal(goal)
+    original = make_spec()
+    store.write_goal_spec(goal, original)
+    revised = GoalSpec(
+        objective=goal.objective,
+        requirements=(GoalRequirement(id="R1", text="Reject invalid input."),),
+        derivation="operator_authored",
+        approval="operator_approved",
+        created_at="2026-07-17T00:01:00Z",
+    )
+    store.write_goal_spec_revision(goal, revised, previous_sha256=original.sha256)
+    (store.goal_dir(goal) / "goal-spec-v3.json").write_text(
+        json.dumps(revised.to_dict()),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StateLockError, match="corrupted or missing"):
+        store.read_goal_spec(goal.id)
+
+
+def test_artifact_store_rejects_broken_revision_chain(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / ".agentic-harness")
+    store.init()
+    goal = Goal("Add validation.", id="goal-spec-broken-chain")
+    store.write_goal(goal)
+    original = make_spec()
+    store.write_goal_spec(goal, original)
+    revised = GoalSpec(
+        objective=goal.objective,
+        requirements=(GoalRequirement(id="R1", text="Reject invalid input."),),
+        derivation="operator_authored",
+        approval="operator_approved",
+        created_at="2026-07-17T00:01:00Z",
+    )
+    store.write_goal_spec_revision(goal, revised, previous_sha256=original.sha256)
+    pointer = store.current_goal_spec_pointer_path(goal)
+    payload = json.loads(pointer.read_text(encoding="utf-8"))
+    payload["previous_sha256"] = "0" * 64
+    pointer.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(StateLockError, match="corrupted or missing"):
+        store.read_goal_spec(goal.id)
+
+
 class CompleteWorker:
     def __init__(self, project_dir: Path) -> None:
         self.project_dir = project_dir
@@ -168,6 +296,53 @@ def test_autonomous_runner_freezes_spec_before_worker_execution(tmp_path: Path) 
     assert spec.derivation == "harness_preserved_objective"
     assert state["metadata"]["autonomy"]["goal_spec_sha256"] == spec.sha256
     assert "goal_spec" not in state["metadata"]["autonomy"]
+
+
+def test_autonomous_runner_derives_and_verifies_every_explicit_clause(
+    tmp_path: Path,
+) -> None:
+    objective = "Add input validation, update documentation, and add regression tests."
+
+    class DerivedCompleteWorker:
+        def run(self, goal: Goal) -> WorkerResult:
+            return WorkerResult(
+                success=True,
+                summary="complete",
+                outcome={
+                    "status": "complete",
+                    "summary": "complete",
+                    "checkpoint": "checked",
+                    "current_subgoal": "final audit",
+                    "plan": [{"step": "work", "status": "completed"}],
+                    "requirement_status": [
+                        {"id": requirement_id, "status": "satisfied", "evidence": ["review:1"]}
+                        for requirement_id in ("R1", "R2", "R3")
+                    ],
+                    "blockers": [],
+                },
+            )
+
+    reviewer = DeterministicReviewer(
+        [
+            ReviewCriterion(
+                name="complete-check",
+                check=lambda goal: (True, "passed"),
+                covers=("*",),
+            )
+        ]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=DerivedCompleteWorker(),
+        reviewer=reviewer,
+    )
+
+    goal = AutonomousRunner(supervisor).run(objective)
+    spec = supervisor.store.read_goal_spec(goal.id)
+
+    assert [item.id for item in spec.requirements] == ["R1", "R2", "R3"]
+    assert goal.metadata["autonomy"]["completion_audit"]["passed"] is True
+    assert goal.review["criteria"][0]["covers"] == ["R1", "R2", "R3"]
 
 
 def test_preserved_objective_spec_keeps_complete_objective_as_requirement() -> None:

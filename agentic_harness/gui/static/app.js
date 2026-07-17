@@ -151,6 +151,7 @@ const els = {
   currentCard: byId("currentCard"),
   continueButton: byId("continueButton"),
   approveSpecButton: byId("approveSpecButton"),
+  approveSpecButtonLabel: byId("approveSpecButtonLabel"),
   acceptButton: byId("acceptButton"),
   stopButton: byId("stopButton"),
   planList: byId("planList"),
@@ -240,6 +241,13 @@ const els = {
   continueForm: byId("continueForm"),
   closeContinueButton: byId("closeContinueButton"),
   continueFeedback: byId("continueFeedback"),
+  specificationDialog: byId("specificationDialog"),
+  specificationForm: byId("specificationForm"),
+  specificationTitle: byId("specificationTitle"),
+  specificationHelp: byId("specificationHelp"),
+  specificationRequirements: byId("specificationRequirements"),
+  approveSpecificationSubmit: byId("approveSpecificationSubmit"),
+  closeSpecificationButton: byId("closeSpecificationButton"),
   previewDialog: byId("previewDialog"),
   previewTitle: byId("previewTitle"),
   previewContent: byId("previewContent"),
@@ -1427,6 +1435,9 @@ function renderTask(task) {
   const viewingHistory = Boolean(state.viewingHistoryId);
   els.continueButton.hidden = viewingHistory || !hasAction(task, "continue");
   els.approveSpecButton.hidden = viewingHistory || !hasAction(task, "approve_spec");
+  els.approveSpecButtonLabel.textContent = task.metadata?.specification_review?.kind === "amendment"
+    ? "Review changed conditions"
+    : "Approve completion conditions";
   els.acceptButton.hidden = viewingHistory || !hasAction(task, "accept");
   els.stopButton.hidden = viewingHistory || !hasAction(task, "stop");
   els.advancedDetails.textContent = JSON.stringify({
@@ -2392,9 +2403,23 @@ els.useDetectedModelButton.addEventListener("click", useDetectedLocalModel);
 els.checkLocalModelsButton.addEventListener("click", () => refreshLocalModelDetection());
 els.continueButton.addEventListener("click", () => els.continueDialog.showModal());
 els.approveSpecButton.addEventListener("click", () => {
-  if (window.confirm("Approve these completion conditions and start the task?")) {
-    postAction("/api/tasks/current/approve-spec", {});
-  }
+  window.HarnessAssurance.populateDialog(state.currentTask, {
+    dialog: els.specificationDialog,
+    title: els.specificationTitle,
+    help: els.specificationHelp,
+    requirements: els.specificationRequirements,
+    submit: els.approveSpecificationSubmit,
+  });
+});
+els.closeSpecificationButton.addEventListener("click", () => els.specificationDialog.close());
+els.specificationForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const requirements = window.HarnessAssurance.requirementsFromText(
+    els.specificationRequirements.value,
+  );
+  if (!requirements.length) return;
+  els.specificationDialog.close();
+  postAction("/api/tasks/current/approve-spec", { requirements });
 });
 els.closeContinueButton.addEventListener("click", () => els.continueDialog.close());
 els.continueForm.addEventListener("submit", (event) => {

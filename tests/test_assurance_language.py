@@ -6,13 +6,13 @@ from agentic_harness.gui.api import execution_efforts_payload
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_public_docs_define_v1_as_check_gated_acceptance() -> None:
+def test_public_docs_distinguish_v012_from_legacy_check_gated_acceptance() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     evidence = (ROOT / "docs" / "EVIDENCE_CONTRACT.md").read_text(encoding="utf-8")
 
-    assert "worker-derived requirement audit" in readme
-    assert "check-gated acceptance" in readme
-    assert "does not independently establish" in readme
+    assert "harness owns the acceptance specification" in readme
+    assert "evidence for every frozen ID" in readme
+    assert "Legacy v1 assurance level" in evidence
     assert "The v1 contract is **check-gated**" in evidence
     assert "It is not immutable issuer-declared coverage" in " ".join(evidence.split())
 

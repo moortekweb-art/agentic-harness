@@ -459,7 +459,7 @@
           <div class="quick-actions">
             <button id="approveSpecButton" hidden>
               <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
-              <span>Approve completion conditions</span>
+              <span id="approveSpecButtonLabel">Approve completion conditions</span>
             </button>
             <button id="continueButton" hidden>
               <svg class="icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg>
@@ -733,6 +733,15 @@
         <div class="actions"><button class="primary" type="submit">Continue</button></div>
       </form>
     </dialog>
+    <dialog id="specificationDialog">
+      <form id="specificationForm">
+        <div class="dialog-head"><h2 id="specificationTitle">Approve completion conditions</h2><button type="button" id="closeSpecificationButton"><span>Close</span></button></div>
+        <p class="help-text" id="specificationHelp">Review what the harness will require.</p>
+        <label class="field-label" for="specificationRequirements">One completion condition per line</label>
+        <textarea id="specificationRequirements" rows="7" required></textarea>
+        <div class="actions"><button class="primary" id="approveSpecificationSubmit" type="submit">Approve and start</button></div>
+      </form>
+    </dialog>
     <dialog id="previewDialog">
       <form method="dialog">
         <div class="dialog-head"><h2 id="previewTitle">Evidence preview</h2><button value="close"><span>Close</span></button></div>
@@ -740,6 +749,7 @@
       </form>
     </dialog>
     <script src="/static/auth.js"></script>
+    <script src="/static/assurance.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>
