@@ -1678,7 +1678,7 @@ function updateDemoCallout(task = null) {
     els.demoSummary.textContent = "The harness rejected the scripted worker's first false completion, repaired the temporary calculator, and accepted the result only after an independent check passed.";
     els.demoButtonLabel.textContent = "Run demo again";
   } else {
-    els.demoTitle.textContent = "See a verified result in about a minute";
+    els.demoTitle.textContent = "See an independently checked result in about a minute";
     els.demoSummary.textContent = managedOverlay
       ? "Run the real harness on a temporary practice project with a scripted worker. It uses no AI model or API key, and it never changes the connected managed workspace or its current task."
       : "Run the real harness on a temporary practice project with a scripted worker. It uses no AI model or API key, and it never touches the project shown above.";
