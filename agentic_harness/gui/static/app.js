@@ -176,6 +176,9 @@ const els = {
   verification: byId("verification"),
   artifacts: byId("artifacts"),
   historySearch: byId("historySearch"),
+  historyStatusFilter: byId("historyStatusFilter"),
+  historyRouteFilter: byId("historyRouteFilter"),
+  historyEmpty: byId("historyEmpty"),
   historyList: byId("historyList"),
   exportButton: byId("exportButton"),
   exportButtonLabel: byId("exportButtonLabel"),
@@ -183,6 +186,12 @@ const els = {
   statusUpdated: byId("statusUpdated"),
   shortcutsDialog: byId("shortcutsDialog"),
   setupForm: byId("setupForm"),
+  setupJourney: byId("setupJourney"),
+  setupJourneyImage: byId("setupJourneyImage"),
+  setupJourneySummary: byId("setupJourneySummary"),
+  setupStepChoose: byId("setupStepChoose"),
+  setupStepConnect: byId("setupStepConnect"),
+  setupStepVerify: byId("setupStepVerify"),
   closeSetupButton: byId("closeSetupButton"),
   saveSetupButton: byId("saveSetupButton"),
   managedSettings: byId("managedSettings"),
@@ -391,8 +400,8 @@ function modePresentation(mode) {
     ? EFFORT_LABELS_BY_BUDGET[mode?.budget_profile]
     : "";
   return {
-    label: mode?.effort_label || effortLabel || mode?.label || mode?.title || "Automatic",
-    description: mode?.summary || mode?.best_for || mode?.description || "Uses the configured task workflow.",
+    label: mode?.effort_label || effortLabel || mode?.friendly_name || mode?.label || mode?.title || "Automatic",
+    description: mode?.short_purpose || mode?.summary || mode?.best_for || mode?.description || "Uses the configured task workflow.",
   };
 }
 
@@ -490,6 +499,7 @@ function humanizeFact(value, fallback = "Automatic") {
 }
 
 function executionLocation(option) {
+  if (option?.location_label) return option.location_label;
   if (option?.local_only === true) return "Local only";
   if (option?.type === "coding_agent") return "Through an installed coding app";
   const locations = {
@@ -570,7 +580,7 @@ function executionMutation(option) {
 }
 
 function technicalModeLabel(option) {
-  const explicit = String(option?.technical_mode || "").trim();
+  const explicit = String(option?.technical_label || option?.technical_mode || "").trim();
   if (explicit) return explicit;
   const number = option?.mode_number ?? option?.number;
   return number !== undefined && number !== null && String(number).trim()
@@ -811,8 +821,8 @@ function renderModeControls() {
       persistForm();
       updateStartButton();
     };
-    els.routes.append(createChoiceCard(route, state.route, choose, { technical: true }));
-    appendChoiceOption(els.routeSelect, route, state.route, { technical: true });
+    els.routes.append(createChoiceCard(route, state.route, choose));
+    appendChoiceOption(els.routeSelect, route, state.route);
   });
   labRoutes.forEach((route) => appendChoiceOption(
     els.routeSelect,
@@ -915,8 +925,8 @@ function configureModesPayload(payload) {
 function updateAccessSummary() {
   const count = linesFrom(els.safeAreas).length;
   els.accessSummary.textContent = count
-    ? `Access · Limited to ${count} ${count === 1 ? "area" : "areas"}`
-    : "Access · Entire project";
+    ? `Work area · ${count} selected ${count === 1 ? "folder" : "folders"}`
+    : "Work area · Entire project";
 }
 
 function formSnapshot() {
@@ -1501,7 +1511,45 @@ function renderStatusFooter(task) {
 
 function renderHistory(tasks) {
   els.historyList.replaceChildren();
+  const routeSelection = els.historyRouteFilter.value || "all";
+  const knownRoutes = new Map(state.routes.map((route) => [route.key, modePresentation(route).label]));
   (tasks || []).forEach((task) => {
+    const routeKey = task.metadata?.route_key || task.metadata?.managed_route?.key || task.metadata?.mode || "";
+    if (routeKey && !knownRoutes.has(routeKey)) knownRoutes.set(routeKey, humanizeFact(routeKey));
+  });
+  els.historyRouteFilter.replaceChildren();
+  const allRoutes = document.createElement("option");
+  allRoutes.value = "all";
+  allRoutes.textContent = "All routes";
+  els.historyRouteFilter.append(allRoutes);
+  knownRoutes.forEach((label, key) => {
+    const option = document.createElement("option");
+    option.value = key;
+    option.textContent = label;
+    els.historyRouteFilter.append(option);
+  });
+  els.historyRouteFilter.value = knownRoutes.has(routeSelection) ? routeSelection : "all";
+
+  const statusSelection = els.historyStatusFilter.value || "all";
+  const filtered = (tasks || []).filter((task) => {
+    const receipt = receiptContext(task);
+    const category = receipt.category === "verified_done"
+      ? "verified"
+      : receipt.category === "failed"
+        ? "failed"
+        : receipt.category === "blocked" || task.status === "blocked"
+          ? "blocked"
+          : ["starting", "working", "checking", "needs_review", "stopping"].includes(task.status)
+            ? "active"
+            : "all";
+    const routeKey = task.metadata?.route_key || task.metadata?.managed_route?.key || task.metadata?.mode || "";
+    return (statusSelection === "all" || category === statusSelection)
+      && (els.historyRouteFilter.value === "all" || routeKey === els.historyRouteFilter.value);
+  });
+  els.historyEmpty.hidden = filtered.length > 0;
+  els.historyList.hidden = filtered.length === 0;
+
+  filtered.forEach((task) => {
     const receipt = receiptContext(task);
     const rawDoneUnverified = task.status === "done" && !receipt.terminal;
     const item = document.createElement("li");
@@ -1513,7 +1561,38 @@ function renderHistory(tasks) {
       : rawDoneUnverified
         ? "Checking evidence"
         : task.status_label || task.status;
-    button.textContent = `${label}: ${task.objective || task.summary || task.id}`;
+    const category = receipt.category === "verified_done"
+      ? "verified"
+      : receipt.category === "failed"
+        ? "failed"
+        : receipt.category === "blocked" || task.status === "blocked"
+          ? "blocked"
+          : "active";
+    const mark = document.createElement("span");
+    mark.className = `history-status-mark ${category}`;
+    mark.setAttribute("aria-hidden", "true");
+    const icon = document.createElementNS
+      ? document.createElementNS("http://www.w3.org/2000/svg", "svg")
+      : document.createElement("svg");
+    icon.setAttribute("class", "icon");
+    const use = document.createElementNS
+      ? document.createElementNS("http://www.w3.org/2000/svg", "use")
+      : document.createElement("use");
+    use.setAttribute("href", iconHref(category === "verified" ? "shield-check" : category === "failed" ? "octagon-alert" : category === "blocked" ? "circle-alert" : "loader-circle"));
+    icon.append(use);
+    mark.append(icon);
+    const copy = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = task.objective || task.summary || task.id;
+    const result = document.createElement("small");
+    result.textContent = label;
+    copy.append(title, result);
+    const meta = document.createElement("span");
+    meta.className = "history-entry-meta";
+    const changedCount = Array.isArray(task.changed_files) ? task.changed_files.length : 0;
+    const routeKey = task.metadata?.route_key || task.metadata?.managed_route?.key || task.metadata?.mode || "";
+    meta.textContent = `${knownRoutes.get(routeKey) || "Configured route"} · ${changedCount} ${changedCount === 1 ? "file" : "files"}`;
+    button.append(mark, copy, meta);
     button.addEventListener("click", () => {
       if (state.liveTask && state.liveTask.id === task.id) {
         state.viewingHistoryId = "";
@@ -1528,6 +1607,29 @@ function renderHistory(tasks) {
     item.append(button);
     els.historyList.append(item);
   });
+}
+
+function renderSetupJourney(setup) {
+  const readOnly = setup?.editable === false;
+  const configured = setup?.configured === true;
+  const connectionVerified = setup?.execution_validation?.verified === true;
+  const hasError = Boolean(setup?.configuration_error);
+  els.setupJourney.hidden = readOnly && !hasError;
+  const activeStep = configured ? 3 : connectionVerified ? 2 : 1;
+  [els.setupStepChoose, els.setupStepConnect, els.setupStepVerify].forEach((step, index) => {
+    step.classList?.toggle("current", index + 1 === activeStep);
+    step.classList?.toggle("done", index + 1 < activeStep || configured);
+  });
+  if (hasError) {
+    els.setupJourneyImage.src = "/static/illustrations/setup-recovery.webp";
+    els.setupJourneySummary.textContent = "The saved configuration needs repair. Nothing will be overwritten until it is safe to continue.";
+  } else if (configured) {
+    els.setupJourneyImage.src = "/static/illustrations/verified-archive.webp";
+    els.setupJourneySummary.textContent = "This project is connected and independently checked. You can update the settings or return Home to start work.";
+  } else {
+    els.setupJourneyImage.src = "/static/illustrations/local-ai-connection.webp";
+    els.setupJourneySummary.textContent = "Choose how the assistant should run. Agentic Harness will test the full connection before saving it.";
+  }
 }
 
 function renderDetectedAgents(setup, worker) {
@@ -1602,6 +1704,7 @@ function renderSetup(setup) {
   const humanModes = setup.editable === false && setup.worker?.type === "local_goal";
   const readOnly = setup.editable === false;
   const configurationError = setup.configuration_error || null;
+  renderSetupJourney(setup);
   els.modeSection.hidden = false;
   els.checks.required = !humanModes;
   els.verificationDetails.className = "verification-details";
@@ -1611,9 +1714,9 @@ function renderSetup(setup) {
     setup.verification_command || setup.suggested_check || verification.technical_command,
   );
   els.verificationSummary.textContent = hasCheck || humanModes
-    ? "Checks · Automatic"
-    : "Checks · Setup needed";
-  els.verificationLabel.textContent = "Technical check for this task";
+    ? "Completion check · Automatic"
+    : "Completion check · Setup needed";
+  els.verificationLabel.textContent = "How should completion be checked?";
   els.verificationHelp.textContent = humanModes
     ? "The managed reviewer checks every result. Add another check here only when this task needs one."
     : "Agentic Harness runs this independently. Change it only when this task needs a different project check.";
@@ -1829,6 +1932,19 @@ function renderLocalModelDetection(payload) {
   els.useDetectedModelButton.hidden = detected.length === 0;
   els.useDetectedModelButton.textContent = "Use this AI";
   const found = detected.length > 0;
+  if (state.setup?.configured !== true && els.executionChoice.value === "local_model") {
+    els.setupJourneyImage.src = found
+      ? "/static/illustrations/local-ai-connection.webp"
+      : "/static/illustrations/setup-recovery.webp";
+    els.setupStepChoose.classList?.add("done");
+    els.setupStepChoose.classList?.remove("current");
+    els.setupStepConnect.classList?.toggle("current", !found);
+    els.setupStepConnect.classList?.toggle("done", found);
+    els.setupStepVerify.classList?.toggle("current", found);
+    els.setupJourneySummary.textContent = found
+      ? "Local AI found. Select the model, then save to run the structured-action verification."
+      : "No supported local AI is ready yet. Start a server or open Manual connection, then try again.";
+  }
   els.localModelGuide.hidden = found || els.executionChoice.value !== "local_model";
   els.localModelRequirement.textContent = found
     ? "Local AI found. Use it, test the connection, and save your settings."
@@ -2361,7 +2477,25 @@ els.modelProfileSelect.addEventListener("change", () => {
 els.themeButton.addEventListener("click", toggleTheme);
 els.shortcutsButton.addEventListener("click", () => els.shortcutsDialog.showModal());
 els.historySearch.addEventListener("input", () => refreshHistory().catch(() => {}));
+els.historyStatusFilter.addEventListener("change", () => refreshHistory().catch(() => {}));
+els.historyRouteFilter.addEventListener("change", () => refreshHistory().catch(() => {}));
 els.exportButton.addEventListener("click", () => exportSession().catch((error) => window.alert(error.message)));
+(document.querySelectorAll?.("[data-task-starter]") || []).forEach((button) => {
+  button.addEventListener("click", () => {
+    const starters = {
+      "Build or improve": "Build or improve ",
+      "Fix a problem": "Find and fix ",
+      "Review safely": "Review this project safely and report ",
+      "Long-running task": "Complete this larger task: ",
+    };
+    els.objective.value = starters[button.dataset.taskStarter] || "";
+    els.objective.focus();
+    els.objective.setSelectionRange(els.objective.value.length, els.objective.value.length);
+    pushUndo();
+    persistForm();
+    updateStartButton();
+  });
+});
 [els.objective, els.safeAreas, els.checks].forEach((field) => {
   field.addEventListener("input", () => {
     if (field === els.safeAreas) updateAccessSummary();

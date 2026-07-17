@@ -692,12 +692,18 @@ def make_handler(
             relative = "index.html" if route in {"", "/"} else route.removeprefix("/")
             if relative.startswith("static/"):
                 relative = relative.removeprefix("static/")
-            if "/" in relative or relative.startswith("."):
+            parts = relative.split("/")
+            nested_asset = len(parts) == 2 and parts[0] == "illustrations"
+            if (
+                not all(parts)
+                or any(part.startswith(".") or "\\" in part for part in parts)
+                or (len(parts) > 1 and not nested_asset)
+            ):
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             static_root = files("agentic_harness.gui.static")
             try:
-                resource = static_root.joinpath(relative)
+                resource = static_root.joinpath(*parts)
                 data = resource.read_bytes()
             except (FileNotFoundError, IsADirectoryError):
                 self.send_error(HTTPStatus.NOT_FOUND)

@@ -622,7 +622,7 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
   const start = app.elements.get("startButton");
 
   assert.equal(app.elements.get("verificationDetails").open, false);
-  assert.equal(app.elements.get("verificationSummary").textContent, "Checks · Setup needed");
+  assert.equal(app.elements.get("verificationSummary").textContent, "Completion check · Setup needed");
 
   objective.value = "Fix the regression";
   objective.listeners.input();
@@ -1046,7 +1046,7 @@ async function testLegacyHumanCanChooseEveryModeWithoutWritingACommand() {
   assert.equal(app.elements.get("verificationDetails").open, false);
   assert.equal(
     app.elements.get("verificationSummary").textContent,
-    "Checks · Automatic",
+    "Completion check · Automatic",
   );
   objective.value = "Please audit my system and give me a simple report.";
   objective.listeners.input();
@@ -1109,7 +1109,7 @@ async function testPredictableViewsConciseModesAndAccessSummaryKeepDraftState() 
   const safeAreas = app.elements.get("safeAreas");
   safeAreas.value = "src\ndocs";
   safeAreas.listeners.input();
-  assert.equal(app.elements.get("accessSummary").textContent, "Access · Limited to 2 areas");
+  assert.equal(app.elements.get("accessSummary").textContent, "Work area · 2 selected folders");
   app.elements.get("historyTab").listeners.click();
   assert.equal(app.elements.get("historyView").hidden, false);
   assert.equal(app.elements.get("homeView").hidden, true);
@@ -1448,7 +1448,7 @@ async function testCompletedGoalPreservesASecondGenerationNewDraft() {
 
   assert.equal(app.elements.get("objective").value, nextObjective);
   assert.equal(app.elements.get("safeAreas").value, "docs");
-  assert.equal(app.elements.get("accessSummary").textContent, "Access · Limited to 1 area");
+  assert.equal(app.elements.get("accessSummary").textContent, "Work area · 1 selected folder");
 }
 
 async function testPausedBackgroundAssistantIsNotCalledAnActiveTask() {
@@ -1589,10 +1589,9 @@ async function testRawDoneWithoutTrustedReceiptRemainsUnverified() {
       status_label: "Done",
     },
   ]);
-  assert.equal(
-    app.elements.get("historyList").children[0].children[0].textContent,
-    "Checking evidence: Legacy completion claim",
-  );
+  const historyButton = app.elements.get("historyList").children[0].children[0];
+  assert.equal(historyButton.children[1].children[0].textContent, "Legacy completion claim");
+  assert.equal(historyButton.children[1].children[1].textContent, "Checking evidence");
   app.elements.get("historyList").children[0].children[0].listeners.click();
   assert.equal(app.elements.get("taskContext").hidden, false);
   assert.equal(app.elements.get("tasksView").focusCount > 0, true);

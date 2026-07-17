@@ -1181,20 +1181,13 @@ def run_selftest() -> int:
         config_dir = project / CONFIG_DIR
         config_dir.mkdir()
         (config_dir / CONFIG_NAME).write_text(
-            "\n".join(
-                [
-                    "version: 1",
-                    "worker: shell",
-                    "shell_command:",
-                    "  - python",
-                    "  - -c",
-                    "  - \"print('worker ok')\"",
-                    "review_command:",
-                    "  - python",
-                    "  - -c",
-                    "  - \"print('review ok')\"",
-                    "",
-                ]
+            json.dumps(
+                {
+                    "version": 1,
+                    "worker": "shell",
+                    "shell_command": [sys.executable, "-c", "print('worker ok')"],
+                    "review_command": [sys.executable, "-c", "print('review ok')"],
+                }
             ),
             encoding="utf-8",
         )
@@ -1361,6 +1354,10 @@ def _smoke_installed_artifact(artifact: Path, tmp_root: Path) -> bool:
                 "root = files('agentic_harness.gui.static'); "
                 "assert all(root.joinpath(name).is_file() for name in "
                 "('index.html', 'app.js', 'styles.css')); "
+                "art = root.joinpath('illustrations'); "
+                "assert all(art.joinpath(name).is_file() for name in "
+                "('local-ai-connection.webp', 'verified-archive.webp', "
+                "'setup-recovery.webp')); "
                 "print('packaged static assets verified')"
             ),
         ],

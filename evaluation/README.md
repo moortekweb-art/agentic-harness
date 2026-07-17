@@ -104,3 +104,10 @@ The output directory contains raw JSONL, environment and source checksums, aggre
 JSON, and a Markdown summary. Token metrics are omitted unless the scripted process or
 adapter reports them. A new run describes the checkout that produced it; it does
 not replace the immutable v0.7.2 release snapshot.
+
+## Local profile comparison
+
+[`LOCAL_PROFILE_PROTOCOL.md`](LOCAL_PROFILE_PROTOCOL.md) defines the frozen Qwen and
+Ornith harness-level comparison. Its task matrix records supported capabilities and
+the scorer fails closed on missing or duplicate rows. This is a protocol and scoring
+contract, not a claim that either model has already passed the benchmark.

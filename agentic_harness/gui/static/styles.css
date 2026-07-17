@@ -9,6 +9,10 @@
   --accent-strong: #174d44;
   --warn: #a75322;
   --danger: #9a2f2f;
+  --positive: #397844;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
   --panel-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
   --card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
 }
@@ -24,6 +28,7 @@
   --accent-strong: #91d3c5;
   --warn: #d49a5c;
   --danger: #e07878;
+  --positive: #7bc687;
   --panel-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
   --card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
 }
@@ -108,8 +113,8 @@ select {
   flex: 0 0 42px;
   place-items: center;
   border: 1px solid rgba(39, 105, 93, 0.25);
-  border-radius: 8px;
-  background: rgba(39, 105, 93, 0.08);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 82%, var(--accent) 18%);
   color: var(--accent-strong);
   box-shadow: var(--card-shadow);
 }
@@ -216,7 +221,7 @@ h3 {
 }
 
 .home-layout {
-  width: min(820px, 100%);
+  width: min(960px, 100%);
 }
 
 .workspace-strip {
@@ -254,14 +259,49 @@ h3 {
   margin: 0 0 18px;
   padding: 20px;
   border: 1px solid color-mix(in srgb, var(--accent) 65%, var(--line));
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--panel) 78%, var(--accent) 22%);
   box-shadow: var(--panel-shadow);
 }
 
-.first-success-card > div:first-child {
+.first-success-card > div:not(.first-success-actions) {
   min-width: 0;
   max-width: 720px;
+}
+
+.state-illustration {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+  background: #f7f4ed;
+  object-fit: contain;
+}
+
+.demo-illustration {
+  width: 150px;
+  flex: 0 0 150px;
+}
+
+.task-starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 8px 0 16px;
+}
+
+.task-starters button {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.task-starters button:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
 }
 
 .first-success-card h2 {
@@ -332,7 +372,7 @@ h3 {
 
 .history-panel,
 .settings-panel {
-  width: min(820px, 100%);
+  width: min(960px, 100%);
   margin: 0 auto;
   padding: 22px;
   border: 1px solid var(--line);
@@ -360,6 +400,61 @@ h3 {
 .settings-group h3 {
   margin-top: 0;
   font-size: 1rem;
+}
+
+.setup-journey {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) 1fr;
+  align-items: center;
+  gap: 24px;
+  margin: 20px 0;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
+}
+
+.setup-journey h3 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.setup-journey p:not(.eyebrow) {
+  color: var(--muted);
+}
+
+.setup-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-steps li {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.setup-steps li.current {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  background: color-mix(in srgb, var(--panel) 78%, var(--accent) 22%);
+  color: var(--accent-strong);
+}
+
+.setup-steps li.done {
+  color: var(--positive);
+}
+
+.guide-illustration {
+  float: right;
+  width: 150px;
+  margin: 0 0 8px 14px;
 }
 
 .section-heading {
@@ -1218,6 +1313,27 @@ button[aria-busy="true"]:disabled {
   list-style: none;
 }
 
+.history-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.6fr) minmax(150px, 0.7fr) minmax(170px, 0.8fr);
+  gap: 10px;
+  align-items: end;
+}
+
+.history-controls .field-label {
+  margin-top: 0;
+}
+
+.history-controls input,
+.history-controls select {
+  width: 100%;
+}
+
+.history-actions {
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
 .history-list button {
   width: 100%;
   justify-content: flex-start;
@@ -1225,7 +1341,12 @@ button[aria-busy="true"]:disabled {
 }
 
 .history-entry {
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 72px;
+  padding: 11px 12px;
 }
 
 .history-entry > span {
@@ -1240,6 +1361,62 @@ button[aria-busy="true"]:disabled {
 
 .history-entry small {
   color: var(--muted);
+}
+
+.history-status-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+}
+
+.history-status-mark.verified {
+  color: var(--positive);
+  border-color: color-mix(in srgb, var(--positive) 35%, var(--line));
+}
+
+.history-status-mark.blocked {
+  color: var(--warn);
+}
+
+.history-status-mark.failed {
+  color: var(--danger);
+}
+
+.history-entry-meta {
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-align: right;
+}
+
+.illustrated-empty {
+  display: grid;
+  justify-items: center;
+  margin-top: 16px;
+  padding: 26px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  text-align: center;
+}
+
+.illustrated-empty .state-illustration {
+  width: 210px;
+  margin-bottom: 8px;
+}
+
+.illustrated-empty p {
+  max-width: 420px;
+  margin: 4px 0 0;
+}
+
+.result-illustration {
+  float: right;
+  width: min(220px, 38%);
+  margin: 0 0 14px 18px;
 }
 
 .advanced pre {
@@ -1649,6 +1826,42 @@ dialog::backdrop {
     flex-direction: column;
     gap: 14px;
     padding: 16px;
+  }
+
+  .demo-illustration {
+    width: min(180px, 62vw);
+    align-self: center;
+  }
+
+  .setup-journey {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .setup-journey > img {
+    width: min(240px, 72vw);
+    justify-self: center;
+  }
+
+  .history-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .history-entry {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .history-entry-meta {
+    grid-column: 2;
+    text-align: left;
+  }
+
+  .result-illustration,
+  .guide-illustration {
+    float: none;
+    width: min(220px, 100%);
+    margin: 0 auto 12px;
   }
 
   .first-success-actions {

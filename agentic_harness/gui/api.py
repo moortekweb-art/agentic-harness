@@ -184,6 +184,42 @@ _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
 )
 
 
+def _route_ui_payload(routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add stable presentation metadata without changing routing identities."""
+    location_labels = {
+        "local_node1": "Your local AI",
+        "managed_local": "Your local AI",
+        "mixed_local_cloud": "Cloud planning and local execution",
+        "cloud_provider": "Configured cloud provider",
+    }
+    for route in routes:
+        capabilities = ["implementation"] if route.get("mutation") == "implementation" else []
+        if route.get("mutation") == "audit_only":
+            capabilities.append("read-only audit")
+        if route.get("supports_execution_profiles"):
+            capabilities.append("selectable model profile")
+        if route.get("local_only"):
+            capabilities.append("local-only")
+        route.update(
+            {
+                "friendly_name": str(route.get("label") or "Execution route"),
+                "short_purpose": str(route.get("summary") or ""),
+                "location_label": location_labels.get(
+                    str(route.get("data_location") or ""),
+                    "Managed execution",
+                ),
+                "availability_state": "ready" if route.get("available") is True else "unavailable",
+                "unavailable_reason": str(route.get("disabled_reason") or ""),
+                "capabilities": capabilities,
+                "technical_label": str(
+                    route.get("technical_label") or route.get("technical_mode") or ""
+                ),
+                "advanced_only": bool(route.get("labs") or route.get("hidden")),
+            }
+        )
+    return routes
+
+
 _EXECUTION_EFFORTS: tuple[dict[str, Any], ...] = (
     {
         "key": "quick",
@@ -228,13 +264,13 @@ def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]
                 if route["key"] != "mode4b"
                 else "Mode 4B is disabled until its canary worker is explicitly enabled and verified."
             )
-        return routes
+        return _route_ui_payload(routes)
     if not bridge.available():
         for route in routes:
             route["disabled_reason"] = (
                 "The managed local-goal backend is not installed or executable."
             )
-        return routes
+        return _route_ui_payload(routes)
 
     modes_result = _bridge_command(bridge, "harness_modes", ["harness-modes", "--json"])
     capabilities_result = _bridge_command(bridge, "capabilities", ["capabilities", "--json"])
@@ -255,7 +291,7 @@ def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]
     workers = _worker_registry(matrix_document)
 
     if not registry and isinstance(capabilities.get("lanes"), dict):
-        return _legacy_modes_payload(capabilities_document)
+        return _route_ui_payload(_legacy_modes_payload(capabilities_document))
 
     recommended_id = str((modes_document or {}).get("recommended_default_mode") or "")
     local_lane = _dictionary(_dictionary(capabilities.get("lanes")).get("local"))
@@ -413,7 +449,7 @@ def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]
                 "the managed GUI."
             )
         route["enabled"] = route["available"]
-    return routes
+    return _route_ui_payload(routes)
 
 
 def execution_efforts_payload() -> list[dict[str, Any]]:
@@ -435,6 +471,11 @@ def execution_profiles_payload(
     if not isinstance(payload, dict) or payload.get("contract") != "node1_model_profile.v1":
         return []
     current = str(payload.get("profile") or "")
+    runtime = {
+        key: payload[key]
+        for key in ("max_model_len", "max_num_seqs", "mtp_enabled", "quantization")
+        if key in payload
+    }
     return [
         {
             "key": "qwen-primary",
@@ -442,6 +483,9 @@ def execution_profiles_payload(
             "summary": "Production local lane with text, tools, and vision.",
             "caution": "Recommended default. No temporary model window is needed.",
             "vision": True,
+            "capabilities": ["Coding", "Tools", "Vision", "Long context"],
+            "capability_evidence": "node1_model_profile.v1",
+            "runtime": runtime if current == "qwen-primary" else {},
             "recommended": True,
             "requires_swap": False,
             "route_key": "mode1",
@@ -453,6 +497,9 @@ def execution_profiles_payload(
             "summary": "Higher-throughput local text and tool lane on the same GPUs.",
             "caution": "Text only. Qwen is restored when the attached goal finishes or start-up fails.",
             "vision": False,
+            "capabilities": ["Coding", "Tools", "Text only"],
+            "capability_evidence": "node1_model_profile.v1",
+            "runtime": runtime if current == "ornith-text" else {},
             "recommended": False,
             "requires_swap": True,
             "route_key": "mode1",

@@ -1109,6 +1109,25 @@ def test_gui_token_mode_keeps_static_shell_public_and_gates_api(monkeypatch) -> 
     assert unknown_authenticated.payload == {"ok": False, "error": "not found"}
 
 
+def test_gui_serves_only_approved_nested_illustration_assets() -> None:
+    with gui_server(FakeBridge()) as base_url:
+        with urllib.request.urlopen(
+            base_url + "/static/illustrations/local-ai-connection.webp",
+            timeout=3,
+        ) as response:
+            data = response.read()
+            content_type = response.headers.get("Content-Type")
+        with pytest.raises(urllib.error.HTTPError) as disallowed_nested:
+            urllib.request.urlopen(base_url + "/static/other/asset.webp", timeout=3)
+        with pytest.raises(urllib.error.HTTPError) as traversal:
+            urllib.request.urlopen(base_url + "/static/illustrations/.hidden.webp", timeout=3)
+
+    assert data.startswith(b"RIFF") and b"WEBP" in data[:16]
+    assert content_type == "image/webp"
+    assert disallowed_nested.value.code == 404
+    assert traversal.value.code == 404
+
+
 def test_gui_token_mode_websocket_rejects_query_token(monkeypatch) -> None:
     monkeypatch.setenv(GUI_TOKEN_ENV, "test-token")
 

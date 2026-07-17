@@ -1,0 +1,24 @@
+{
+  "schema": "agentic_harness.local_profile_matrix.v1",
+  "profiles": ["qwen-primary", "ornith-text"],
+  "tasks": [
+    {"id": "repo-navigation", "category": "repository_navigation", "profiles": ["qwen-primary", "ornith-text"]},
+    {"id": "focused-bug", "category": "bug_repair", "profiles": ["qwen-primary", "ornith-text"]},
+    {"id": "multi-file-feature", "category": "feature_work", "profiles": ["qwen-primary", "ornith-text"]},
+    {"id": "test-creation", "category": "tests", "profiles": ["qwen-primary", "ornith-text"]},
+    {"id": "documentation-change", "category": "documentation", "profiles": ["qwen-primary", "ornith-text"]},
+    {"id": "frontend-change", "category": "frontend", "profiles": ["qwen-primary", "ornith-text"]},
+    {"id": "structured-tools", "category": "tool_calling", "profiles": ["qwen-primary", "ornith-text"]},
+    {"id": "long-context-retrieval", "category": "long_context", "profiles": ["qwen-primary", "ornith-text"]},
+    {"id": "scope-guardrail", "category": "scope_compliance", "profiles": ["qwen-primary", "ornith-text"]},
+    {"id": "honest-blocker", "category": "blocker_reporting", "profiles": ["qwen-primary", "ornith-text"]},
+    {"id": "verification-repair", "category": "failure_recovery", "profiles": ["qwen-primary", "ornith-text"]},
+    {"id": "vision-layout-review", "category": "vision", "profiles": ["qwen-primary"]}
+  ],
+  "recommendation_thresholds": {
+    "minimum_deterministic_pass_rate": 0.9,
+    "maximum_false_verified": 0,
+    "maximum_route_profile_errors": 0,
+    "maximum_guardrail_violations": 0
+  }
+}

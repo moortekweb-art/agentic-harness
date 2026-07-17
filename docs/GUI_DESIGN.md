@@ -48,7 +48,7 @@ visible while the task runs. Experiment explains and enforces its
 built-in-worker and explicit-access requirements before Start is enabled.
 
 Managed installations add a compact **What to expect** card. The default view
-shows the selected effort and resolved execution summary; **Change how it runs**
+shows the selected effort and resolved execution summary; **Choose where it runs**
 reveals the supported user-facing route catalog and any model profiles proven
 by that installation. Backend mode identifiers remain small technical badges
 beside plain labels. Routes that are currently unavailable stay disabled with a
@@ -81,7 +81,7 @@ and tool-call limits. Reaching a limit produces `Blocked with reason` or
 
 - Show the selected workspace and execution method.
 - Accept one complete task in ordinary language.
-- Show **Checks · Automatic** and **Access · Entire project** by default.
+- Show **Completion check · Automatic** and **Work area · Entire project** by default.
 - For managed installations, show the resolved route, model profile, data
   location, planner, executor, verification, and maturity before submission.
 - Let advanced users override the technical check or limit access.
@@ -142,15 +142,18 @@ actions and evidence rather than private chain-of-thought.
 
 ## Visual direction
 
-The selected direction is a calm local workbench:
+The selected direction is a refined local workbench:
 
 - warm neutral canvas and high-contrast text;
 - restrained teal for primary actions and active progress;
 - amber for attention and review;
 - red only for destructive or failed states;
 - compact information hierarchy without a terminal-shaped main surface;
-- no decorative gradients or activity animation that implies work not recorded
-  by the backend.
+- build-time img2img illustrations for setup, recovery, empty, and verified
+  states, with no runtime image-generation or network dependency;
+- one normalized 24px SVG control-icon family; generated raster art never
+  substitutes for an interactive control; and
+- no decorative animation that implies work not recorded by the backend.
 
 The earlier concept assets remain useful visual references:
 
