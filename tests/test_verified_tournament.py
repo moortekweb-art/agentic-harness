@@ -560,6 +560,18 @@ def test_supported_ecosystem_verifier_assets_are_frozen(
     assert set(files) <= set(drift)
 
 
+def test_go_package_selector_is_not_treated_as_a_repository_path(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "go.mod").write_text("module example.test/project\n", encoding="utf-8")
+    (root / "value_test.go").write_text("package project\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add go verifier assets")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["go", "test", "./..."]])
+
+    assert {asset["path"] for asset in assets} == {"go.mod", "value_test.go"}
+
+
 def test_lexical_verifier_symlink_is_rejected(tmp_path: Path) -> None:
     root, _ = _project(tmp_path)
     (root / "verify.py").symlink_to("check.py")

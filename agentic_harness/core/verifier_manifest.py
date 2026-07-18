@@ -187,6 +187,13 @@ def require_lexical_regular_path(root: Path, candidate: Path, *, label: str) -> 
 
 
 def _repository_argument_path(root: Path, text: str, *, executable: bool) -> Path | None:
+    # Go package selectors such as ``./...`` are command syntax, not repository
+    # paths.  In particular, Windows/Python 3.11 can report a synthetic ``...``
+    # path as existing and then fail while traversing it.  Ecosystem-specific
+    # manifest inference below supplies the actual verifier assets.
+    normalized = text.replace("\\", "/")
+    if normalized == "..." or normalized.endswith("/..."):
+        return None
     raw = Path(text)
     if ".." in raw.parts:
         raise ConfigError(f"verifier asset path must not contain parent traversal: {text}")
