@@ -178,6 +178,39 @@ the still-open external beta has already proved broad usability.
 
 ## Advanced Workflows
 
+### Verified Best-of-N
+
+The verified tournament workflow runs two to ten implementations concurrently
+in isolated Git worktrees and applies a winner only after independent verification:
+
+```bash
+agentic-harness best-of-n -n 3 \
+  "repair the parser without changing its public API" \
+  --check "python -m pytest tests/test_parser.py -q"
+```
+
+All candidates start from the same commit, receive the same immutable GoalSpec,
+and run the same configured checks. Explicit verifier files, existing tracked
+test suites, and the relevant test-runner configuration are hashed before work;
+a candidate that changes those assets is disqualified even if its altered check
+returns zero. Among passing candidates, the harness deterministically prefers
+the smallest patch, applies it to the original workspace, and runs the checks
+again there. If no candidate passes—or if the applied result fails—the command
+returns blocked with no accepted winner. It never selects a "least bad" failing
+implementation.
+
+The command requires a clean Git-root workspace so it cannot overwrite
+pre-existing changes. Private candidate patches and the versioned tournament
+receipt are stored under `.agentic-harness/tournaments/`. The initial selection
+policy is deliberately deterministic rather than model-judged; a future judge
+may rank only candidates that have already passed the frozen checks.
+
+This first surface is CLI-only. Git worktrees isolate candidate file changes,
+but they are not a security sandbox for a malicious external coding-agent
+process; that process retains the authority of its configured adapter and OS
+account. Use the embedded model agent or an external sandbox when stronger tool
+containment is required.
+
 ### Recipes
 
 Common workflows have direct commands:
