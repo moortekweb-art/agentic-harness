@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -25,11 +25,33 @@ from agentic_harness.core.reporting import build_run_receipt
 from agentic_harness.core.review import ReviewResult
 from agentic_harness.core.safety import goal_safety_metadata, subprocess_environment
 from agentic_harness.core.state import Goal
+from agentic_harness.core.verifier_manifest import (
+    freeze_verifier_assets,
+    require_lexical_regular_path,
+    verifier_asset_drift,
+)
+from agentic_harness.core.workspace_transaction import (
+    recover_interrupted_tournament as _recover_interrupted_tournament,
+    rollback_patch as _rollback_patch,
+    workspace_fingerprint as _workspace_fingerprint,
+    write_private_bytes as _write_private_bytes,
+)
 
 
 TOURNAMENT_CONTRACT = "agentic_harness.verified_tournament.v1"
 MIN_CANDIDATES = 2
 MAX_CANDIDATES = 10
+
+
+def recover_interrupted_tournament(
+    project_dir: str | Path,
+    receipt_path: str | Path,
+) -> tuple[bool, str]:
+    return _recover_interrupted_tournament(
+        project_dir,
+        receipt_path,
+        contract=TOURNAMENT_CONTRACT,
+    )
 
 
 @dataclass
@@ -70,6 +92,9 @@ class TournamentResult:
     winner: int | None = None
     selection_policy: str = "smallest_verified_patch"
     applied: bool = False
+    transaction_phase: str = "collecting_candidates"
+    base_workspace_sha256: str = ""
+    expected_workspace_sha256: str = ""
     final_verification: dict[str, Any] = field(default_factory=dict)
     candidates: list[CandidateResult] = field(default_factory=list)
     receipt_path: str = ""
@@ -93,6 +118,7 @@ def run_verified_tournament(
     allowed_paths: list[str] | None = None,
     api_key: str | None = None,
     frozen_spec: GoalSpec | None = None,
+    review_assets: list[str] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
     progress_callback: Callable[[TournamentResult], None] | None = None,
 ) -> TournamentResult:
@@ -128,7 +154,18 @@ def run_verified_tournament(
     goal_spec = frozen_spec or derived_objective_spec(normalized_objective)
     if goal_spec.objective != normalized_objective:
         raise ConfigError("the frozen tournament specification does not match the objective")
-    verifier_assets = _freeze_verifier_assets(root, review_commands)
+    effective_review_assets = (
+        config.review_assets
+        if review_assets is None
+        and bool(config.review_command)
+        and review_commands == [config.review_command]
+        else (review_assets or [])
+    )
+    verifier_assets = _freeze_verifier_assets(
+        root,
+        review_commands,
+        review_assets=effective_review_assets,
+    )
     tournament_id = f"tournament-{uuid4().hex}"
     receipt_dir = root / CONFIG_DIR / "tournaments" / tournament_id
     receipt_dir.mkdir(parents=True, exist_ok=False)
@@ -148,6 +185,7 @@ def run_verified_tournament(
             for command in review_commands
         ],
         verifier_assets=verifier_assets,
+        base_workspace_sha256=_workspace_fingerprint(root),
         receipt_path=(receipt_dir / "receipt.json").relative_to(root).as_posix(),
     )
     _write_receipt(receipt_dir, result)
@@ -163,6 +201,7 @@ def run_verified_tournament(
 
     worktree_parent = Path(tempfile.mkdtemp(prefix=f"{tournament_id}-"))
     worktrees: dict[int, Path] = {}
+    verification_worktree: Path | None = None
     try:
         for number in range(1, candidate_count + 1):
             worktree = worktree_parent / f"candidate-{number}"
@@ -246,55 +285,128 @@ def run_verified_tournament(
             _write_receipt(receipt_dir, result)
             _notify_progress(progress_callback, result)
             return result
-        _git_bytes(root, ["apply", "--check", "--binary", "-"], input_bytes=patch)
-        _git_bytes(root, ["apply", "--binary", "-"], input_bytes=patch)
-        result.applied = True
         try:
+            verification_worktree = worktree_parent / "final-verification"
+            _git(root, "worktree", "add", "--detach", str(verification_worktree), base_commit)
+            _copy_runtime_config(root, verification_worktree)
+            _git_bytes(
+                verification_worktree,
+                ["apply", "--check", "--binary", "-"],
+                input_bytes=patch,
+            )
+            _git_bytes(
+                verification_worktree,
+                ["apply", "--binary", "-"],
+                input_bytes=patch,
+            )
+            final_asset_drift = _verifier_asset_drift(
+                verification_worktree, verifier_assets
+            )
+            if final_asset_drift:
+                result.status = "blocked"
+                result.reason = (
+                    "selected candidate changed frozen verifier assets: "
+                    + ", ".join(final_asset_drift[:10])
+                )
+                result.completed_at = _now_iso()
+                _write_receipt(receipt_dir, result)
+                _notify_progress(progress_callback, result)
+                return result
+            result.expected_workspace_sha256 = _workspace_fingerprint(
+                verification_worktree
+            )
             _write_receipt(receipt_dir, result)
             final_review = _run_final_verification(
-                root,
+                verification_worktree,
                 review_commands,
                 goal_spec,
                 api_key=api_key,
             )
             result.final_verification = final_review.to_dict()
+            if (
+                _workspace_fingerprint(verification_worktree)
+                != result.expected_workspace_sha256
+            ):
+                result.status = "blocked"
+                result.reason = (
+                    "final verification modified the verified workspace; "
+                    "no winner was applied"
+                )
+                result.completed_at = _now_iso()
+                _write_receipt(receipt_dir, result)
+                _notify_progress(progress_callback, result)
+                return result
             if cancel_requested is not None and cancel_requested():
-                rollback_error = _rollback_patch(root, patch)
-                result.applied = False
                 result.status = "stopped"
                 result.reason = "tournament stopped before the winner could be accepted"
-                if rollback_error:
-                    result.status = "blocked"
-                    result.reason += f"; automatic rollback failed: {rollback_error}"
                 result.completed_at = _now_iso()
                 _write_receipt(receipt_dir, result)
                 _notify_progress(progress_callback, result)
                 return result
             if not _review_proves_spec(final_review, goal_spec):
-                rollback_error = _rollback_patch(root, patch)
-                result.applied = False
                 result.status = "blocked"
-                result.reason = "winner failed verification after application"
+                result.reason = "winner failed final verification; no patch was applied"
+                result.completed_at = _now_iso()
+                _write_receipt(receipt_dir, result)
+                _notify_progress(progress_callback, result)
+                return result
+
+            result.transaction_phase = "verified_staged"
+            _write_receipt(receipt_dir, result)
+            _notify_progress(progress_callback, result)
+            _require_unchanged_workspace(root, base_commit)
+            if cancel_requested is not None and cancel_requested():
+                result.status = "stopped"
+                result.reason = "tournament stopped before the verified winner was applied"
+                result.completed_at = _now_iso()
+                _write_receipt(receipt_dir, result)
+                _notify_progress(progress_callback, result)
+                return result
+            _git_bytes(root, ["apply", "--check", "--binary", "-"], input_bytes=patch)
+            result.transaction_phase = "applying_verified"
+            _write_receipt(receipt_dir, result)
+            _notify_progress(progress_callback, result)
+            _git_bytes(root, ["apply", "--binary", "-"], input_bytes=patch)
+            if _workspace_fingerprint(root) != result.expected_workspace_sha256:
+                rollback_error = _rollback_patch(root, patch)
+                result.transaction_phase = "rollback_failed" if rollback_error else "rolled_back"
+                result.status = "blocked"
+                result.reason = "applied workspace does not match the independently verified state"
                 if rollback_error:
                     result.reason += f"; automatic rollback failed: {rollback_error}"
                 result.completed_at = _now_iso()
                 _write_receipt(receipt_dir, result)
                 _notify_progress(progress_callback, result)
                 return result
+            result.applied = True
 
             result.status = "verified_done"
+            result.transaction_phase = "verified"
             result.reason = (
                 f"candidate {winner.number} of {candidate_count} passed the frozen checks; "
-                "its applied patch "
-                "passed the same checks again in the original workspace"
+                "its exact, side-effect-free verified state was applied to the original workspace"
             )
             result.completed_at = _now_iso()
             _write_receipt(receipt_dir, result)
             _notify_progress(progress_callback, result)
             return result
         except Exception as exc:
-            rollback_error = _rollback_patch(root, patch)
+            rollback_error = ""
+            if result.transaction_phase == "applying_verified":
+                try:
+                    current_fingerprint = _workspace_fingerprint(root)
+                except (HarnessError, OSError) as fingerprint_error:
+                    current_fingerprint = ""
+                    rollback_error = (
+                        "workspace could not be fingerprinted before rollback: "
+                        f"{fingerprint_error}"
+                    )
+                if current_fingerprint == result.expected_workspace_sha256:
+                    rollback_error = _rollback_patch(root, patch)
+                elif current_fingerprint and current_fingerprint != result.base_workspace_sha256:
+                    rollback_error = "workspace state diverged before automatic rollback"
             result.applied = False
+            result.transaction_phase = "rollback_failed" if rollback_error else "rolled_back"
             result.status = "blocked"
             result.reason = redact_secrets(
                 "winner could not be durably verified after application: "
@@ -316,6 +428,8 @@ def run_verified_tournament(
         _notify_progress(progress_callback, result)
         return result
     finally:
+        if verification_worktree is not None:
+            _remove_worktree(root, verification_worktree)
         for worktree in worktrees.values():
             _remove_worktree(root, worktree)
         shutil.rmtree(worktree_parent, ignore_errors=True)
@@ -356,7 +470,7 @@ def _notify_progress(
     if callback is None:
         return
     try:
-        callback(result)
+        callback(deepcopy(result))
     except Exception:
         return
 
@@ -534,111 +648,24 @@ def _candidate_patch(worktree: Path, base_commit: str) -> tuple[bytes, list[str]
 def _freeze_verifier_assets(
     root: Path,
     review_commands: list[list[str]],
+    *,
+    review_assets: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    """Hash pre-existing verifier inputs so candidates cannot rewrite acceptance."""
-
-    candidates: set[Path] = set()
-    for command in review_commands:
-        lowered = [Path(argument).name.lower() for argument in command]
-        for argument in command[1:]:
-            if not argument or argument.startswith("-"):
-                continue
-            path_text = argument.split("::", 1)[0]
-            candidate = Path(path_text)
-            resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
-            try:
-                resolved.relative_to(root)
-            except ValueError:
-                continue
-            if resolved.is_symlink():
-                raise ConfigError(f"verifier asset must not be a symlink: {path_text}")
-            if resolved.is_file():
-                candidates.add(resolved)
-            elif resolved.is_dir():
-                candidates.update(_regular_files(resolved))
-
-        if any("pytest" in argument or argument == "unittest" for argument in lowered):
-            for name in ("pyproject.toml", "pytest.ini", "tox.ini", "setup.cfg"):
-                candidate = root / name
-                if candidate.is_file() and not candidate.is_symlink():
-                    candidates.add(candidate.resolve())
-        if any(argument in {"npm", "pnpm", "yarn", "bun"} for argument in lowered):
-            for name in (
-                "package.json",
-                "package-lock.json",
-                "pnpm-lock.yaml",
-                "yarn.lock",
-                "bun.lock",
-                "bun.lockb",
-            ):
-                candidate = root / name
-                if candidate.is_file() and not candidate.is_symlink():
-                    candidates.add(candidate.resolve())
-        if any(argument == "cargo" for argument in lowered):
-            for name in ("Cargo.toml", "Cargo.lock"):
-                candidate = root / name
-                if candidate.is_file() and not candidate.is_symlink():
-                    candidates.add(candidate.resolve())
-
-    for directory_name in ("tests", "test", "spec", "specs"):
-        directory = root / directory_name
-        if directory.is_dir() and not directory.is_symlink():
-            candidates.update(_regular_files(directory))
-
-    tracked = {
-        (root / relative).resolve()
+    tracked_paths = {
+        relative
         for relative in _git(root, "ls-files", "-z").split("\0")
         if relative
     }
-    candidates.intersection_update(tracked)
-    return [
-        {
-            "path": candidate.relative_to(root).as_posix(),
-            "sha256": _file_sha256(candidate),
-        }
-        for candidate in sorted(candidates)
-    ]
+    return freeze_verifier_assets(
+        root,
+        review_commands,
+        review_assets=review_assets,
+        tracked_paths=tracked_paths,
+    )
 
 
-def _verifier_asset_drift(
-    worktree: Path,
-    verifier_assets: list[dict[str, str]],
-) -> list[str]:
-    drift: list[str] = []
-    for asset in verifier_assets:
-        relative = asset["path"]
-        candidate = (worktree / relative).resolve()
-        try:
-            candidate.relative_to(worktree.resolve())
-        except ValueError:
-            drift.append(relative)
-            continue
-        if (
-            not candidate.is_file()
-            or candidate.is_symlink()
-            or _file_sha256(candidate) != asset["sha256"]
-        ):
-            drift.append(relative)
-    return drift
-
-
-def _regular_files(directory: Path) -> set[Path]:
-    return {
-        candidate.resolve()
-        for candidate in directory.rglob("*")
-        if candidate.is_file()
-        and not candidate.is_symlink()
-        and CONFIG_DIR not in candidate.parts
-        and ".git" not in candidate.parts
-    }
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+_verifier_asset_drift = verifier_asset_drift
+_require_lexical_regular_path = require_lexical_regular_path
 
 
 def _require_clean_git_root(root: Path) -> None:
@@ -685,15 +712,6 @@ def _copy_runtime_config(root: Path, worktree: Path) -> None:
         pass
 
 
-def _rollback_patch(root: Path, patch: bytes) -> str:
-    try:
-        _git_bytes(root, ["apply", "--check", "--reverse", "--binary", "-"], input_bytes=patch)
-        _git_bytes(root, ["apply", "--reverse", "--binary", "-"], input_bytes=patch)
-        return ""
-    except (HarnessError, OSError) as exc:
-        return str(exc)
-
-
 def _remove_worktree(root: Path, worktree: Path) -> None:
     try:
         _git(root, "worktree", "remove", "--force", str(worktree))
@@ -707,33 +725,6 @@ def _remove_worktree(root: Path, worktree: Path) -> None:
 def _write_receipt(receipt_dir: Path, result: TournamentResult) -> None:
     encoded = (json.dumps(result.to_dict(), indent=2, sort_keys=True) + "\n").encode("utf-8")
     _write_private_bytes(receipt_dir / "receipt.json", encoded)
-
-
-def _write_private_bytes(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        fchmod = getattr(os, "fchmod", None)
-        if callable(fchmod):
-            try:
-                fchmod(fd, 0o600)
-            except OSError:
-                pass
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except Exception:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        try:
-            Path(temporary).unlink()
-        except OSError:
-            pass
-        raise
 
 
 def _git(root: Path, *arguments: str) -> str:

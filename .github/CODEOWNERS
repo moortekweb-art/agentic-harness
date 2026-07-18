@@ -1,0 +1,10 @@
+# Acceptance, containment, authentication, and release boundaries require owner review.
+/agentic_harness/core/review.py @moortekweb-art
+/agentic_harness/core/tournament.py @moortekweb-art
+/agentic_harness/core/verifier_manifest.py @moortekweb-art
+/agentic_harness/core/workspace_transaction.py @moortekweb-art
+/agentic_harness/core/safety.py @moortekweb-art
+/agentic_harness/core/config.py @moortekweb-art
+/agentic_harness/gui/ @moortekweb-art
+/.github/workflows/ @moortekweb-art
+/agentic_harness/core/release_validation.py @moortekweb-art

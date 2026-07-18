@@ -1,5 +1,9 @@
 # Agentic Harness v0.13.0
 
+> **Security notice:** Do not use v0.13.0 for unattended Verified Best-of-N
+> acceptance. Its frozen verifier boundary can omit repository-local command
+> executables and several supported ecosystem definitions. Upgrade to v0.13.1.
+
 Version 0.13.0 adds fail-closed, verified multi-approach execution and an
 official Grok Build worker profile without weakening the v0.12 assurance
 contracts.

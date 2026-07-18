@@ -162,8 +162,8 @@ availability, and unavailable routes remain visible with a reason.
 
 ## Current evidence and open beta
 
-Version 0.12.0 is a released, technically certified self-hosted completion-
-assurance tool. Its frozen specification and evidence boundaries passed a
+Version 0.12.0 is a released self-hosted completion-assurance tool validated
+against the project's frozen adversarial protocol. Its frozen specification and evidence boundaries passed a
 preregistered ten-case adversarial matrix with zero false verified completions.
 External usability and real-agent performance validation remain in progress.
 
@@ -190,14 +190,27 @@ agentic-harness best-of-n -n 3 \
 ```
 
 All candidates start from the same commit, receive the same immutable GoalSpec,
-and run the same configured checks. Explicit verifier files, existing tracked
-test suites, and the relevant test-runner configuration are hashed before work;
-a candidate that changes those assets is disqualified even if its altered check
-returns zero. Among passing candidates, the harness deterministically prefers
-the smallest patch, applies it to the original workspace, and runs the checks
-again there. If no candidate passes—or if the applied result fails—the command
-returns blocked with no accepted winner. It never selects a "least bad" failing
-implementation.
+and run the same configured checks. Repository-local command executables,
+existing tracked test suites, and verifier definitions for Python, JavaScript,
+Rust, Go, Maven, Gradle, .NET, and RSpec are hashed before work. A candidate that
+changes those assets is disqualified even if its altered check returns zero.
+Opaque custom check runners must declare their dependency boundary with
+`review.assets` (or top-level `review_assets`); the tournament refuses to run
+when it cannot infer that boundary. Among passing candidates, the harness
+deterministically prefers the smallest patch, verifies it again in a fresh
+worktree, and rejects any verifier side effect by comparing complete workspace
+fingerprints before applying that exact state to the original workspace. If no
+candidate passes—or if application cannot reproduce the verified state—the
+command returns blocked with no accepted winner. It never selects a "least bad"
+failing implementation.
+
+```yaml
+review:
+  command: [custom-check, run]
+  assets:
+    - checks/acceptance.yml
+    - policy/
+```
 
 The command and the GUI's **Three verified approaches** choice require a clean
 Git-root workspace so they cannot overwrite
@@ -205,6 +218,11 @@ pre-existing changes. Private candidate patches and the versioned tournament
 receipt are stored under `.agentic-harness/tournaments/`. The initial selection
 policy is deliberately deterministic rather than model-judged; a future judge
 may rank only candidates that have already passed the frozen checks.
+The receipt records the preimage, verified workspace fingerprint, and apply
+phase before the original workspace changes. After an interrupted application,
+GUI startup restores the clean preimage when it can prove the workspace still
+matches the recorded verified patch; divergent state remains blocked for manual
+review.
 
 Git worktrees isolate candidate file changes, but they are not by themselves a
 security sandbox for a malicious external coding-agent process; that process

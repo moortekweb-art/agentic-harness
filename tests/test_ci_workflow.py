@@ -295,12 +295,30 @@ def test_distribution_name_avoids_occupied_pypi_project() -> None:
     metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert metadata["project"]["name"] == "local-agentic-harness"
-    assert metadata["project"]["version"] == "0.13.0"
+    assert metadata["project"]["version"] == "0.13.1"
     assert metadata["project"]["requires-python"] == ">=3.11,<3.15"
     assert metadata["project"]["scripts"]["agentic-harness"] == "agentic_harness.cli:main"
-    assert metadata["project"]["scripts"]["agentic-harness-gui"] == ("agentic_harness.gui.cli:main")
+    assert metadata["project"]["scripts"]["agentic-harness-gui"] == (
+        "agentic_harness.gui.cli:main"
+    )
     assert metadata["project"]["urls"]["Repository"].startswith("https://github.com/")
     assert "Development Status :: 4 - Beta" in metadata["project"]["classifiers"]
+
+
+def test_security_sensitive_boundaries_have_codeowners() -> None:
+    codeowners = Path(".github/CODEOWNERS").read_text(encoding="utf-8")
+    for path in (
+        "/agentic_harness/core/review.py",
+        "/agentic_harness/core/tournament.py",
+        "/agentic_harness/core/verifier_manifest.py",
+        "/agentic_harness/core/workspace_transaction.py",
+        "/agentic_harness/core/safety.py",
+        "/agentic_harness/core/config.py",
+        "/agentic_harness/gui/",
+        "/.github/workflows/",
+        "/agentic_harness/core/release_validation.py",
+    ):
+        assert path in codeowners
 
 
 def test_release_docs_match_current_package_version() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -39,6 +40,7 @@ def _project(
     final_only_failure: bool = False,
     all_fail: bool = False,
     tamper_verifier: bool = False,
+    verifier_side_effect: bool = False,
 ) -> tuple[Path, list[list[str]]]:
     root = tmp_path / "project"
     root.mkdir()
@@ -49,9 +51,14 @@ from pathlib import Path
 import sys
 
 value = Path("value.txt").read_text(encoding="utf-8").strip()
-worktree_ok = Path(".git").is_file() if FINAL_ONLY_FAILURE else True
+if VERIFIER_SIDE_EFFECT:
+    with Path("verification-side-effect.txt").open("a", encoding="utf-8") as handle:
+        handle.write("verification ran\\n")
+worktree_ok = Path.cwd().name != "final-verification" if FINAL_ONLY_FAILURE else True
 raise SystemExit(0 if value == "good" and worktree_ok else 1)
-""".replace("FINAL_ONLY_FAILURE", "True" if final_only_failure else "False")
+""".replace("FINAL_ONLY_FAILURE", "True" if final_only_failure else "False").replace(
+        "VERIFIER_SIDE_EFFECT", "True" if verifier_side_effect else "False"
+    )
     (root / "check.py").write_text(check_source.strip() + "\n", encoding="utf-8")
     worker_source = r'''
 from __future__ import annotations
@@ -337,6 +344,76 @@ def test_final_verification_exception_rolls_back_applied_patch(
     assert _git(root, "status", "--porcelain=v1", "--untracked-files=all").strip() == ""
 
 
+def test_final_verifier_side_effect_blocks_without_touching_original_workspace(
+    tmp_path: Path,
+) -> None:
+    root, commands = _project(tmp_path, verifier_side_effect=True)
+
+    result = run_verified_tournament(
+        root,
+        "Make value.txt contain good.",
+        candidate_count=2,
+        review_commands=commands,
+        max_attempts=1,
+    )
+
+    assert result.status == "blocked"
+    assert result.applied is False
+    assert "modified the verified workspace" in result.reason
+    assert root.joinpath("value.txt").read_text(encoding="utf-8") == "original\n"
+    assert not root.joinpath("verification-side-effect.txt").exists()
+    assert _git(root, "status", "--porcelain=v1", "--untracked-files=all").strip() == ""
+
+
+def test_interrupted_verified_application_is_recovered_to_preimage(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    base_commit = _git(root, "rev-parse", "HEAD").strip()
+    base_fingerprint = tournament_module._workspace_fingerprint(root)
+    (root / "value.txt").write_text("good\n", encoding="utf-8")
+    patch = subprocess.run(
+        ["git", "diff", "--binary", "--no-ext-diff", base_commit],
+        cwd=root,
+        capture_output=True,
+        check=True,
+    ).stdout
+    (root / "value.txt").write_text("original\n", encoding="utf-8")
+    subprocess.run(["git", "apply", "--binary", "-"], cwd=root, input=patch, check=True)
+    applied_fingerprint = tournament_module._workspace_fingerprint(root)
+    receipt_dir = root / ".agentic-harness" / "tournaments" / "interrupted"
+    receipt_dir.mkdir(parents=True)
+    patch_path = receipt_dir / "candidate-1.patch"
+    patch_path.write_bytes(patch)
+    receipt_path = receipt_dir / "receipt.json"
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "contract": tournament_module.TOURNAMENT_CONTRACT,
+                "base_commit": base_commit,
+                "base_workspace_sha256": base_fingerprint,
+                "expected_workspace_sha256": applied_fingerprint,
+                "transaction_phase": "applying_verified",
+                "winner": 1,
+                "applied": False,
+                "candidates": [
+                    {
+                        "number": 1,
+                        "patch_file": patch_path.relative_to(root).as_posix(),
+                        "patch_sha256": __import__("hashlib").sha256(patch).hexdigest(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    recovered, reason = tournament_module.recover_interrupted_tournament(root, receipt_path)
+
+    assert recovered is True
+    assert "restored" in reason
+    assert root.joinpath("value.txt").read_text(encoding="utf-8") == "original\n"
+    assert _git(root, "status", "--porcelain=v1", "--untracked-files=all").strip() == ""
+
+
 def test_tampered_candidate_patch_is_blocked_before_application(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -391,6 +468,178 @@ def test_candidate_cannot_weaken_a_frozen_verifier_asset(tmp_path: Path) -> None
     assert result.candidates[1].verifier_asset_drift == ["check.py"]
     assert root.joinpath("check.py").read_text(encoding="utf-8").startswith("from pathlib")
     assert root.joinpath("value.txt").read_text(encoding="utf-8") == "original\n"
+
+
+def test_direct_verifier_executable_is_frozen(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    verifier = root / "verify.sh"
+    verifier.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    verifier.chmod(0o755)
+    _git(root, "add", "verify.sh")
+    _git(root, "commit", "-m", "add direct verifier")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["./verify.sh"]])
+
+    assert "verify.sh" in {asset["path"] for asset in assets}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="direct POSIX executable regression")
+def test_candidate_cannot_replace_direct_verifier_executable(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path, tamper_verifier=True)
+    verifier = root / "verify.sh"
+    verifier.write_text(
+        '#!/bin/sh\n[ "$(cat value.txt)" = "good" ]\n',
+        encoding="utf-8",
+    )
+    verifier.chmod(0o755)
+    worker = root / "worker.py"
+    source = worker.read_text(encoding="utf-8")
+    source = source.replace(
+        'Path("check.py").write_text("raise SystemExit(0)\\n", encoding="utf-8")',
+        'Path("verify.sh").write_text("#!/bin/sh\\nexit 0\\n", encoding="utf-8")',
+    )
+    assert 'Path("verify.sh")' in source
+    worker.write_text(source, encoding="utf-8")
+    config_path = root / ".agentic-harness" / "config.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["review_command"] = ["./verify.sh"]
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    _git(root, "add", "verify.sh", "worker.py")
+    _git(root, "commit", "-m", "use direct verifier")
+
+    result = run_verified_tournament(
+        root,
+        "Make value.txt contain good.",
+        candidate_count=2,
+        review_commands=[["./verify.sh"]],
+        max_attempts=1,
+    )
+
+    assert result.status == "blocked"
+    assert result.winner is None
+    assert result.applied is False
+    assert result.candidates[1].verifier_asset_drift == ["verify.sh"]
+    assert root.joinpath("value.txt").read_text(encoding="utf-8") == "original\n"
+
+
+@pytest.mark.parametrize(
+    ("command", "files"),
+    [
+        (["go", "test", "./..."], ["go.mod", "go.sum", "pkg/value_test.go"]),
+        (["./mvnw", "test"], ["mvnw", "pom.xml", ".mvn/wrapper.properties"]),
+        (
+            ["./gradlew", "test"],
+            ["gradlew", "build.gradle", "settings.gradle", "gradle/wrapper/gradle-wrapper.properties"],
+        ),
+        (["dotnet", "test"], ["project.sln", "src/project.csproj", "Directory.Build.props"]),
+        (["bundle", "exec", "rspec"], ["Gemfile", "Gemfile.lock", ".rspec"]),
+    ],
+)
+def test_supported_ecosystem_verifier_assets_are_frozen(
+    tmp_path: Path,
+    command: list[str],
+    files: list[str],
+) -> None:
+    root, _ = _project(tmp_path)
+    for relative in files:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("frozen verifier input\n", encoding="utf-8")
+        if path.name in {"mvnw", "gradlew"}:
+            path.chmod(0o755)
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add ecosystem verifier assets")
+
+    assets = tournament_module._freeze_verifier_assets(root, [command])
+    frozen = {asset["path"] for asset in assets}
+
+    assert set(files) <= frozen
+    for relative in files:
+        (root / relative).write_text("candidate weakened verifier input\n", encoding="utf-8")
+    drift = tournament_module._verifier_asset_drift(root, assets)
+    assert set(files) <= set(drift)
+
+
+def test_go_package_selector_is_not_treated_as_a_repository_path(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "go.mod").write_text("module example.test/project\n", encoding="utf-8")
+    (root / "value_test.go").write_text("package project\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add go verifier assets")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["go", "test", "./..."]])
+
+    assert {asset["path"] for asset in assets} == {"go.mod", "value_test.go"}
+
+
+def test_lexical_verifier_symlink_is_rejected(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "verify.py").symlink_to("check.py")
+
+    with pytest.raises(ConfigError, match="symlink"):
+        tournament_module._freeze_verifier_assets(root, [[sys.executable, "verify.py"]])
+
+
+def test_verifier_with_symlinked_parent_is_rejected(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    actual = root / "actual-checks"
+    actual.mkdir()
+    (actual / "verify.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    (root / "checks").symlink_to(actual, target_is_directory=True)
+
+    with pytest.raises(ConfigError, match="symlink"):
+        tournament_module._freeze_verifier_assets(
+            root,
+            [[sys.executable, "checks/verify.py"]],
+        )
+
+
+def test_verifier_parent_traversal_is_rejected(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+
+    with pytest.raises(ConfigError, match="parent traversal"):
+        tournament_module._freeze_verifier_assets(
+            root,
+            [[sys.executable, "tests/../check.py"]],
+        )
+
+
+def test_unknown_verifier_requires_explicit_review_assets(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+
+    with pytest.raises(ConfigError, match="review_assets"):
+        tournament_module._freeze_verifier_assets(root, [["custom-check", "run"]])
+
+
+def test_explicit_review_assets_close_unknown_verifier_boundary(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [["custom-check", "run"]],
+        review_assets=["check.py"],
+    )
+
+    assert "check.py" in {asset["path"] for asset in assets}
+
+
+def test_progress_callback_cannot_mutate_live_tournament_state() -> None:
+    result = tournament_module.TournamentResult(
+        tournament_id="tournament-test",
+        objective="test",
+        base_commit="abc",
+        goal_spec_sha256="def",
+        candidate_count=2,
+    )
+
+    def mutate(snapshot: tournament_module.TournamentResult) -> None:
+        snapshot.status = "verified_done"
+        snapshot.candidates.append(CandidateResult(number=99, verified=True))
+
+    tournament_module._notify_progress(mutate, result)
+
+    assert result.status == "running"
+    assert result.candidates == []
 
 
 def test_tournament_refuses_existing_workspace_changes(tmp_path: Path) -> None:

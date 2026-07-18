@@ -62,7 +62,11 @@ from agentic_harness.core.strategies import (
     strategy_by_key,
     strategy_from_metadata,
 )
-from agentic_harness.core.tournament import TournamentResult, run_verified_tournament
+from agentic_harness.core.tournament import (
+    TournamentResult,
+    recover_interrupted_tournament,
+    run_verified_tournament,
+)
 from agentic_harness.core.workspace import workspace_change_summary
 
 
@@ -1554,6 +1558,8 @@ class EmbeddedExecutionBackend:
                         "tournament_id": result.tournament_id,
                         "completed_candidates": len(result.candidates),
                         "winner": result.winner,
+                        "applied": result.applied,
+                        "transaction_phase": result.transaction_phase,
                         "receipt_path": result.receipt_path,
                     }
                 )
@@ -1651,10 +1657,37 @@ class EmbeddedExecutionBackend:
             current = self.store.read_current_goal()
             if current is None or current.id != goal.id or current.status.is_terminal:
                 return
-            reason = (
-                "The verified tournament was interrupted before completion. Restart it so all "
-                "candidates begin from one clean commit; no candidate was accepted."
+            tournament = current.metadata.get("verified_tournament")
+            receipt_path = (
+                str(tournament.get("receipt_path") or "")
+                if isinstance(tournament, dict)
+                else ""
             )
+            recovered = False
+            recovery_reason = ""
+            if receipt_path:
+                recovered, recovery_reason = recover_interrupted_tournament(
+                    self.project_dir, receipt_path
+                )
+            if recovered:
+                reason = (
+                    "The verified tournament was interrupted during application. "
+                    "Its verified patch was restored to the clean preimage; restart the "
+                    "tournament to try again."
+                )
+            elif (
+                isinstance(tournament, dict)
+                and tournament.get("transaction_phase") == "applying_verified"
+            ):
+                reason = (
+                    "The verified tournament was interrupted during application and the "
+                    f"workspace could not be reconciled automatically: {recovery_reason}"
+                )
+            else:
+                reason = (
+                    "The verified tournament was interrupted before completion. Restart it so "
+                    "all candidates begin from one clean commit; no candidate was accepted."
+                )
             autonomy = current.metadata.get("autonomy")
             if not isinstance(autonomy, dict):
                 autonomy = {}

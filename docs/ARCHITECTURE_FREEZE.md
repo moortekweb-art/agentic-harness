@@ -13,6 +13,16 @@ The frozen product story is one workflow: run a project-local coding task,
 preserve its evidence, and refuse accepted completion until an independent
 command passes.
 
+## Security-maintenance boundary
+
+Verified tournament coordination remains in `core/tournament.py`. Frozen
+verifier discovery and drift checks live in `core/verifier_manifest.py`, while
+workspace fingerprints, atomic private writes, rollback, and interrupted apply
+recovery live in `core/workspace_transaction.py`. New tournament behavior must
+fit one of those responsibilities or justify another focused component; the
+coordinator and GUI backend must not absorb additional security mechanisms by
+default.
+
 ## Approved exception: public first-run strategy recovery
 
 The public first-run work recorded in [PUBLIC_RELEASE.md](PUBLIC_RELEASE.md) is
