@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from threading import Event
 
 import pytest
 import yaml
@@ -176,6 +177,39 @@ def test_gui_tournament_reports_blocked_when_every_candidate_fails(tmp_path: Pat
     assert goal is not None
     assert goal.metadata["verified_tournament"]["winner"] is None
     assert goal.metadata["verified_tournament"]["applied"] is False
+
+
+def test_stop_during_final_verification_rolls_back_and_never_accepts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, review_commands = _project(tmp_path)
+    stopped = Event()
+    original_final_review = tournament_module._run_final_verification
+
+    def stop_after_final_review(*args: object, **kwargs: object):
+        review = original_final_review(*args, **kwargs)
+        stopped.set()
+        return review
+
+    monkeypatch.setattr(
+        tournament_module,
+        "_run_final_verification",
+        stop_after_final_review,
+    )
+
+    result = run_verified_tournament(
+        root,
+        "Set value.txt to good and prove it",
+        candidate_count=2,
+        review_commands=review_commands,
+        cancel_requested=stopped.is_set,
+    )
+
+    assert result.status == "stopped"
+    assert result.applied is False
+    assert result.winner == 2
+    assert (root / "value.txt").read_text(encoding="utf-8") == "original\n"
 
 
 def test_selector_chooses_smallest_verified_patch() -> None:

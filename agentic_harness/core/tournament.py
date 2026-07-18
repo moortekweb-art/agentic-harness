@@ -239,6 +239,13 @@ def run_verified_tournament(
             _notify_progress(progress_callback, result)
             return result
         _require_unchanged_workspace(root, base_commit)
+        if cancel_requested is not None and cancel_requested():
+            result.status = "stopped"
+            result.reason = "tournament stopped before the winning patch was applied"
+            result.completed_at = _now_iso()
+            _write_receipt(receipt_dir, result)
+            _notify_progress(progress_callback, result)
+            return result
         _git_bytes(root, ["apply", "--check", "--binary", "-"], input_bytes=patch)
         _git_bytes(root, ["apply", "--binary", "-"], input_bytes=patch)
         result.applied = True
@@ -251,6 +258,18 @@ def run_verified_tournament(
                 api_key=api_key,
             )
             result.final_verification = final_review.to_dict()
+            if cancel_requested is not None and cancel_requested():
+                rollback_error = _rollback_patch(root, patch)
+                result.applied = False
+                result.status = "stopped"
+                result.reason = "tournament stopped before the winner could be accepted"
+                if rollback_error:
+                    result.status = "blocked"
+                    result.reason += f"; automatic rollback failed: {rollback_error}"
+                result.completed_at = _now_iso()
+                _write_receipt(receipt_dir, result)
+                _notify_progress(progress_callback, result)
+                return result
             if not _review_proves_spec(final_review, goal_spec):
                 rollback_error = _rollback_patch(root, patch)
                 result.applied = False
