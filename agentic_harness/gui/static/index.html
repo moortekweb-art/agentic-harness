@@ -384,6 +384,20 @@
                   <div id="modelProfiles" class="profile-grid" role="group" aria-label="Model profile"></div>
                 </section>
 
+                <section id="approachSection" class="expectation-choice-section">
+                  <div class="choice-heading">
+                    <div>
+                      <span class="field-label">Implementation approaches</span>
+                      <p class="help-text">One is fastest. Three runs isolated alternatives, rejects every failing result, and applies only a winner that passes the same checks again.</p>
+                    </div>
+                  </div>
+                  <label class="visually-hidden" for="candidateCount">Implementation approaches</label>
+                  <select id="candidateCount" class="approach-select" aria-label="Implementation approaches">
+                    <option value="1">One approach · fastest</option>
+                    <option value="3">Three verified approaches · strongest</option>
+                  </select>
+                </section>
+
                 <details id="advancedModeDetails" class="advanced-mode-details" hidden>
                   <summary>Labs · bounded experiments</summary>
                   <p class="help-text">These routes are limited trials. Availability and scope requirements come from the connected backend.</p>

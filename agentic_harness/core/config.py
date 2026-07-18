@@ -255,6 +255,41 @@ review_covers:
   - "*"
 review_command_timeout: 120
 """,
+    "grok": """# agentic-harness Grok Build starter config
+version: 1
+worker:
+  type: coding_agent
+  coding_agent_command:
+    - grok
+    - -p
+    - "{objective}"
+    - --cwd
+    - .
+    - --output-format
+    - plain
+    - --max-turns
+    - "50"
+    - --permission-mode
+    - bypassPermissions
+    - --sandbox
+    - workspace
+    - --no-auto-update
+    - --deny
+    - "Bash(git push*)"
+    - --deny
+    - "Bash(sudo*)"
+  coding_agent_timeout: 1800
+  coding_agent_transcript: .agentic-harness/runs/{goal_id}/coding-agent.log
+review_command:
+  - python
+  - -m
+  - pytest
+  - tests/
+  - -q
+review_covers:
+  - "*"
+review_command_timeout: 120
+""",
     "opencode": """# agentic-harness OpenCode starter config
 version: 1
 worker:

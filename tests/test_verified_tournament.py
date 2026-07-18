@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
 import yaml
@@ -16,6 +17,7 @@ from agentic_harness.core.tournament import (
     run_verified_tournament,
     select_verified_candidate,
 )
+from agentic_harness.gui.backend import EmbeddedExecutionBackend
 
 
 def _git(root: Path, *args: str) -> str:
@@ -118,6 +120,62 @@ def test_selector_never_chooses_the_least_bad_candidate() -> None:
     ]
 
     assert select_verified_candidate(candidates) is None
+
+
+def test_gui_runs_verified_tournament_and_exposes_only_reverified_winner(
+    tmp_path: Path,
+) -> None:
+    root, _ = _project(tmp_path)
+    backend = EmbeddedExecutionBackend(root)
+
+    started = backend.start(
+        {
+            "objective": "Set value.txt to good and prove it",
+            "candidate_count": 2,
+        }
+    )
+    deadline = time.monotonic() + 15
+    finished = started
+    while time.monotonic() < deadline:
+        finished = backend.status()
+        if finished["status"] in {"done", "blocked", "failed"}:
+            break
+        time.sleep(0.02)
+
+    assert finished["status"] == "done"
+    assert finished["final_result"]["accepted"] is True
+    assert (root / "value.txt").read_text(encoding="utf-8") == "good\n"
+    goal = backend.store.read_current_goal()
+    assert goal is not None
+    tournament = goal.metadata["verified_tournament"]
+    assert tournament["candidate_count"] == 2
+    assert tournament["winner"] == 2
+    assert tournament["applied"] is True
+    assert tournament["status"] == "verified_done"
+    assert len(tournament["candidates"]) == 2
+    assert goal.review is not None and goal.review["passed"] is True
+
+
+def test_gui_tournament_reports_blocked_when_every_candidate_fails(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path, all_fail=True)
+    backend = EmbeddedExecutionBackend(root)
+
+    backend.start({"objective": "Set value.txt to good and prove it", "candidate_count": 2})
+    deadline = time.monotonic() + 15
+    finished: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        finished = backend.status()
+        if finished["status"] in {"done", "blocked", "failed"}:
+            break
+        time.sleep(0.02)
+
+    assert finished["status"] == "blocked"
+    assert finished["final_result"]["accepted"] is False
+    assert (root / "value.txt").read_text(encoding="utf-8") == "original\n"
+    goal = backend.store.read_current_goal()
+    assert goal is not None
+    assert goal.metadata["verified_tournament"]["winner"] is None
+    assert goal.metadata["verified_tournament"]["applied"] is False
 
 
 def test_selector_chooses_smallest_verified_patch() -> None:

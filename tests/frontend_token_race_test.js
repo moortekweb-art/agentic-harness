@@ -644,7 +644,8 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
       route: "",
       effort: "plan",
       executionProfile: "automatic",
-      draftVersion: 4,
+      candidateCount: "1",
+      draftVersion: 5,
     },
   );
 }
@@ -1132,7 +1133,8 @@ async function testPredictableViewsConciseModesAndAccessSummaryKeepDraftState() 
       route: "mode3a",
       effort: "standard",
       executionProfile: "automatic",
-      draftVersion: 4,
+      candidateCount: "1",
+      draftVersion: 5,
     },
   );
 }

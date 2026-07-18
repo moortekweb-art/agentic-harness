@@ -12,7 +12,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from agentic_harness.core.autonomy import AutonomousRunner
@@ -92,6 +92,9 @@ def run_verified_tournament(
     max_attempts: int = 3,
     allowed_paths: list[str] | None = None,
     api_key: str | None = None,
+    frozen_spec: GoalSpec | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+    progress_callback: Callable[[TournamentResult], None] | None = None,
 ) -> TournamentResult:
     """Run candidates concurrently and apply only an independently verified winner.
 
@@ -122,7 +125,9 @@ def run_verified_tournament(
             "verified best-of-N does not silently approve high-assurance specifications; "
             "use specification_frozen or approve a future tournament specification workflow"
         )
-    frozen_spec = derived_objective_spec(normalized_objective)
+    goal_spec = frozen_spec or derived_objective_spec(normalized_objective)
+    if goal_spec.objective != normalized_objective:
+        raise ConfigError("the frozen tournament specification does not match the objective")
     verifier_assets = _freeze_verifier_assets(root, review_commands)
     tournament_id = f"tournament-{uuid4().hex}"
     receipt_dir = root / CONFIG_DIR / "tournaments" / tournament_id
@@ -135,9 +140,9 @@ def run_verified_tournament(
         tournament_id=tournament_id,
         objective=normalized_objective,
         base_commit=base_commit,
-        goal_spec_sha256=frozen_spec.sha256,
+        goal_spec_sha256=goal_spec.sha256,
         candidate_count=candidate_count,
-        goal_spec=frozen_spec.to_dict(),
+        goal_spec=goal_spec.to_dict(),
         verification_commands=[
             [redact_secrets(argument) for argument in command]
             for command in review_commands
@@ -146,6 +151,15 @@ def run_verified_tournament(
         receipt_path=(receipt_dir / "receipt.json").relative_to(root).as_posix(),
     )
     _write_receipt(receipt_dir, result)
+    _notify_progress(progress_callback, result)
+
+    if cancel_requested is not None and cancel_requested():
+        result.status = "stopped"
+        result.reason = "tournament stopped before candidates were started"
+        result.completed_at = _now_iso()
+        _write_receipt(receipt_dir, result)
+        _notify_progress(progress_callback, result)
+        return result
 
     worktree_parent = Path(tempfile.mkdtemp(prefix=f"{tournament_id}-"))
     worktrees: dict[int, Path] = {}
@@ -166,7 +180,7 @@ def run_verified_tournament(
                     number,
                     candidate_count,
                     base_commit,
-                    frozen_spec,
+                    goal_spec,
                     config,
                     review_commands,
                     verifier_assets,
@@ -174,6 +188,7 @@ def run_verified_tournament(
                     allowed_paths or [],
                     receipt_dir,
                     api_key,
+                    cancel_requested,
                 ): number
                 for number, worktree in worktrees.items()
             }
@@ -184,7 +199,7 @@ def run_verified_tournament(
                 except Exception as exc:  # fail one candidate without losing the receipt
                     candidate_results[number] = CandidateResult(
                         number=number,
-                        goal_spec_sha256=frozen_spec.sha256,
+                        goal_spec_sha256=goal_spec.sha256,
                         error=redact_secrets(
                             f"candidate execution failed: {type(exc).__name__}: {exc}"
                         ),
@@ -194,14 +209,23 @@ def run_verified_tournament(
                     for index in sorted(candidate_results)
                 ]
                 _write_receipt(receipt_dir, result)
+                _notify_progress(progress_callback, result)
 
         result.candidates = [candidate_results[index] for index in sorted(candidate_results)]
+        if cancel_requested is not None and cancel_requested():
+            result.status = "stopped"
+            result.reason = "tournament stopped before a winner was applied"
+            result.completed_at = _now_iso()
+            _write_receipt(receipt_dir, result)
+            _notify_progress(progress_callback, result)
+            return result
         winner = select_verified_candidate(result.candidates)
         if winner is None:
             result.status = "blocked"
             result.reason = "no candidate passed independent verification with a non-empty patch"
             result.completed_at = _now_iso()
             _write_receipt(receipt_dir, result)
+            _notify_progress(progress_callback, result)
             return result
 
         result.winner = winner.number
@@ -212,6 +236,7 @@ def run_verified_tournament(
             result.reason = "selected candidate patch no longer matches its recorded checksum"
             result.completed_at = _now_iso()
             _write_receipt(receipt_dir, result)
+            _notify_progress(progress_callback, result)
             return result
         _require_unchanged_workspace(root, base_commit)
         _git_bytes(root, ["apply", "--check", "--binary", "-"], input_bytes=patch)
@@ -222,11 +247,11 @@ def run_verified_tournament(
             final_review = _run_final_verification(
                 root,
                 review_commands,
-                frozen_spec,
+                goal_spec,
                 api_key=api_key,
             )
             result.final_verification = final_review.to_dict()
-            if not _review_proves_spec(final_review, frozen_spec):
+            if not _review_proves_spec(final_review, goal_spec):
                 rollback_error = _rollback_patch(root, patch)
                 result.applied = False
                 result.status = "blocked"
@@ -235,15 +260,18 @@ def run_verified_tournament(
                     result.reason += f"; automatic rollback failed: {rollback_error}"
                 result.completed_at = _now_iso()
                 _write_receipt(receipt_dir, result)
+                _notify_progress(progress_callback, result)
                 return result
 
             result.status = "verified_done"
             result.reason = (
-                f"candidate {winner.number} passed the frozen checks; its applied patch "
+                f"candidate {winner.number} of {candidate_count} passed the frozen checks; "
+                "its applied patch "
                 "passed the same checks again in the original workspace"
             )
             result.completed_at = _now_iso()
             _write_receipt(receipt_dir, result)
+            _notify_progress(progress_callback, result)
             return result
         except Exception as exc:
             rollback_error = _rollback_patch(root, patch)
@@ -257,6 +285,7 @@ def run_verified_tournament(
                 result.reason += f"; automatic rollback failed: {rollback_error}"
             result.completed_at = _now_iso()
             _write_receipt(receipt_dir, result)
+            _notify_progress(progress_callback, result)
             return result
     except Exception as exc:
         result.status = "blocked"
@@ -265,6 +294,7 @@ def run_verified_tournament(
         )
         result.completed_at = _now_iso()
         _write_receipt(receipt_dir, result)
+        _notify_progress(progress_callback, result)
         return result
     finally:
         for worktree in worktrees.values():
@@ -298,6 +328,20 @@ def select_verified_candidate(
     )
 
 
+def _notify_progress(
+    callback: Callable[[TournamentResult], None] | None,
+    result: TournamentResult,
+) -> None:
+    """Publish a detached snapshot without letting presentation break execution."""
+
+    if callback is None:
+        return
+    try:
+        callback(result)
+    except Exception:
+        return
+
+
 def _run_candidate(
     root: Path,
     worktree: Path,
@@ -312,11 +356,13 @@ def _run_candidate(
     allowed_paths: list[str],
     receipt_dir: Path,
     api_key: str | None,
+    cancel_requested: Callable[[], bool] | None,
 ) -> CandidateResult:
     supervisor = build_supervisor(
         worktree,
         review_commands=review_commands,
         api_key=api_key,
+        cancel_requested=cancel_requested,
     )
     metadata = goal_safety_metadata(
         worktree,
@@ -348,7 +394,11 @@ def _run_candidate(
         repeated_blocker_limit=max_attempts,
         require_completion_claim=True,
     )
-    goal = AutonomousRunner(supervisor, policy=policy).run()
+    goal = AutonomousRunner(
+        supervisor,
+        policy=policy,
+        cancel_requested=cancel_requested,
+    ).run()
     receipt = build_run_receipt(goal)
     patch, changed_files = _candidate_patch(worktree, base_commit)
     verifier_asset_drift = _verifier_asset_drift(worktree, verifier_assets)

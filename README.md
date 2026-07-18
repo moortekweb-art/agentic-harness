@@ -199,17 +199,18 @@ again there. If no candidate passes—or if the applied result fails—the comma
 returns blocked with no accepted winner. It never selects a "least bad" failing
 implementation.
 
-The command requires a clean Git-root workspace so it cannot overwrite
+The command and the GUI's **Three verified approaches** choice require a clean
+Git-root workspace so they cannot overwrite
 pre-existing changes. Private candidate patches and the versioned tournament
 receipt are stored under `.agentic-harness/tournaments/`. The initial selection
 policy is deliberately deterministic rather than model-judged; a future judge
 may rank only candidates that have already passed the frozen checks.
 
-This first surface is CLI-only. Git worktrees isolate candidate file changes,
-but they are not a security sandbox for a malicious external coding-agent
-process; that process retains the authority of its configured adapter and OS
-account. Use the embedded model agent or an external sandbox when stronger tool
-containment is required.
+Git worktrees isolate candidate file changes, but they are not by themselves a
+security sandbox for a malicious external coding-agent process; that process
+retains the authority of its configured adapter and OS account. The bundled
+Grok Build adapter additionally requests Grok's `workspace` OS sandbox. Review
+every external agent's policy before use.
 
 ### Recipes
 
@@ -311,11 +312,12 @@ and cost more time and tokens. See the current
 
 ### Installed coding agents
 
-The GUI can configure Codex, OpenCode, Aider, or CodeWhale. From the CLI, create
+The GUI can configure Codex, Grok Build, OpenCode, Aider, or CodeWhale. From the CLI, create
 or replace a starter config explicitly:
 
 ```bash
 agentic-harness init-agent codex
+agentic-harness init-agent grok
 agentic-harness init-agent opencode
 agentic-harness init-agent aider
 agentic-harness init-agent codewhale
@@ -326,6 +328,13 @@ coding-agent process still owns its own credentials, tool permissions, and
 runtime policy. Safe-area labels are enforced by the embedded model agent; for
 an external coding-agent CLI they are operator guidance unless that CLI enforces
 the same boundary.
+
+The Grok Build starter uses the project's documented headless `grok -p`
+interface, confines writes with `--sandbox workspace`, disables automatic
+updates during a run, and denies `git push` and `sudo` shell commands. Headless
+file edits still require `bypassPermissions`, so use it only in a trusted Git
+workspace and keep credentials out of the project. Grok Build uses xAI's
+service; selecting this adapter is not a local-only execution claim.
 
 ### Local and cloud models
 

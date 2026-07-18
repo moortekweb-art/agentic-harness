@@ -285,6 +285,21 @@ def test_init_agent_codewhale_writes_expected_config(tmp_path, capsys) -> None:
     assert "Configured codewhale tool." in capsys.readouterr().out
 
 
+def test_init_agent_grok_uses_official_headless_workspace_contract(tmp_path, capsys) -> None:
+    rc = main(["--project-dir", str(tmp_path), "init-agent", "grok"])
+
+    config = load_config(tmp_path)
+    assert rc == 0
+    assert config.worker == "coding_agent"
+    assert config.coding_agent_command[:3] == ["grok", "-p", "{objective}"]
+    assert ["--cwd", "."] == config.coding_agent_command[3:5]
+    assert ["--output-format", "plain"] == config.coding_agent_command[5:7]
+    assert ["--sandbox", "workspace"] == config.coding_agent_command[11:13]
+    assert "bypassPermissions" in config.coding_agent_command
+    assert "Bash(git push*)" in config.coding_agent_command
+    assert "Configured grok tool." in capsys.readouterr().out
+
+
 def test_recipe_loader_returns_expected_builtin_names() -> None:
     names = {recipe.name for recipe in list_recipes()}
 
