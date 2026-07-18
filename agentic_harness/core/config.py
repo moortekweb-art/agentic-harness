@@ -8,7 +8,9 @@ from pathlib import Path
 import json
 import os
 import re
+import stat
 import sys
+import tempfile
 from typing import Any
 
 import yaml
@@ -53,6 +55,7 @@ ALLOWED_KEYS = {
     "review_command",
     "review_command_timeout",
     "review_covers",
+    "review_assets",
     "review_artifact",
     "review_file_changed",
     "review_git_clean",
@@ -118,6 +121,7 @@ ALLOWED_REVIEW_DICT_KEYS = {
     "command",
     "command_timeout",
     "covers",
+    "assets",
     "artifact",
     "file_changed",
     "git_clean",
@@ -143,6 +147,7 @@ LIST_KEYS = {
     "coding_agent_command",
     "review_command",
     "review_covers",
+    "review_assets",
 }
 _IS_WINDOWS = os.name == "nt"
 
@@ -182,6 +187,7 @@ class HarnessConfig:
     review_command: list[str] = field(default_factory=list)
     review_command_timeout: int = 60
     review_covers: list[str] = field(default_factory=list)
+    review_assets: list[str] = field(default_factory=list)
     review_artifact: str = ""
     review_file_changed: str = ""
     review_git_clean: bool = False
@@ -358,13 +364,7 @@ review_command_timeout: 120
 }
 
 def write_default_config(project_dir: str | Path = ".") -> Path:
-    root = Path(project_dir)
-    config_dir = root / CONFIG_DIR
-    config_dir.mkdir(parents=True, exist_ok=True)
-    path = config_dir / CONFIG_NAME
-    if not path.exists():
-        path.write_text(DEFAULT_CONFIG, encoding="utf-8")
-    return path
+    return _write_project_config(Path(project_dir), DEFAULT_CONFIG, force=False, no_op=True)
 
 
 def write_tool_config(
@@ -375,14 +375,94 @@ def write_tool_config(
     except KeyError as exc:
         supported = ", ".join(sorted(TOOL_CONFIGS))
         raise ConfigError(f"unsupported init tool: {tool}; choose one of: {supported}") from exc
-    root = Path(project_dir)
+    return _write_project_config(Path(project_dir), content, force=force, no_op=False)
+
+
+def _write_project_config(root: Path, content: str, *, force: bool, no_op: bool) -> Path:
+    """Atomically write config without following repository-controlled links."""
+
+    root = root.absolute()
+    _reject_link_components(root, label="project directory")
+    if not root.is_dir():
+        raise ConfigError(f"project directory does not exist: {root}")
     config_dir = root / CONFIG_DIR
-    config_dir.mkdir(parents=True, exist_ok=True)
+    if _path_lexists(config_dir):
+        _reject_link_or_reparse(config_dir, label="configuration directory")
+        if not config_dir.is_dir():
+            raise ConfigError(f"configuration directory is not a directory: {config_dir}")
+    else:
+        config_dir.mkdir(mode=0o700)
+    try:
+        config_dir.chmod(0o700)
+    except OSError:
+        pass
+
     path = config_dir / CONFIG_NAME
-    if path.exists() and not force:
-        raise ConfigError(f"{path} already exists; pass --force to replace it")
-    path.write_text(content, encoding="utf-8")
-    return path
+    if _path_lexists(path):
+        _reject_link_or_reparse(path, label="configuration file")
+        if not path.is_file():
+            raise ConfigError(f"configuration file is not a regular file: {path}")
+        if no_op:
+            return path
+        if not force:
+            raise ConfigError(f"{path} already exists; pass --force to replace it")
+
+    encoded = content.encode("utf-8")
+    fd, temporary = tempfile.mkstemp(prefix=f".{CONFIG_NAME}.", dir=config_dir)
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Recheck immediately before replacement so a swapped destination is rejected.
+        if _path_lexists(path):
+            _reject_link_or_reparse(path, label="configuration file")
+            if not path.is_file():
+                raise ConfigError(f"configuration file is not a regular file: {path}")
+        os.replace(temporary, path)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+        return path
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            Path(temporary).unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _path_lexists(path: Path) -> bool:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _reject_link_or_reparse(path: Path, *, label: str) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    if stat.S_ISLNK(metadata.st_mode) or bool(reparse_flag and attributes & reparse_flag):
+        raise ConfigError(f"{label} must not be a symlink or reparse point: {path}")
+
+
+def _reject_link_components(path: Path, *, label: str) -> None:
+    # The project and its immediate parent are caller-selected trust boundaries.
+    # Higher ancestors may contain OS-managed aliases such as macOS /var -> /private/var.
+    for component in (path.parent, path):
+        _reject_link_or_reparse(component, label=label)
 
 
 def _tool_config_content(project_dir: Path, tool: str) -> str:
@@ -641,6 +721,7 @@ def _flatten_config(payload: dict[str, Any]) -> dict[str, Any]:
             "command": "review_command",
             "command_timeout": "review_command_timeout",
             "covers": "review_covers",
+            "assets": "review_assets",
             "artifact": "review_artifact",
             "file_changed": "review_file_changed",
             "git_clean": "review_git_clean",

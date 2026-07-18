@@ -504,6 +504,40 @@ def test_embedded_backend_resumes_orphaned_review_without_rerunning_worker(
     assert finished["final_result"]["accepted"] is True
 
 
+def test_embedded_backend_recovers_interrupted_tournament_before_marking_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = build_supervisor(tmp_path, review_commands=[[sys.executable, "-c", "pass"]])
+    orphaned = supervisor.start(
+        "Recover interrupted verified application",
+        metadata={
+            "verified_tournament": {
+                "contract": "agentic_harness.verified_tournament.v1",
+                "transaction_phase": "applying_verified",
+                "receipt_path": ".agentic-harness/tournaments/test/receipt.json",
+            }
+        },
+    )
+    calls: list[tuple[Path, str]] = []
+
+    def recover(project_dir: Path, receipt_path: str) -> tuple[bool, str]:
+        calls.append((project_dir, receipt_path))
+        return True, "restored to clean preimage"
+
+    monkeypatch.setattr(gui_backend_module, "recover_interrupted_tournament", recover)
+
+    restarted = EmbeddedExecutionBackend(tmp_path)
+    finished = restarted.status()
+
+    assert calls == [
+        (tmp_path.resolve(), ".agentic-harness/tournaments/test/receipt.json")
+    ]
+    assert finished["id"] == orphaned.id
+    assert finished["status"] == "blocked"
+    assert "restored to the clean preimage" in finished["summary"]
+
+
 def test_embedded_backend_previews_only_changed_files_and_recorded_artifacts(tmp_path) -> None:
     _configure_scripted_agent(tmp_path)
     backend = EmbeddedExecutionBackend(tmp_path)

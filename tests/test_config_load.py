@@ -806,6 +806,68 @@ def test_write_tool_config_overwrite_with_force(tmp_path) -> None:
     assert config.worker == "shell"
 
 
+def test_write_default_config_rejects_symlinked_config_directory(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / ".agentic-harness").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ConfigError, match="symlink"):
+        write_default_config(tmp_path)
+
+    assert not (outside / "config.yml").exists()
+
+
+def test_write_default_config_rejects_symlinked_project_parent(tmp_path: Path) -> None:
+    real_parent = tmp_path / "real"
+    project = real_parent / "project"
+    project.mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(real_parent, target_is_directory=True)
+
+    with pytest.raises(ConfigError, match="symlink"):
+        write_default_config(alias / "project")
+
+    assert not (project / ".agentic-harness").exists()
+
+
+@pytest.mark.parametrize("dangling", [False, True])
+def test_write_tool_config_force_rejects_config_symlink(
+    tmp_path: Path,
+    dangling: bool,
+) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    target = tmp_path / "outside.yml"
+    if not dangling:
+        target.write_text("preserve me\n", encoding="utf-8")
+    (config_dir / "config.yml").symlink_to(target)
+
+    with pytest.raises(ConfigError, match="symlink"):
+        write_tool_config(tmp_path, "shell", force=True)
+
+    if dangling:
+        assert not target.exists()
+    else:
+        assert target.read_text(encoding="utf-8") == "preserve me\n"
+
+
+def test_load_config_accepts_explicit_review_assets(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path,
+        """version: 1
+review:
+  command: [custom-check, run]
+  assets:
+    - checks/verify.yml
+    - policy/
+""",
+    )
+
+    config = load_config(tmp_path)
+
+    assert config.review_assets == ["checks/verify.yml", "policy/"]
+
+
 # --- Defaults ---
 
 
