@@ -108,8 +108,13 @@ def _prose_without_links(text: str) -> str:
     filenames inside absolute GitHub blob URLs. Forbidden-token checks must
     inspect public prose, not the repository path embedded in a link URL.
     """
-    without_markdown_urls = re.sub(r"\]\((https?://[^)]+)\)", "]()", text)
-    return re.sub(r"https?://\S+", "", without_markdown_urls)
+    return re.sub(r"\]\((https?://[^)]+)\)", "]()", text)
+
+
+def test_plain_urls_remain_visible_to_leak_detection() -> None:
+    text = "Operator endpoint: https://private-host.example/mnt/secret"
+
+    assert _prose_without_links(text) == text
 
 
 def _heading_offsets(text: str) -> list[tuple[int, str]]:
