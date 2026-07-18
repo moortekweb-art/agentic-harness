@@ -23,13 +23,28 @@ CANONICAL_BLOB_URL = (
 
 ALLOWED_LABELS = ("Verified done", "Blocked with reason", "Failed with evidence")
 
-# Patterns that must never appear in the public guide prose.
+# Patterns that must never appear in the public guide prose. The set is broad:
+# absolute filesystem paths (including single-segment names), every common
+# host/IP form (loopback, IPv4, IPv6, link-local, internal hostnames), bare
+# ports, dot-directories, and credential-shaped secret tokens.
 FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
+    # Hosts and addresses.
     (r"localhost", "localhost host"),
     (r"127\.0\.0\.1", "loopback ip"),
     (r"0\.0\.0\.0", "wildcard bind ip"),
     (r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "ipv4 address"),
+    # IPv6, including loopback (::1) and link-local (fe80::) forms.
+    (r"\b[0-9a-fA-F:]*::[0-9a-fA-F:]*\b", "ipv6 address with double-colon"),
+    (r"\b(?:[0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}\b", "full ipv6 address"),
+    (r"\bfe80::", "ipv6 link-local"),
+    (r"(?<![:\w])::(?:1|ffff:)\b", "ipv6 loopback or v4-mapped"),
+    # Internal/local hostnames and mDNS names.
+    (r"\bhost\.docker\.internal\b", "docker-internal host"),
+    (r"\b\w+\.local\b", "mDNS .local hostname"),
+    (r"\b\w+\.internal\b", "internal hostname"),
     (r":\d{2,5}\b", "bare port number"),
+    # Absolute filesystem paths: both multi-segment and single-segment names.
+    # A leading slash followed by a path-like token is a concrete location.
     (r"/mnt/", "absolute /mnt path"),
     (r"/home/", "absolute /home path"),
     (r"/tmp/", "absolute /tmp path"),
@@ -38,7 +53,12 @@ FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
     (r"/usr/", "absolute /usr path"),
     (r"/opt/", "absolute /opt path"),
     (r"/root/", "absolute /root path"),
+    (r"/srv\b", "absolute /srv path"),
+    (r"/proc\b", "absolute /proc path"),
     (r"/Users/", "absolute /Users path"),
+    # Single-segment absolute paths: "/name" not part of a URL-like token.
+    (r"(?<![\w/.-])/(?:[A-Za-z0-9_-]+)(?![\w.-])", "single-segment absolute path"),
+    # Dot-directories and dotfiles that reveal private layout.
     (r"\.agentic-harness", "harness dot-directory"),
     (r"\.hermes", "hermes dot-directory"),
     (r"\.claude", "claude dot-directory"),
@@ -47,6 +67,10 @@ FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
     (r"\.venv", "venv dot-directory"),
     (r"\.git\b", "git dot-directory"),
     (r"\.github\b", "github dot-directory"),
+    # Credential-shaped secrets: API keys, bearer tokens, passwords.
+    (r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}\b", "bearer token"),
+    (r"(?i)\b(?:api[_-]?key|secret|token|password|passwd|pwd)\b\s*[:=]\s*\S", "credential assignment"),
+    (r"sk-[A-Za-z0-9]{16,}", "provider api key"),
 ]
 
 # Brand, provider, and private-infrastructure names that must not appear in the
@@ -81,6 +105,54 @@ def _prose_without_links(text: str) -> str:
     return re.sub(r"\]\((https?://[^)]+)\)", "]()", text)
 
 
+def _heading_offsets(text: str) -> list[tuple[int, str]]:
+    """Return (line_start_offset, heading_text) for top-level headings.
+
+    A fence-aware scan is used so that a line beginning with ``## `` inside a
+    fenced code block or blockquote is not mistaken for a real heading. This is
+    more robust than a raw ``\\n## `` search over unparsed Markdown.
+    """
+    offsets: list[tuple[int, str]] = []
+    in_fence = False
+    fence_marker = ""
+    for match in re.finditer(r"(?m)^(.*\n)", text):
+        line = match.group(1)
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker
+            elif marker == fence_marker:
+                in_fence = False
+                fence_marker = ""
+            continue
+        if in_fence:
+            continue
+        if stripped.startswith("## "):
+            offsets.append((match.start(), stripped[3:].strip()))
+    return offsets
+
+
+def _extract_section(text: str, heading: str) -> str:
+    """Return the body of a top-level ``## <heading>`` section.
+
+    The span runs from the heading line to the next top-level heading (or end
+    of document), computed from fence-aware heading offsets so that code blocks
+    cannot shift the boundary.
+    """
+    offsets = _heading_offsets(text)
+    for idx, (start, title) in enumerate(offsets):
+        if title == heading:
+            body_start = text.index("\n", start) + 1
+            if idx + 1 < len(offsets):
+                body_end = offsets[idx + 1][0]
+            else:
+                body_end = len(text)
+            return text[body_start:body_end]
+    return ""
+
+
 def test_guide_exists_and_has_a_title() -> None:
     text = guide_text()
 
@@ -105,6 +177,65 @@ def test_guide_uses_only_canonical_completion_labels() -> None:
     bolded = set(re.findall(r"\*\*([^*]+)\*\*", text))
     invented = bolded - {label for label in ALLOWED_LABELS}
     assert not invented, f"guide introduces non-canonical bolded labels: {sorted(invented)}"
+
+
+def test_guide_completion_section_declares_exactly_the_three_labels() -> None:
+    """The Completion labels section must declare exactly the three canonical
+    labels and nothing else.
+
+    This guards the contract that only the three approved public labels may
+    appear. A future edit that adds a fourth bullet, renames a label, or drops
+    one will fail here even if the looser bolded-label check above still passes.
+    """
+    text = guide_text()
+
+    section = _extract_section(text, "Completion labels")
+    assert section, "guide must contain a '## Completion labels' section"
+
+    # The section declares labels as bolded bullets, e.g. "- **Verified done**".
+    declared = set(re.findall(r"^\s*-\s*\*\*([^*]+)\*\*", section, re.MULTILINE))
+    assert declared == set(ALLOWED_LABELS), (
+        "Completion labels section must declare exactly the canonical labels; "
+        f"got {sorted(declared)}, expected {sorted(ALLOWED_LABELS)}"
+    )
+
+
+def test_guide_introduces_no_invented_result_categories() -> None:
+    """No common non-canonical result synonym may appear as a label-like token.
+
+    This catches invented fourth labels such as Done, Complete, Success,
+    Finished, Passed, or a bare Failed/Blocked/Verified used as a standalone
+    result category outside the canonical bolded form.
+    """
+    text = guide_text()
+    prose = _prose_without_links(text)
+
+    # Tokens that would constitute an invented completion category if they
+    # appear as a bolded standalone result label or after "result:" / "status:".
+    invented_synonyms = [
+        "Done", "Complete", "Completed", "Success", "Successful",
+        "Finished", "Passed", "Accepted", "Rejected", "Cancelled",
+        "Canceled",
+    ]
+    offenders: list[str] = []
+    for synonym in invented_synonyms:
+        for match in re.finditer(r"\*\*" + re.escape(synonym) + r"\*\*", prose):
+            offenders.append(f"bolded invented label: {synonym}")
+
+    # A bare "result:" or "status:" followed by a non-canonical word is an
+    # invented result category.
+    status_match = re.findall(
+        r"(?i)\b(?:result|status)\s*[:=]\s*([A-Za-z]+)", prose
+    )
+    canonical_lower = {label.lower() for label in ALLOWED_LABELS}
+    for value in status_match:
+        if value.lower() not in canonical_lower:
+            offenders.append(f"non-canonical result/status value: {value!r}")
+
+    assert not offenders, (
+        "guide introduces non-canonical completion categories: "
+        + "; ".join(sorted(set(offenders)))
+    )
 
 
 def test_guide_contains_every_boundary_sentence() -> None:
@@ -160,13 +291,28 @@ def test_guide_requires_a_check_passes_before_acceptance() -> None:
     assert "is not verification" in text
 
 
+def _section_span(text: str, heading: str) -> tuple[int, int] | None:
+    """Return (start_offset, end_offset) for a top-level ``## <heading>`` span.
+
+    The span includes the heading line and runs up to the next top-level
+    heading (or end of document). Offsets come from the fence-aware heading
+    scanner, so a ``## `` line inside a fenced code block or blockquote cannot
+    shift the boundary. Returns ``None`` if the heading is absent.
+    """
+    offsets = _heading_offsets(text)
+    for idx, (start, title) in enumerate(offsets):
+        if title == heading:
+            end = offsets[idx + 1][0] if idx + 1 < len(offsets) else len(text)
+            return start, end
+    return None
+
+
 def test_readme_links_the_guide_inside_execution_methods() -> None:
     readme = readme_text()
 
-    exec_start = readme.index("## Execution Methods")
-    next_heading_match = re.search(r"\n## ", readme[exec_start + 1 :])
-    assert next_heading_match, "Execution Methods has no following top-level heading"
-    exec_end = exec_start + 1 + next_heading_match.start()
+    span = _section_span(readme, "Execution Methods")
+    assert span, "README must have an '## Execution Methods' top-level heading"
+    exec_start, exec_end = span
     section = readme[exec_start:exec_end]
 
     # The link must render as markdown and use the canonical absolute blob URL.
@@ -179,9 +325,11 @@ def test_readme_links_the_guide_inside_execution_methods() -> None:
     )
 
     # The next heading after Execution Methods is the established safety section.
-    after = readme[exec_end:].lstrip()
-    assert after.startswith("## Embedded Safety Boundary"), (
-        "README structure changed: link placement assertion may need updating"
+    next_span = _section_span(readme, "Embedded Safety Boundary")
+    assert next_span, "README must have an '## Embedded Safety Boundary' heading"
+    assert next_span[0] == exec_end, (
+        "Embedded Safety Boundary must be the heading immediately after "
+        "Execution Methods; README structure changed"
     )
 
 
@@ -267,10 +415,9 @@ def test_guide_does_not_invent_private_artifact_locations() -> None:
 
 def test_readme_link_text_is_renderable_and_descriptive() -> None:
     readme = readme_text()
-    exec_start = readme.index("## Execution Methods")
-    next_heading_match = re.search(r"\n## ", readme[exec_start + 1 :])
-    exec_end = exec_start + 1 + next_heading_match.start()
-    section = readme[exec_start:exec_end]
+    span = _section_span(readme, "Execution Methods")
+    assert span, "README must have an '## Execution Methods' top-level heading"
+    section = readme[span[0] : span[1]]
 
     match = re.search(r"\[([^\]]+)\]\(" + re.escape(CANONICAL_BLOB_URL) + r"\)", section)
     assert match, "Execution Methods must link the guide with descriptive text"
