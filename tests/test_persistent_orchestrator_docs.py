@@ -32,7 +32,11 @@ FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
     (r"localhost", "localhost host"),
     (r"127\.0\.0\.1", "loopback ip"),
     (r"0\.0\.0\.0", "wildcard bind ip"),
-    (r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "ipv4 address"),
+    (
+        r"(?<![\d.])(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)"
+        r"(?:\.(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}(?![\d.])",
+        "ipv4 address",
+    ),
     # IPv6, including loopback (::1) and link-local (fe80::) forms.
     (r"\b[0-9a-fA-F:]*::[0-9a-fA-F:]*\b", "ipv6 address with double-colon"),
     (r"\b(?:[0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}\b", "full ipv6 address"),
@@ -40,8 +44,10 @@ FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
     (r"(?<![:\w])::(?:1|ffff:)\b", "ipv6 loopback or v4-mapped"),
     # Internal/local hostnames and mDNS names.
     (r"\bhost\.docker\.internal\b", "docker-internal host"),
-    (r"\b\w+\.local\b", "mDNS .local hostname"),
+    (r"\b[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.local\b", "mDNS .local hostname"),
     (r"\b\w+\.internal\b", "internal hostname"),
+    # Intentionally broad: a colon followed by 2-5 digits is treated as a
+    # private endpoint even when prose could theoretically use the same form.
     (r":\d{2,5}\b", "bare port number"),
     # Absolute filesystem paths: both multi-segment and single-segment names.
     # A leading slash followed by a path-like token is a concrete location.
@@ -57,7 +63,7 @@ FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
     (r"/proc\b", "absolute /proc path"),
     (r"/Users/", "absolute /Users path"),
     # Single-segment absolute paths: "/name" not part of a URL-like token.
-    (r"(?<![\w/.-])/(?:[A-Za-z0-9_-]+)(?![\w.-])", "single-segment absolute path"),
+    (r"(?<![-*])(?<![\w/.-])/(?:[A-Za-z0-9_-]+)(?![\w.-])", "single-segment absolute path"),
     # Dot-directories and dotfiles that reveal private layout.
     (r"\.agentic-harness", "harness dot-directory"),
     (r"\.hermes", "hermes dot-directory"),
@@ -102,7 +108,8 @@ def _prose_without_links(text: str) -> str:
     filenames inside absolute GitHub blob URLs. Forbidden-token checks must
     inspect public prose, not the repository path embedded in a link URL.
     """
-    return re.sub(r"\]\((https?://[^)]+)\)", "]()", text)
+    without_markdown_urls = re.sub(r"\]\((https?://[^)]+)\)", "]()", text)
+    return re.sub(r"https?://\S+", "", without_markdown_urls)
 
 
 def _heading_offsets(text: str) -> list[tuple[int, str]]:
@@ -127,7 +134,7 @@ def _heading_offsets(text: str) -> list[tuple[int, str]]:
                 in_fence = False
                 fence_marker = ""
             continue
-        if in_fence:
+        if in_fence or line.startswith((">", "    ", "\t")):
             continue
         if stripped.startswith("## "):
             offsets.append((match.start(), stripped[3:].strip()))
@@ -411,6 +418,8 @@ def test_guide_does_not_invent_private_artifact_locations() -> None:
     assert "report at" not in text.lower()
     assert "stored below" not in text.lower()
     assert "written to" not in text.lower()
+    assert "located at" not in text.lower()
+    assert "saved to" not in text.lower()
 
 
 def test_readme_link_text_is_renderable_and_descriptive() -> None:
