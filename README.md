@@ -294,6 +294,12 @@ runtime policy. Safe-area labels are enforced by the embedded model agent; for
 an external coding-agent CLI they are operator guidance unless that CLI enforces
 the same boundary.
 
+Running an agent through a persistent terminal multiplexer or external
+orchestrator? See the
+[persistent orchestrator guide](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/PERSISTENT_ORCHESTRATOR.md):
+the terminal keeps the session alive, while harness evidence plus independent
+review stays the acceptance authority.
+
 ### Local and cloud models
 
 The embedded model agent accepts an exact OpenAI-compatible chat-completions
