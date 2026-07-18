@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator
+import os
 from pathlib import Path
 from typing import Any
 
@@ -119,12 +120,26 @@ def _valid_snapshot(snapshot: dict[str, Any] | None) -> bool:
 def _iter_workspace_files(root: Path) -> Iterator[Path]:
     if not root.exists():
         return
-    for path in sorted(root.rglob("*")):
-        if _is_excluded(path, root):
-            continue
-        if path.is_symlink() or not path.is_file():
-            continue
-        yield path
+    for directory, names, filenames in os.walk(
+        root,
+        topdown=True,
+        followlinks=False,
+        onerror=lambda _error: None,
+    ):
+        parent = Path(directory)
+        names[:] = sorted(
+            name
+            for name in names
+            if name not in EXCLUDED_DIRS and not (parent / name).is_symlink()
+        )
+        for name in sorted(filenames):
+            path = parent / name
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+            except OSError:
+                continue
+            yield path
 
 
 def _is_excluded(path: Path, root: Path) -> bool:
