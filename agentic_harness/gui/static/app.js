@@ -125,6 +125,8 @@ const els = {
   modelProfileSection: byId("modelProfileSection"),
   modelProfileSelect: byId("modelProfileSelect"),
   modelProfiles: byId("modelProfiles"),
+  approachSection: byId("approachSection"),
+  candidateCount: byId("candidateCount"),
   safeAreas: byId("safeAreas"),
   accessSummary: byId("accessSummary"),
   checks: byId("checks"),
@@ -820,6 +822,8 @@ function renderModeControls() {
     ));
   });
   els.advancedModeDetails.hidden = els.advancedModes.children.length === 0;
+  els.approachSection.hidden = usesHumanModes();
+  if (usesHumanModes()) els.candidateCount.value = "1";
 
   els.modelProfiles.replaceChildren();
   els.modelProfileSelect.replaceChildren();
@@ -848,7 +852,8 @@ function renderModeControls() {
   }
   const profilesApply = state.executionProfiles.length > 0 && routeUsesExecutionProfiles();
   els.modelProfileSection.hidden = !profilesApply;
-  els.expectationDetails.hidden = regularRoutes.length === 0
+  els.expectationDetails.hidden = usesHumanModes()
+    && regularRoutes.length === 0
     && !profilesApply
     && els.advancedModes.children.length === 0;
   if (state.modesLoaded && usesHumanModes() && !selectedRoute() && !els.expectationDetails.hidden) {
@@ -899,7 +904,8 @@ function formSnapshot() {
     route: state.route,
     effort: state.effort,
     executionProfile: state.executionProfile,
-    draftVersion: 4,
+    candidateCount: els.candidateCount.value || "1",
+    draftVersion: 5,
   };
 }
 
@@ -928,6 +934,7 @@ function applyFormSnapshot(snapshot) {
   }[snapshot.mode];
   state.effort = snapshot.effort || (legacyManagedMode ? migratedEffort : snapshot.mode) || state.effort;
   state.executionProfile = snapshot.executionProfile || AUTOMATIC_PROFILE_KEY;
+  els.candidateCount.value = snapshot.candidateCount === "3" ? "3" : "1";
   renderModeControls();
   updateAccessSummary();
   updateStartButton();
@@ -942,11 +949,12 @@ function resetNewGoalForm() {
     : state.routeDefault;
   state.effort = state.effortDefault;
   state.executionProfile = AUTOMATIC_PROFILE_KEY;
+  els.candidateCount.value = "1";
   state.mode = usesHumanModes() ? state.route : state.effort;
   renderModeControls();
   updateAccessSummary();
   sessionStorage.removeItem(STORAGE_KEY);
-  state.restoredDraftVersion = 4;
+  state.restoredDraftVersion = 5;
   state.undoStack = [];
   state.redoStack = [];
   pushUndo();
@@ -1374,9 +1382,13 @@ function renderTask(task) {
   const taskEffort = state.efforts.find((effort) => effort.key === effortKey);
   const routeLabel = taskRoute ? modePresentation(taskRoute).label : "";
   const effortLabel = taskEffort ? modePresentation(taskEffort).label : "";
-  els.workApproachValue.textContent = routeLabel && effortLabel
+  const tournament = task.metadata?.verified_tournament;
+  const tournamentLabel = Number(tournament?.candidate_count || 0) > 1
+    ? `${tournament.candidate_count} verified approaches`
+    : "";
+  els.workApproachValue.textContent = tournamentLabel || (routeLabel && effortLabel
     ? `${routeLabel} · ${effortLabel}`
-    : routeLabel || effortLabel || (usesHumanModes() ? "Managed route" : "Configured effort");
+    : routeLabel || effortLabel || (usesHumanModes() ? "Managed route" : "Configured effort"));
   const execution = task.metadata?.execution;
   if (execution?.label) {
     const location = execution.network_scope === "device"
@@ -2129,6 +2141,7 @@ async function startWork() {
           objective,
           safe_areas: linesFrom(els.safeAreas),
           checks: linesFrom(els.checks),
+          candidate_count: usesHumanModes() ? 1 : Number(els.candidateCount.value || 1),
         }),
       }, true, START_TIMEOUT_MS);
     } catch (startError) {
@@ -2459,6 +2472,10 @@ els.routeSelect.addEventListener("change", () => {
 els.modelProfileSelect.addEventListener("change", () => {
   state.executionProfile = els.modelProfileSelect.value || AUTOMATIC_PROFILE_KEY;
   renderModeControls();
+  pushUndo();
+  persistForm();
+});
+els.candidateCount.addEventListener("change", () => {
   pushUndo();
   persistForm();
 });

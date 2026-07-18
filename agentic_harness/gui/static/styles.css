@@ -855,6 +855,19 @@ select:focus {
   margin-top: 9px;
 }
 
+.approach-select {
+  display: block;
+  width: min(100%, 420px);
+  min-height: 42px;
+  margin-top: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 38px 0 11px;
+  color: var(--ink);
+  background: var(--panel);
+  font: inherit;
+}
+
 .mobile-unavailable-reasons {
   display: none;
 }

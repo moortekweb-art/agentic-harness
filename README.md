@@ -178,6 +178,40 @@ the still-open external beta has already proved broad usability.
 
 ## Advanced Workflows
 
+### Verified Best-of-N
+
+The verified tournament workflow runs two to ten implementations concurrently
+in isolated Git worktrees and applies a winner only after independent verification:
+
+```bash
+agentic-harness best-of-n -n 3 \
+  "repair the parser without changing its public API" \
+  --check "python -m pytest tests/test_parser.py -q"
+```
+
+All candidates start from the same commit, receive the same immutable GoalSpec,
+and run the same configured checks. Explicit verifier files, existing tracked
+test suites, and the relevant test-runner configuration are hashed before work;
+a candidate that changes those assets is disqualified even if its altered check
+returns zero. Among passing candidates, the harness deterministically prefers
+the smallest patch, applies it to the original workspace, and runs the checks
+again there. If no candidate passes—or if the applied result fails—the command
+returns blocked with no accepted winner. It never selects a "least bad" failing
+implementation.
+
+The command and the GUI's **Three verified approaches** choice require a clean
+Git-root workspace so they cannot overwrite
+pre-existing changes. Private candidate patches and the versioned tournament
+receipt are stored under `.agentic-harness/tournaments/`. The initial selection
+policy is deliberately deterministic rather than model-judged; a future judge
+may rank only candidates that have already passed the frozen checks.
+
+Git worktrees isolate candidate file changes, but they are not by themselves a
+security sandbox for a malicious external coding-agent process; that process
+retains the authority of its configured adapter and OS account. The bundled
+Grok Build adapter additionally requests Grok's `workspace` OS sandbox. Review
+every external agent's policy before use.
+
 ### Recipes
 
 Common workflows have direct commands:
@@ -278,11 +312,12 @@ and cost more time and tokens. See the current
 
 ### Installed coding agents
 
-The GUI can configure Codex, OpenCode, Aider, or CodeWhale. From the CLI, create
+The GUI can configure Codex, Grok Build, OpenCode, Aider, or CodeWhale. From the CLI, create
 or replace a starter config explicitly:
 
 ```bash
 agentic-harness init-agent codex
+agentic-harness init-agent grok
 agentic-harness init-agent opencode
 agentic-harness init-agent aider
 agentic-harness init-agent codewhale
@@ -293,6 +328,13 @@ coding-agent process still owns its own credentials, tool permissions, and
 runtime policy. Safe-area labels are enforced by the embedded model agent; for
 an external coding-agent CLI they are operator guidance unless that CLI enforces
 the same boundary.
+
+The Grok Build starter uses the project's documented headless `grok -p`
+interface, confines writes with `--sandbox workspace`, disables automatic
+updates during a run, and denies `git push` and `sudo` shell commands. Headless
+file edits still require `bypassPermissions`, so use it only in a trusted Git
+workspace and keep credentials out of the project. Grok Build uses xAI's
+service; selecting this adapter is not a local-only execution claim.
 
 ### Local and cloud models
 

@@ -35,6 +35,7 @@ from agentic_harness.core.demos import create_demo
 from agentic_harness.core.errors import ConfigError, HarnessError, StateLockError
 from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.factory import autonomy_policy_from_config, build_supervisor
+from agentic_harness.core.goal_spec import GoalSpec, derived_objective_spec
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.specification_amendment import amended_requirements
 from agentic_harness.core.providers import (
@@ -61,6 +62,7 @@ from agentic_harness.core.strategies import (
     strategy_by_key,
     strategy_from_metadata,
 )
+from agentic_harness.core.tournament import TournamentResult, run_verified_tournament
 from agentic_harness.core.workspace import workspace_change_summary
 
 
@@ -69,12 +71,33 @@ TERMINAL_REPORT_CONTRACT = "agentic_harness.terminal_report.v2"
 
 _CODING_AGENT_COMMANDS = {
     "codex": ["codex", "exec", "--skip-git-repo-check", "{objective}"],
+    "grok": [
+        "grok",
+        "-p",
+        "{objective}",
+        "--cwd",
+        ".",
+        "--output-format",
+        "plain",
+        "--max-turns",
+        "50",
+        "--permission-mode",
+        "bypassPermissions",
+        "--sandbox",
+        "workspace",
+        "--no-auto-update",
+        "--deny",
+        "Bash(git push*)",
+        "--deny",
+        "Bash(sudo*)",
+    ],
     "codewhale": ["codewhale", "exec", "{objective}"],
     "opencode": ["opencode", "run", "{objective}"],
     "aider": ["aider", "--yes-always", "--message", "{objective}"],
 }
 _CODING_AGENT_LABELS = {
     "codex": "Codex",
+    "grok": "Grok Build",
     "codewhale": "CodeWhale",
     "opencode": "OpenCode",
     "aider": "Aider",
@@ -196,6 +219,9 @@ class EmbeddedExecutionBackend:
                 return
             goal = self.store.read_current_goal()
             if goal is None or _durably_terminal(goal):
+                return
+            if isinstance(goal.metadata.get("verified_tournament"), dict):
+                self._fail_interrupted_tournament(goal)
                 return
             config = self._config()
             if self._credential_status(config)["configured"] is not True:
@@ -1091,6 +1117,7 @@ class EmbeddedExecutionBackend:
                     "Add at least one independent verification command before starting.",
                     action="edit_checks",
                 )
+            candidate_count = _candidate_count(body.get("candidate_count"))
             supervisor = build_supervisor(
                 self.project_dir,
                 review_commands=review_commands,
@@ -1106,21 +1133,50 @@ class EmbeddedExecutionBackend:
                 interface="gui",
             )
             metadata["execution_strategy"] = strategy.to_metadata()
+            frozen_spec: GoalSpec | None = None
+            if candidate_count > 1:
+                frozen_spec = derived_objective_spec(objective)
+                metadata["verified_tournament"] = {
+                    "contract": "agentic_harness.verified_tournament.v1",
+                    "status": "queued",
+                    "candidate_count": candidate_count,
+                    "completed_candidates": 0,
+                    "goal_spec_sha256": frozen_spec.sha256,
+                }
             goal = supervisor.start(
                 objective,
                 metadata=metadata,
             )
+            if frozen_spec is not None:
+                with self.store.locked():
+                    self.store.write_goal_spec(goal, frozen_spec)
             policy = self._policy_for_strategy(config, strategy)
         except (ConfigError, HarnessError, OSError, ValueError) as exc:
             return self._blocked_task(str(exc), action="setup")
         self._cancel.clear()
         with self._thread_lock:
-            self._thread = Thread(
-                target=self._drive,
-                args=(review_commands, policy),
-                name=f"agentic-harness-{goal.id[:8]}",
-                daemon=True,
-            )
+            if frozen_spec is not None:
+                self._thread = Thread(
+                    target=self._drive_tournament,
+                    args=(
+                        goal.id,
+                        objective,
+                        candidate_count,
+                        review_commands,
+                        safe_areas,
+                        frozen_spec,
+                        policy.repeated_blocker_limit,
+                    ),
+                    name=f"agentic-harness-tournament-{goal.id[:8]}",
+                    daemon=True,
+                )
+            else:
+                self._thread = Thread(
+                    target=self._drive,
+                    args=(review_commands, policy),
+                    name=f"agentic-harness-{goal.id[:8]}",
+                    daemon=True,
+                )
             self._thread.start()
         return self._current_task(goal)
 
@@ -1448,6 +1504,172 @@ class EmbeddedExecutionBackend:
             if self._cancel.is_set():
                 self._mark_cancelled()
 
+    def _drive_tournament(
+        self,
+        goal_id: str,
+        objective: str,
+        candidate_count: int,
+        review_commands: list[list[str]],
+        safe_areas: list[str],
+        frozen_spec: GoalSpec,
+        max_attempts: int,
+    ) -> None:
+        """Drive isolated candidates and project only verified truth into GUI state."""
+
+        try:
+            result = run_verified_tournament(
+                self.project_dir,
+                objective,
+                candidate_count=candidate_count,
+                review_commands=review_commands,
+                max_attempts=max_attempts,
+                allowed_paths=safe_areas,
+                api_key=self.api_key,
+                frozen_spec=frozen_spec,
+                cancel_requested=self._cancel.is_set,
+                progress_callback=lambda update: self._record_tournament_progress(
+                    goal_id, update
+                ),
+            )
+            self._finish_tournament_goal(goal_id, frozen_spec, result)
+        except Exception as exc:
+            self._record_driver_error(exc)
+
+    def _record_tournament_progress(
+        self,
+        goal_id: str,
+        result: TournamentResult,
+    ) -> None:
+        try:
+            with self.store.locked():
+                goal = self.store.read_current_goal()
+                if goal is None or goal.id != goal_id or goal.status.is_terminal:
+                    return
+                metadata = goal.metadata.get("verified_tournament")
+                if not isinstance(metadata, dict):
+                    return
+                metadata.update(
+                    {
+                        "status": result.status,
+                        "tournament_id": result.tournament_id,
+                        "completed_candidates": len(result.candidates),
+                        "winner": result.winner,
+                        "receipt_path": result.receipt_path,
+                    }
+                )
+                autonomy = goal.metadata.get("autonomy")
+                if isinstance(autonomy, dict):
+                    autonomy["current_subgoal"] = (
+                        f"Comparing {result.candidate_count} isolated approaches"
+                    )
+                    autonomy["checkpoint"] = (
+                        f"{len(result.candidates)} of {result.candidate_count} approaches checked"
+                    )
+                if goal.status is GoalStatus.PLANNING:
+                    goal.transition(GoalStatus.IN_PROGRESS, reason="verified tournament started")
+                self.store.write_goal(goal)
+        except (HarnessError, OSError, StateLockError, ValueError):
+            return
+
+    def _finish_tournament_goal(
+        self,
+        goal_id: str,
+        frozen_spec: GoalSpec,
+        result: TournamentResult,
+    ) -> None:
+        with self.store.locked():
+            goal = self.store.read_current_goal()
+            if goal is None or goal.id != goal_id or goal.status.is_terminal:
+                return
+            if goal.status is GoalStatus.PLANNING:
+                goal.transition(GoalStatus.IN_PROGRESS, reason="verified tournament completed")
+            tournament = goal.metadata.get("verified_tournament")
+            if isinstance(tournament, dict):
+                tournament.update(result.to_dict())
+            if result.receipt_path and result.receipt_path not in goal.artifacts:
+                goal.artifacts.append(result.receipt_path)
+            autonomy = goal.metadata.get("autonomy")
+            if not isinstance(autonomy, dict):
+                autonomy = {}
+                goal.metadata["autonomy"] = autonomy
+            autonomy["goal_spec_sha256"] = frozen_spec.sha256
+            autonomy["goal_spec_requirement_ids"] = [
+                requirement.id for requirement in frozen_spec.requirements
+            ]
+            if result.status == "verified_done":
+                requirement_status = [
+                    {
+                        "id": requirement.id,
+                        "status": "satisfied",
+                        "evidence": ["review:1"],
+                    }
+                    for requirement in frozen_spec.requirements
+                ]
+                autonomy.update(
+                    {
+                        "status": "completed",
+                        "operator_intervention_required": False,
+                        "current_subgoal": "Apply and verify the winning approach",
+                        "checkpoint": "winner_verified_in_original_workspace",
+                        "plan": [
+                            {"status": "completed", "step": "Run isolated approaches"},
+                            {"status": "completed", "step": "Reject unverified candidates"},
+                            {"status": "completed", "step": "Reverify the winner"},
+                        ],
+                        "requirement_status": requirement_status,
+                    }
+                )
+                goal.metadata["worker_success"] = True
+                goal.metadata["worker_summary"] = result.reason
+                goal.metadata["worker_outcome"] = {
+                    "status": "complete",
+                    "summary": result.reason,
+                    "requirement_status": requirement_status,
+                }
+                goal.review = dict(result.final_verification)
+                goal.transition(GoalStatus.REVIEW, reason="winning patch applied")
+                goal.transition(GoalStatus.DONE, reason="winner independently verified")
+            else:
+                stopped = result.status == "stopped"
+                autonomy.update(
+                    {
+                        "status": "stopped" if stopped else "blocked",
+                        "operator_intervention_required": not stopped,
+                        "current_subgoal": "No verified winner was applied",
+                        "checkpoint": result.status,
+                        "blocker": {"reason": result.reason},
+                    }
+                )
+                if stopped:
+                    goal.metadata["cancelled"] = True
+                goal.error = result.reason
+                goal.transition(GoalStatus.FAILED, reason=result.reason)
+            self.store.write_goal(goal)
+
+    def _fail_interrupted_tournament(self, goal: Goal) -> None:
+        with self.store.locked():
+            current = self.store.read_current_goal()
+            if current is None or current.id != goal.id or current.status.is_terminal:
+                return
+            reason = (
+                "The verified tournament was interrupted before completion. Restart it so all "
+                "candidates begin from one clean commit; no candidate was accepted."
+            )
+            autonomy = current.metadata.get("autonomy")
+            if not isinstance(autonomy, dict):
+                autonomy = {}
+                current.metadata["autonomy"] = autonomy
+            autonomy.update(
+                {
+                    "status": "blocked",
+                    "operator_intervention_required": True,
+                    "blocker": {"reason": reason},
+                }
+            )
+            current.error = reason
+            current.transition(GoalStatus.FAILED, reason=reason)
+            self.store.write_goal(current)
+
     def _start_thread(
         self,
         review_commands: list[list[str]],
@@ -1678,6 +1900,7 @@ class EmbeddedExecutionBackend:
                 if isinstance(autonomy.get("budget"), dict)
                 else {},
                 "specification_review": self._specification_review(goal, autonomy),
+                "verified_tournament": _public_tournament(goal),
             },
         }
 
@@ -1990,6 +2213,20 @@ def _public_strategy(goal: Goal) -> dict[str, object]:
     }
 
 
+def _public_tournament(goal: Goal) -> dict[str, object]:
+    value = goal.metadata.get("verified_tournament")
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "status": str(value.get("status") or ""),
+        "candidate_count": int(value.get("candidate_count") or 0),
+        "completed_candidates": int(value.get("completed_candidates") or 0),
+        "winner": value.get("winner") if isinstance(value.get("winner"), int) else None,
+        "applied": value.get("applied") is True,
+        "receipt_path": str(value.get("receipt_path") or ""),
+    }
+
+
 def _safe_areas(value: Any, project_dir: Path) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -2023,6 +2260,18 @@ def _checks(value: Any) -> list[list[str]]:
             continue
         commands.append(command)
     return commands
+
+
+def _candidate_count(value: Any) -> int:
+    if value in {None, "", 1, "1"}:
+        return 1
+    try:
+        count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("approach count must be 1 or between 2 and 10") from exc
+    if not 2 <= count <= 10:
+        raise ValueError("approach count must be 1 or between 2 and 10")
+    return count
 
 
 def _sensitive_preview_path(path: Path, root: Path) -> bool:

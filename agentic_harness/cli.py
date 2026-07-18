@@ -54,6 +54,7 @@ from agentic_harness.core.reporting import (
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.supervisor import Supervisor
 from agentic_harness.core.safety import format_command, goal_safety_metadata, split_command
+from agentic_harness.core.tournament import TournamentResult, run_verified_tournament
 from agentic_harness.core.workspace import format_workspace_change_lines
 
 
@@ -252,6 +253,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Independent command to run before accepting done; repeat for multiple checks.",
     )
     run.add_argument("--json", action="store_true", help="Print the final goal JSON.")
+    tournament = sub.add_parser(
+        "best-of-n",
+        aliases=["verified-best-of-n"],
+        help="Run isolated candidates and apply only an independently verified winner",
+    )
+    tournament.add_argument("objective")
+    tournament.add_argument(
+        "-n",
+        "--candidates",
+        type=int,
+        default=3,
+        help="Number of isolated candidates to run in parallel (2-10). Default: 3.",
+    )
+    tournament.add_argument(
+        "--check",
+        "--verify",
+        dest="check",
+        action="append",
+        default=[],
+        metavar="COMMAND",
+        help="Independent command every candidate and the applied winner must pass.",
+    )
+    tournament.add_argument(
+        "--max-attempts",
+        type=int,
+        default=3,
+        help="Maximum repeated no-progress attempts per candidate. Default: 3.",
+    )
+    tournament.add_argument("--safe-area", action="append", default=[])
+    tournament.add_argument("--json", action="store_true", help="Print the tournament receipt.")
     drive = sub.add_parser(
         "run-until-done",
         help="Start or resume a goal and continue while meaningful progress is possible",
@@ -441,7 +472,7 @@ def main(argv: list[str] | None = None) -> int:
 
     initialized_config: tuple[Path, str] | None = None
     try:
-        if args.command == "run" or (
+        if args.command in {"run", "best-of-n", "verified-best-of-n"} or (
             args.command in {"run-until-done", "goal"} and args.objective
         ):
             initialized_config = ensure_execution_config(project_dir)
@@ -483,6 +514,22 @@ def main(argv: list[str] | None = None) -> int:
                 changes = goal_workspace_changes(project_dir, goal)
                 print(format_report_text(goal, report_path=report_path, workspace_changes=changes))
             return verified_goal_exit_code(goal)
+        if args.command in {"best-of-n", "verified-best-of-n"}:
+            config = load_config(project_dir)
+            review_commands = resolve_review_commands(args.check, config)
+            result = run_verified_tournament(
+                project_dir,
+                args.objective,
+                candidate_count=args.candidates,
+                review_commands=review_commands,
+                max_attempts=args.max_attempts,
+                allowed_paths=list(args.safe_area),
+            )
+            if args.json:
+                print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+            else:
+                print(format_tournament_text(result))
+            return 0 if result.status == "verified_done" else 1
         if args.command == "run-until-done":
             config = load_config(project_dir)
             current = supervisor.status()
@@ -714,6 +761,31 @@ def run_until_done(
 
 def verified_goal_exit_code(goal: Goal) -> int:
     return 0 if build_run_receipt(goal).category == "verified_done" else 1
+
+
+def format_tournament_text(result: TournamentResult) -> str:
+    """Render the trust boundary before implementation details."""
+
+    label = "Verified done" if result.status == "verified_done" else "Blocked"
+    lines = [
+        f"Result: {label}",
+        f"Tournament: {result.tournament_id}",
+        f"Candidates: {result.candidate_count}",
+        f"Reason: {safe_inline_text(result.reason)}",
+    ]
+    for candidate in result.candidates:
+        state = "verified" if candidate.verified else "disqualified"
+        detail = f", {len(candidate.changed_files)} changed file(s)"
+        if candidate.error:
+            detail += f", {safe_inline_text(candidate.error)}"
+        lines.append(f"- Candidate {candidate.number}: {state}{detail}")
+    if result.winner is not None:
+        lines.append(f"Winner: candidate {result.winner}")
+    else:
+        lines.append("Winner: none")
+    lines.append(f"Applied: {'yes' if result.applied else 'no'}")
+    lines.append(f"Receipt: {result.receipt_path}")
+    return "\n".join(lines)
 
 
 def resolve_review_commands(

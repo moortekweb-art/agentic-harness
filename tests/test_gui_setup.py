@@ -137,6 +137,12 @@ def test_setup_reports_available_agents_without_exposing_executable_paths(
     assert coding_agent["agents"] == [
         {"key": "codex", "label": "Codex", "available": True, "recommended": True},
         {
+            "key": "grok",
+            "label": "Grok Build",
+            "available": False,
+            "recommended": False,
+        },
+        {
             "key": "codewhale",
             "label": "CodeWhale",
             "available": True,
@@ -150,7 +156,7 @@ def test_setup_reports_available_agents_without_exposing_executable_paths(
         },
         {"key": "aider", "label": "Aider", "available": False, "recommended": False},
     ]
-    assert set(looked_up) == {"codex", "codewhale", "opencode", "aider"}
+    assert set(looked_up) == {"codex", "grok", "codewhale", "opencode", "aider"}
     serialized = json.dumps(setup)
     assert r"C:\Tools\Codex" not in serialized
     assert "/opt/private/bin" not in serialized
