@@ -13,7 +13,7 @@ import yaml
 
 import agentic_harness.core.tournament as tournament_module
 from agentic_harness.cli import main
-from agentic_harness.core.errors import ConfigError
+from agentic_harness.core.errors import ConfigError, HarnessError
 from agentic_harness.core.tournament import (
     CandidateResult,
     run_verified_tournament,
@@ -100,6 +100,7 @@ print("HARNESS_RESULT_JSON=" + json.dumps(outcome, separators=(",", ":")))
             "coding_agent_timeout": 30,
         },
         "review_command": review_command,
+        "review_assets": ["check.py"],
         "review_covers": ["*"],
         "review_command_timeout": 30,
         "autonomy": {
@@ -184,6 +185,39 @@ def test_gui_tournament_reports_blocked_when_every_candidate_fails(tmp_path: Pat
     assert goal is not None
     assert goal.metadata["verified_tournament"]["winner"] is None
     assert goal.metadata["verified_tournament"]["applied"] is False
+
+
+def test_gui_restart_finishes_durable_verified_tournament(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _ = _project(tmp_path)
+    backend = EmbeddedExecutionBackend(root)
+    monkeypatch.setattr(backend, "_finish_tournament_goal", lambda *args: None)
+
+    backend.start(
+        {
+            "objective": "Set value.txt to good and prove it",
+            "candidate_count": 2,
+        }
+    )
+    assert backend._thread is not None
+    backend._thread.join(timeout=15)
+    assert not backend._thread.is_alive()
+    orphaned = backend.store.read_current_goal()
+    assert orphaned is not None
+    assert orphaned.status.is_terminal is False
+    tournament = orphaned.metadata["verified_tournament"]
+    assert tournament["transaction_phase"] == "verified"
+    assert tournament["status"] == "verified_done"
+    assert tournament["applied"] is True
+
+    restarted = EmbeddedExecutionBackend(root)
+    finished = restarted.status()
+
+    assert finished["status"] == "done"
+    assert finished["final_result"]["accepted"] is True
+    assert root.joinpath("value.txt").read_text(encoding="utf-8") == "good\n"
 
 
 def test_stop_during_final_verification_rolls_back_and_never_accepts(
@@ -478,7 +512,14 @@ def test_direct_verifier_executable_is_frozen(tmp_path: Path) -> None:
     _git(root, "add", "verify.sh")
     _git(root, "commit", "-m", "add direct verifier")
 
-    assets = tournament_module._freeze_verifier_assets(root, [["./verify.sh"]])
+    with pytest.raises(ConfigError, match="review_assets"):
+        tournament_module._freeze_verifier_assets(root, [["./verify.sh"]])
+
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [["./verify.sh"]],
+        review_assets=["verify.sh"],
+    )
 
     assert "verify.sh" in {asset["path"] for asset in assets}
 
@@ -503,6 +544,7 @@ def test_candidate_cannot_replace_direct_verifier_executable(tmp_path: Path) -> 
     config_path = root / ".agentic-harness" / "config.yml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config["review_command"] = ["./verify.sh"]
+    config["review_assets"] = ["verify.sh"]
     config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     _git(root, "add", "verify.sh", "worker.py")
     _git(root, "commit", "-m", "use direct verifier")
@@ -551,7 +593,9 @@ def test_supported_ecosystem_verifier_assets_are_frozen(
     _git(root, "commit", "-m", "add ecosystem verifier assets")
 
     assets = tournament_module._freeze_verifier_assets(root, [command])
-    frozen = {asset["path"] for asset in assets}
+    frozen = {
+        asset["path"] for asset in assets if asset.get("kind", "file") == "file"
+    }
 
     assert set(files) <= frozen
     for relative in files:
@@ -569,7 +613,9 @@ def test_go_package_selector_is_not_treated_as_a_repository_path(tmp_path: Path)
 
     assets = tournament_module._freeze_verifier_assets(root, [["go", "test", "./..."]])
 
-    assert {asset["path"] for asset in assets} == {"go.mod", "value_test.go"}
+    assert {
+        asset["path"] for asset in assets if asset.get("kind", "file") == "file"
+    } == {"go.mod", "value_test.go"}
 
 
 def test_lexical_verifier_symlink_is_rejected(tmp_path: Path) -> None:
@@ -621,6 +667,199 @@ def test_explicit_review_assets_close_unknown_verifier_boundary(tmp_path: Path) 
     )
 
     assert "check.py" in {asset["path"] for asset in assets}
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "pytest.py",
+        "pytest.ini",
+        "conftest.py",
+        "tests/conftest.py",
+    ],
+)
+def test_candidate_added_python_verifier_inputs_are_detected(
+    tmp_path: Path,
+    relative: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    tests_dir = root / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_value.py").write_text(
+        "def test_value():\n    assert True\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add pytest verifier")
+    command = [sys.executable, "-m", "pytest", "tests", "-q"]
+    assets = tournament_module._freeze_verifier_assets(root, [command])
+
+    candidate = root / relative
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("candidate controlled verifier input\n", encoding="utf-8")
+
+    assert relative in tournament_module._verifier_asset_drift(root, assets)
+
+
+def test_candidate_added_python_verifier_symlink_is_detected(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    tests_dir = root / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_value.py").write_text(
+        "def test_value():\n    assert True\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add pytest verifier")
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [[sys.executable, "-m", "pytest", "tests", "-q"]],
+    )
+
+    (root / "pytest.py").symlink_to("check.py")
+
+    assert "pytest.py" in tournament_module._verifier_asset_drift(root, assets)
+
+
+@pytest.mark.parametrize(
+    ("command", "relative"),
+    [
+        (["go", "test", "./..."], "newpkg/new_value_test.go"),
+        (["./mvnw", "test"], "module/pom.xml"),
+        (["./gradlew", "test"], "module/build.gradle"),
+        (["dotnet", "test"], "src/NewTests.csproj"),
+        (["bundle", "exec", "rspec"], "spec/new_value_spec.rb"),
+    ],
+)
+def test_candidate_added_ecosystem_verifier_inputs_are_detected(
+    tmp_path: Path,
+    command: list[str],
+    relative: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    executable = root / command[0]
+    if command[0].startswith("./"):
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o755)
+    baseline = {
+        "go": ("go.mod", "module example.test/project\n"),
+        "./mvnw": ("pom.xml", "<project/>\n"),
+        "./gradlew": ("build.gradle", "plugins {}\n"),
+        "dotnet": ("project.sln", "Microsoft Visual Studio Solution File\n"),
+        "bundle": ("Gemfile", "source 'https://example.invalid'\n"),
+    }
+    baseline_path, content = baseline[command[0]]
+    (root / baseline_path).write_text(content, encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add ecosystem verifier")
+    assets = tournament_module._freeze_verifier_assets(root, [command])
+
+    candidate = root / relative
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("candidate controlled verifier input\n", encoding="utf-8")
+
+    assert relative in tournament_module._verifier_asset_drift(root, assets)
+
+
+def test_python_module_verifier_is_hardened_against_cwd_shadowing() -> None:
+    commands = tournament_module.harden_python_module_commands(
+        [[sys.executable, "-m", "pytest", "tests", "-q"]]
+    )
+
+    assert commands == [[sys.executable, "-P", "-m", "pytest", "tests", "-q"]]
+
+
+def test_custom_repository_verifier_requires_explicit_dependency_boundary(
+    tmp_path: Path,
+) -> None:
+    root, _ = _project(tmp_path)
+
+    with pytest.raises(ConfigError, match="every repository-controlled dependency"):
+        tournament_module._freeze_verifier_assets(
+            root,
+            [[sys.executable, "check.py"]],
+        )
+
+
+def test_explicit_custom_verifier_directory_freezes_membership(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    policy = root / "policy"
+    policy.mkdir()
+    (policy / "verification.py").write_text("ALLOW = False\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add verifier dependency")
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [[sys.executable, "check.py"]],
+        review_assets=["check.py", "policy"],
+    )
+
+    nested = policy / "nested" / "bypass.py"
+    nested.parent.mkdir()
+    nested.write_text("ALLOW = True\n", encoding="utf-8")
+
+    assert "policy/nested/bypass.py" in tournament_module._verifier_asset_drift(
+        root,
+        assets,
+    )
+
+
+def test_pytest_shadow_candidate_cannot_be_accepted_end_to_end(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    tests_dir = root / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_value.py").write_text(
+        "from pathlib import Path\n\n"
+        "def test_value():\n"
+        "    assert Path('value.txt').read_text(encoding='utf-8') == 'good\\n'\n",
+        encoding="utf-8",
+    )
+    worker = root / "worker.py"
+    source = worker.read_text(encoding="utf-8")
+    source = source.replace(
+        'Path("value.txt").write_text("bad\\n" if bad_candidate else "good\\n", encoding="utf-8")',
+        'Path("value.txt").write_text("bad\\n", encoding="utf-8")\n'
+        'Path("pytest.py").write_text("raise SystemExit(0)\\n", encoding="utf-8")',
+    )
+    worker.write_text(source, encoding="utf-8")
+    config_path = root / ".agentic-harness" / "config.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    command = [sys.executable, "-m", "pytest", "tests", "-q"]
+    config["review_command"] = command
+    config.pop("review_assets", None)
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "use pytest verifier")
+
+    result = run_verified_tournament(
+        root,
+        "Make value.txt contain good.",
+        candidate_count=2,
+        review_commands=[command],
+        max_attempts=1,
+    )
+
+    assert result.status == "blocked"
+    assert result.winner is None
+    assert result.applied is False
+    assert all("pytest.py" in candidate.verifier_asset_drift for candidate in result.candidates)
+    assert root.joinpath("value.txt").read_text(encoding="utf-8") == "original\n"
+
+
+def test_verified_receipt_recovery_rejects_divergent_workspace(tmp_path: Path) -> None:
+    root, commands = _project(tmp_path)
+    result = run_verified_tournament(
+        root,
+        "Make value.txt contain good.",
+        candidate_count=2,
+        review_commands=commands,
+        max_attempts=1,
+    )
+    assert result.status == "verified_done"
+    (root / "value.txt").write_text("tampered after verification\n", encoding="utf-8")
+
+    with pytest.raises(HarnessError, match="no longer matches"):
+        tournament_module.load_verified_tournament_result(root, result.receipt_path)
 
 
 def test_progress_callback_cannot_mutate_live_tournament_state() -> None:

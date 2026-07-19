@@ -191,12 +191,17 @@ agentic-harness best-of-n -n 3 \
 
 All candidates start from the same commit, receive the same immutable GoalSpec,
 and run the same configured checks. Repository-local command executables,
-existing tracked test suites, and verifier definitions for Python, JavaScript,
-Rust, Go, Maven, Gradle, .NET, and RSpec are hashed before work. A candidate that
-changes those assets is disqualified even if its altered check returns zero.
-Opaque custom check runners must declare their dependency boundary with
+test-suite membership, verifier definitions, and verifier-sensitive paths that
+must remain absent are frozen before work. The built-in manifests cover Python,
+JavaScript, Rust, Go, Maven, Gradle, .NET, and RSpec. A candidate that changes,
+adds, removes, or replaces those assets with a symlink is disqualified even if
+its altered check returns zero. Python module checks also use safe-path startup
+so a candidate cannot shadow the installed Pytest or unittest package from the
+repository root. Opaque custom check runners must declare their complete
+repository dependency boundary with
 `review.assets` (or top-level `review_assets`); the tournament refuses to run
-when it cannot infer that boundary. Among passing candidates, the harness
+when it cannot infer that boundary. A declared directory freezes both its
+contents and membership. Among passing candidates, the harness
 deterministically prefers the smallest patch, verifies it again in a fresh
 worktree, and rejects any verifier side effect by comparing complete workspace
 fingerprints before applying that exact state to the original workspace. If no

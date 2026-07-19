@@ -64,6 +64,7 @@ from agentic_harness.core.strategies import (
 )
 from agentic_harness.core.tournament import (
     TournamentResult,
+    load_verified_tournament_result,
     recover_interrupted_tournament,
     run_verified_tournament,
 )
@@ -1653,6 +1654,33 @@ class EmbeddedExecutionBackend:
             self.store.write_goal(goal)
 
     def _fail_interrupted_tournament(self, goal: Goal) -> None:
+        tournament_snapshot = goal.metadata.get("verified_tournament")
+        phase = (
+            str(tournament_snapshot.get("transaction_phase") or "")
+            if isinstance(tournament_snapshot, dict)
+            else ""
+        )
+        receipt_snapshot = (
+            str(tournament_snapshot.get("receipt_path") or "")
+            if isinstance(tournament_snapshot, dict)
+            else ""
+        )
+        verified_recovery_error = ""
+        if phase == "verified" and receipt_snapshot:
+            try:
+                result = load_verified_tournament_result(
+                    self.project_dir,
+                    receipt_snapshot,
+                )
+                frozen_spec = self.store.read_goal_spec(goal.id)
+                if frozen_spec.sha256 != result.goal_spec_sha256:
+                    raise HarnessError(
+                        "durable goal specification does not match the verified receipt"
+                    )
+                self._finish_tournament_goal(goal.id, frozen_spec, result)
+                return
+            except (ConfigError, HarnessError, OSError, ValueError) as exc:
+                verified_recovery_error = str(exc)
         with self.store.locked():
             current = self.store.read_current_goal()
             if current is None or current.id != goal.id or current.status.is_terminal:
@@ -1682,6 +1710,12 @@ class EmbeddedExecutionBackend:
                 reason = (
                     "The verified tournament was interrupted during application and the "
                     f"workspace could not be reconciled automatically: {recovery_reason}"
+                )
+            elif phase == "verified":
+                reason = (
+                    "The tournament recorded a verified result, but its applied workspace "
+                    "could not be reconciled safely: "
+                    f"{verified_recovery_error or recovery_reason}"
                 )
             else:
                 reason = (
