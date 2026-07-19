@@ -11,9 +11,10 @@ A candidate may be selected only when all of these invariants hold:
 
 1. Every candidate starts from the same commit and immutable GoalSpec.
 2. Repository-controlled verifier executables, test definitions, runner
-   configuration, and explicit custom assets are frozen before workers start.
-3. A candidate that changes any frozen asset is ineligible even when its check
-   exits successfully.
+   configuration, protected directory membership, paths required to remain
+   absent, and explicit custom assets are frozen before workers start.
+3. A candidate that changes, adds, removes, or symlink-replaces any protected
+   verifier input is ineligible even when its check exits successfully.
 4. The selected patch passes the frozen checks in a fresh worktree whose full
    tracked and non-ignored state does not change during verification.
 5. The original workspace remains clean until final verification succeeds, and
@@ -26,15 +27,20 @@ A candidate may be selected only when all of these invariants hold:
 
 The manifest includes repository-local command arguments, including argument
 zero, plus known definitions for Python, JavaScript, Rust, Go, Maven, Gradle,
-.NET, and RSpec. Lexical symlinks, symlinked parent components, Windows reparse
-points, and parent traversal are rejected before hashing and on every drift
-check.
+.NET, and RSpec. It records both file hashes and protected path-set membership,
+including sensitive paths that were absent at tournament start. Lexical
+symlinks, symlinked parent components, Windows reparse points, and parent
+traversal are rejected before hashing and on every drift check. Python
+`-m pytest` and `-m unittest` checks are started with safe-path mode as a second
+line of defense against repository-root module shadowing.
 
 Custom runners whose repository dependency closure cannot be inferred must
-declare `review.assets`. Those assets apply only when the configured review
+declare `review.assets`, including the runner and every imported, sourced, or
+data-file dependency. Declared directories freeze their complete tracked and
+non-ignored membership. Those assets apply only when the configured review
 command is the command being run; ad-hoc command overrides do not inherit an
-unrelated manifest. An empty or entirely untracked verifier boundary blocks the
-tournament.
+unrelated manifest. An empty, untracked, or undeclared custom-verifier boundary
+blocks the tournament.
 
 ## Transaction and recovery
 
@@ -42,8 +48,11 @@ The receipt records the base commit, preimage fingerprint, selected patch
 checksum, expected verified fingerprint, and transaction phase. The phase is
 durably written as `applying_verified` before the original workspace changes.
 On restart, the GUI compares the actual state with both recorded fingerprints.
-It reverses the selected patch only from the exact verified state; any divergent
-state remains blocked and is not modified automatically.
+It reverses an interrupted application only from the exact staged state. If the
+receipt had already reached `verified`, the GUI validates the immutable
+GoalSpec, final review, base commit, and applied workspace fingerprint before
+finishing the durable goal as done. Any divergent state remains blocked and is
+not modified automatically.
 
 ## Non-goals
 

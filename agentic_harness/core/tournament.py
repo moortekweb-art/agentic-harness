@@ -27,6 +27,7 @@ from agentic_harness.core.safety import goal_safety_metadata, subprocess_environ
 from agentic_harness.core.state import Goal
 from agentic_harness.core.verifier_manifest import (
     freeze_verifier_assets,
+    harden_python_module_commands,
     require_lexical_regular_path,
     verifier_asset_drift,
 )
@@ -107,6 +108,108 @@ class TournamentResult:
         payload["candidates"] = [candidate.to_dict() for candidate in self.candidates]
         return payload
 
+    @classmethod
+    def from_dict(cls, payload: object) -> TournamentResult:
+        if not isinstance(payload, dict):
+            raise ValueError("tournament receipt must be an object")
+        raw_candidates = payload.get("candidates", [])
+        if not isinstance(raw_candidates, list):
+            raise ValueError("tournament candidates must be a list")
+        candidates = [
+            CandidateResult(
+                **{
+                    key: value
+                    for key, value in candidate.items()
+                    if key in CandidateResult.__dataclass_fields__
+                }
+            )
+            for candidate in raw_candidates
+            if isinstance(candidate, dict)
+        ]
+        values = {
+            key: value
+            for key, value in payload.items()
+            if key in cls.__dataclass_fields__ and key != "candidates"
+        }
+        return cls(**values, candidates=candidates)
+
+
+def load_verified_tournament_result(
+    project_dir: str | Path,
+    receipt_path: str | Path,
+) -> TournamentResult:
+    """Load a durable verified result only when the applied workspace still matches."""
+
+    root = Path(project_dir).resolve()
+    receipt = Path(receipt_path)
+    if not receipt.is_absolute():
+        receipt = root / receipt
+    require_lexical_regular_path(root, receipt, label=str(receipt_path))
+    try:
+        payload = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HarnessError(f"verified tournament receipt could not be read: {exc}") from exc
+    try:
+        result = TournamentResult.from_dict(payload)
+        frozen_spec = GoalSpec.from_dict(result.goal_spec)
+    except (TypeError, ValueError) as exc:
+        raise HarnessError(f"verified tournament receipt is invalid: {exc}") from exc
+    if result.contract != TOURNAMENT_CONTRACT:
+        raise HarnessError("verified tournament receipt contract is not supported")
+    if not (
+        result.status == "verified_done"
+        and result.transaction_phase == "verified"
+        and result.applied
+    ):
+        raise HarnessError("tournament receipt does not contain a durable verified result")
+    if frozen_spec.sha256 != result.goal_spec_sha256:
+        raise HarnessError("verified tournament GoalSpec checksum does not match")
+    expected_receipt = receipt.relative_to(root).as_posix()
+    if result.receipt_path != expected_receipt:
+        raise HarnessError("verified tournament receipt identity does not match its path")
+    if len(result.candidates) != result.candidate_count:
+        raise HarnessError("verified tournament candidate set is incomplete")
+    winner = next(
+        (candidate for candidate in result.candidates if candidate.number == result.winner),
+        None,
+    )
+    if winner is None or not (
+        winner.verified
+        and winner.receipt_category == "verified_done"
+        and winner.patch_sha256
+        and winner.patch_file
+    ):
+        raise HarnessError("verified tournament receipt has no eligible winner")
+    patch_path = root / winner.patch_file
+    require_lexical_regular_path(root, patch_path, label=winner.patch_file)
+    if patch_path.parent != receipt.parent:
+        raise HarnessError("verified winner patch is outside its tournament receipt directory")
+    try:
+        patch = patch_path.read_bytes()
+    except OSError as exc:
+        raise HarnessError(f"verified winner patch could not be read: {exc}") from exc
+    if hashlib.sha256(patch).hexdigest() != winner.patch_sha256:
+        raise HarnessError("verified winner patch checksum does not match")
+    if _git(root, "rev-parse", "HEAD").strip() != result.base_commit:
+        raise HarnessError("workspace commit changed after verified tournament application")
+    if _workspace_fingerprint(root) != result.expected_workspace_sha256:
+        raise HarnessError("workspace no longer matches the durably verified result")
+    final = result.final_verification
+    if not isinstance(final, dict):
+        raise HarnessError("verified tournament final review is missing")
+    raw_criteria = final.get("criteria")
+    review = ReviewResult(
+        passed=final.get("passed") is True,
+        criteria=(
+            [dict(item) for item in raw_criteria if isinstance(item, dict)]
+            if isinstance(raw_criteria, list)
+            else []
+        ),
+    )
+    if not _review_proves_spec(review, frozen_spec):
+        raise HarnessError("verified tournament final review does not prove the GoalSpec")
+    return result
+
 
 def run_verified_tournament(
     project_dir: str | Path,
@@ -161,6 +264,7 @@ def run_verified_tournament(
         and review_commands == [config.review_command]
         else (review_assets or [])
     )
+    review_commands = harden_python_module_commands(review_commands)
     verifier_assets = _freeze_verifier_assets(
         root,
         review_commands,

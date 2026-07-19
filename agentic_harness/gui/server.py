@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -46,6 +47,7 @@ from agentic_harness.gui.api import (
 
 
 MAX_REQUEST_BYTES = 1_048_576
+MAX_CONVERSATION_BYTES = 64 * 1024
 STREAM_MONITOR_INTERVAL_SECONDS = 8.0
 GUI_SESSION_PATH_ENV = "AGENTIC_HARNESS_GUI_SESSION_PATH"
 SECURITY_HEADERS = {
@@ -483,6 +485,70 @@ def make_handler(
                     task = command_task(bridge, "continue", body)
                     task = session.record(task)
                     self._json(task)
+            elif route == "/api/tasks/current/message":
+                if active is not None:
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "Supervised live messages currently require the managed local-goal backend.",
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                else:
+                    feedback = str(body.get("message") or "").strip()
+                    if not feedback:
+                        self._json(
+                            {"ok": False, "error": "Write a message before sending."},
+                            status=HTTPStatus.BAD_REQUEST,
+                        )
+                        return
+                    if len(feedback) > 8_000:
+                        self._json(
+                            {"ok": False, "error": "Messages are limited to 8,000 characters."},
+                            status=HTTPStatus.BAD_REQUEST,
+                        )
+                        return
+                    current = session.record(status_task(bridge))
+                    current_status = str(current.get("status") or "")
+                    if current_status in {"starting", "working", "checking"}:
+                        action = "nudge"
+                    elif current_status == "needs_review":
+                        action = "continue"
+                    else:
+                        self._json(
+                            {
+                                "ok": False,
+                                "error": "Start a managed task before sending guidance.",
+                            },
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
+                    try:
+                        revision = session.append_user_message(current, feedback, action=action)
+                    except (GuiSecurityError, ValueError) as exc:
+                        self._json(
+                            {"ok": False, "error": str(exc)},
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
+                    controlling_feedback = session.controlling_guidance()
+                    task = command_task(
+                        bridge,
+                        action,
+                        {"feedback": controlling_feedback},
+                    )
+                    delivered = str(task.get("status") or "") != "blocked"
+                    invalidate = getattr(bridge, "invalidate_status_caches", None)
+                    if delivered and callable(invalidate):
+                        invalidate()
+                    session.mark_message_delivery(
+                        revision,
+                        "delivered" if delivered else "failed",
+                    )
+                    if delivered:
+                        task = status_task(bridge)
+                    task = session.record(task)
+                    self._json(task, status=HTTPStatus.OK if delivered else HTTPStatus.BAD_GATEWAY)
             elif route == "/api/tasks/current/approve-spec":
                 if active is not None:
                     raw_requirements = body.get("requirements")
@@ -802,6 +868,7 @@ _SENSITIVE_JSON_KEYS = frozenset(
 _GUI_METADATA_FIELDS = frozenset(
     {
         "checks",
+        "conversation",
         "effort",
         "execution_expectation",
         "execution_profile",
@@ -981,6 +1048,74 @@ class GuiSession:
             self._history = self._history[:MAX_GUI_HISTORY]
             self._save_locked()
             return task
+
+    def append_user_message(self, task: dict[str, Any], text: str, *, action: str) -> int:
+        """Persist a revisioned user amendment bound to the active managed run."""
+        with self._lock:
+            task = self._reconcile_active_objective(task)
+            identity = _task_identity(task)
+            if not _has_identity(identity) or not _identities_match(
+                self._active_identity, identity
+            ):
+                raise GuiSecurityError("The active run identity changed; refresh before messaging.")
+            conversation = self._conversation_locked()
+            conversation_bytes = sum(
+                len(str(row.get("text") or "").encode("utf-8")) for row in conversation
+            )
+            if conversation_bytes + len(text.encode("utf-8")) > MAX_CONVERSATION_BYTES:
+                raise ValueError(
+                    "This run's conversation has reached its 64 KB safety limit. "
+                    "Let the task finish, then continue with a concise summary."
+                )
+            revision = max(
+                (int(row.get("revision") or 0) for row in conversation),
+                default=0,
+            ) + 1
+            conversation.append(
+                {
+                    "revision": revision,
+                    "role": "user",
+                    "text": text,
+                    "at": datetime.now(UTC).isoformat(),
+                    "delivery": "pending",
+                    "action": action,
+                    "run_id": str(identity.get("run_id") or ""),
+                }
+            )
+            self._active_metadata["conversation"] = conversation[-100:]
+            self._save_locked()
+            return revision
+
+    def controlling_guidance(self) -> str:
+        """Return the complete revision history so a newer nudge cannot erase an older one."""
+        with self._lock:
+            messages = self._conversation_locked()
+            lines = [
+                "Supervised goal amendments for this exact run. Later revisions control "
+                "when instructions conflict; independent acceptance criteria remain unchanged."
+            ]
+            lines.extend(
+                f"Revision {row['revision']}: {row['text']}"
+                for row in messages
+                if row.get("role") == "user"
+            )
+            return "\n\n".join(lines)
+
+    def mark_message_delivery(self, revision: int, delivery: str) -> None:
+        with self._lock:
+            conversation = self._conversation_locked()
+            for row in conversation:
+                if int(row.get("revision") or 0) == revision:
+                    row["delivery"] = delivery
+                    break
+            self._active_metadata["conversation"] = conversation
+            self._save_locked()
+
+    def _conversation_locked(self) -> list[dict[str, Any]]:
+        value = self._active_metadata.get("conversation")
+        if not isinstance(value, list):
+            return []
+        return [dict(row) for row in value if isinstance(row, dict)]
 
     def history(self, *, query: str = "") -> list[dict[str, Any]]:
         with self._lock:

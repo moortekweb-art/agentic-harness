@@ -489,6 +489,29 @@
             </button>
           </div>
 
+          <section id="conversationSection" class="conversation-section" hidden>
+            <div class="conversation-heading">
+              <div>
+                <p class="eyebrow">Supervised interactive mode</p>
+                <h3>Work with OpenCode</h3>
+              </div>
+              <span class="assurance-chip">Checks still decide done</span>
+            </div>
+            <p class="conversation-help">
+              Send guidance while the task runs. Every message is recorded as a numbered
+              goal update for this run; it cannot rewrite the independent completion checks.
+            </p>
+            <ol id="conversationList" class="conversation-list" aria-live="polite"></ol>
+            <form id="messageForm" class="message-composer">
+              <label for="messageInput">Message OpenCode</label>
+              <textarea id="messageInput" maxlength="8000" rows="3" placeholder="Add context, redirect the approach, or answer a question"></textarea>
+              <div class="message-actions">
+                <span id="messageHint">Your latest guidance controls if messages conflict.</span>
+                <button id="messageButton" class="primary" type="submit">Send guidance</button>
+              </div>
+            </form>
+          </section>
+
           <section class="work-detail-grid" id="workDetailGrid">
             <div>
               <h3>Plan</h3>
