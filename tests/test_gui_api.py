@@ -85,8 +85,9 @@ def test_gui_api_exposes_only_state_appropriate_human_actions() -> None:
         fallback_status="ready",
     )
 
-    assert [row["action"] for row in working["allowed_actions"]] == ["stop"]
+    assert [row["action"] for row in working["allowed_actions"]] == ["message", "stop"]
     assert [row["action"] for row in review["allowed_actions"]] == [
+        "message",
         "continue",
         "accept",
         "stop",
@@ -1580,6 +1581,71 @@ def test_gui_server_post_task_workflow_routes() -> None:
         ["accept"],
         ["stop"],
     ]
+
+
+def test_gui_supervised_messages_are_revisioned_and_cumulative() -> None:
+    class MessagingBridge(FakeBridge):
+        def start_human_goal(self, **kwargs: object) -> CommandResult:
+            result = super().start_human_goal(**kwargs)  # type: ignore[arg-type]
+            return CommandResult(result.args, 0, "queued\nrun_dir=/tmp/run-1\n", "")
+
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(
+                ("local-goal", "status"),
+                0,
+                '{"active_goal":{"status":"running","objective":"test task","run_dir":"/tmp/run-1"}}',
+                "",
+            )
+
+    bridge = MessagingBridge()
+    with gui_server(bridge) as base_url:
+        post_json(
+            base_url,
+            "/api/tasks",
+            {"mode": "local", "objective": "build the feature", "safe_areas": ["src"]},
+        )
+        first = post_json(
+            base_url,
+            "/api/tasks/current/message",
+            {"message": "Keep the public API compatible."},
+        )
+        second = post_json(
+            base_url,
+            "/api/tasks/current/message",
+            {"message": "Also add a regression test."},
+        )
+
+    messages = second["metadata"]["conversation"]
+    assert [row["revision"] for row in messages] == [1, 2]
+    assert [row["delivery"] for row in messages] == ["delivered", "delivered"]
+    assert first["metadata"]["conversation"][0]["run_id"] == "run-1"
+    nudge_commands = [command for command in bridge.commands if command[0] == "nudge"]
+    assert len(nudge_commands) == 2
+    assert "Revision 1: Keep the public API compatible." in nudge_commands[1][2]
+    assert "Revision 2: Also add a regression test." in nudge_commands[1][2]
+    assert "independent acceptance criteria remain unchanged" in nudge_commands[1][2]
+
+
+def test_gui_supervised_message_requires_active_managed_run() -> None:
+    class ReadyBridge(FakeBridge):
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(
+                ("local-goal", "status"),
+                0,
+                '{"classification":"idle","active_goal":null}',
+                "",
+            )
+
+    with gui_server(ReadyBridge()) as base_url:
+        result = post_error(
+            base_url,
+            "/api/tasks/current/message",
+            json.dumps({"message": "Do something"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 409
+    assert "Start a managed task" in str(result.payload["error"])
 
 
 def test_gui_server_accepts_same_origin_json_post() -> None:

@@ -157,6 +157,12 @@ const els = {
   approveSpecButtonLabel: byId("approveSpecButtonLabel"),
   acceptButton: byId("acceptButton"),
   stopButton: byId("stopButton"),
+  conversationSection: byId("conversationSection"),
+  conversationList: byId("conversationList"),
+  messageForm: byId("messageForm"),
+  messageInput: byId("messageInput"),
+  messageButton: byId("messageButton"),
+  messageHint: byId("messageHint"),
   planList: byId("planList"),
   requirementsList: byId("requirementsList"),
   eventTimeline: byId("eventTimeline"),
@@ -1021,10 +1027,10 @@ function restoreForm() {
 function setBusy(busy) {
   state.busy = busy;
   updateStartButton();
-  [els.startButton, els.checkButton, els.continueButton, els.acceptButton, els.stopButton, els.demoButton, els.setupDemoButton].forEach((button) => {
+  [els.startButton, els.checkButton, els.continueButton, els.acceptButton, els.stopButton, els.messageButton, els.demoButton, els.setupDemoButton].forEach((button) => {
     button.setAttribute("aria-busy", String(busy));
   });
-  [els.checkButton, els.continueButton, els.acceptButton, els.stopButton, els.setupDemoButton].forEach((button) => {
+  [els.checkButton, els.continueButton, els.acceptButton, els.stopButton, els.messageButton, els.setupDemoButton].forEach((button) => {
     button.disabled = busy;
   });
   updateDemoCallout(state.currentTask);
@@ -1416,6 +1422,7 @@ function renderTask(task) {
     text: `${row.summary || "Progress recorded"}${row.checkpoint ? ` — ${row.checkpoint}` : ""}`,
     className: row.stage || "act",
   }), "No tool or check events recorded yet.");
+  renderConversation(task);
   previewList(
     els.changedFiles,
     task.changed_files,
@@ -1438,14 +1445,17 @@ function renderTask(task) {
   );
 
   renderFinalReceipt(task, receipt);
+  const viewingHistory = Boolean(state.viewingHistoryId);
   els.currentCard.hidden = receipt.terminal;
   els.workDetailGrid.hidden = receipt.terminal;
   els.activitySection.hidden = receipt.terminal;
+  els.conversationSection.hidden = receipt.terminal
+    || viewingHistory
+    || (!hasAction(task, "message") && !Array.isArray(task.metadata?.conversation));
   els.changedFilesEvidence.hidden = receipt.terminal;
   els.verificationEvidence.hidden = receipt.terminal;
   els.artifactsEvidence.hidden = receipt.terminal;
 
-  const viewingHistory = Boolean(state.viewingHistoryId);
   els.continueButton.hidden = viewingHistory || !hasAction(task, "continue");
   els.approveSpecButton.hidden = viewingHistory || !hasAction(task, "approve_spec");
   els.approveSpecButtonLabel.textContent = task.metadata?.specification_review?.kind === "amendment"
@@ -1460,6 +1470,63 @@ function renderTask(task) {
     metadata: task.metadata || {},
   }, null, 2);
   renderStatusFooter(task);
+}
+
+function renderConversation(task) {
+  const conversation = Array.isArray(task.metadata?.conversation)
+    ? task.metadata.conversation
+    : [];
+  const progress = Array.isArray(task.events) ? task.events.slice(-6) : [];
+  const rows = [
+    ...conversation.map((message) => ({
+      role: "user",
+      at: message.at || "",
+      label: `You · revision ${message.revision || "?"}`,
+      text: message.text || "",
+      detail: message.delivery === "failed" ? "Delivery failed" : "Recorded for this run",
+      revision: Number(message.revision || 0),
+    })),
+    ...progress.map((event, index) => ({
+      role: "assistant",
+      at: event.at || event.updated_at || event.timestamp || "",
+      label: "OpenCode progress",
+      text: `${event.summary || "Progress recorded"}${event.checkpoint ? ` — ${event.checkpoint}` : ""}`,
+      detail: "Harness activity",
+      revision: 100000 + index,
+    })),
+  ];
+  rows.sort((left, right) => {
+    const leftTime = Date.parse(left.at);
+    const rightTime = Date.parse(right.at);
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+    return left.revision - right.revision;
+  });
+  els.conversationList.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement("li");
+    empty.className = "conversation-empty";
+    empty.textContent = "OpenCode progress and your guidance will appear here.";
+    els.conversationList.append(empty);
+  } else {
+    rows.forEach((row) => {
+      const item = document.createElement("li");
+      item.className = `conversation-message ${row.role}`;
+      const label = document.createElement("strong");
+      label.textContent = row.label;
+      const text = document.createElement("p");
+      text.textContent = row.text;
+      const detail = document.createElement("small");
+      detail.textContent = row.detail;
+      item.append(label, text, detail);
+      els.conversationList.append(item);
+    });
+  }
+  const status = String(task.status || "");
+  els.messageHint.textContent = status === "needs_review"
+    ? "Sending will reopen the run with this recorded guidance."
+    : "Your latest guidance controls if messages conflict.";
 }
 
 function renderStatusFooter(task) {
@@ -2416,6 +2483,16 @@ els.providerPreset.addEventListener("change", applyProviderTemplate);
 els.useDetectedModelButton.addEventListener("click", useDetectedLocalModel);
 els.checkLocalModelsButton.addEventListener("click", () => refreshLocalModelDetection());
 els.continueButton.addEventListener("click", () => els.continueDialog.showModal());
+els.messageForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const message = els.messageInput.value.trim();
+  if (!message) {
+    els.messageInput.focus();
+    return;
+  }
+  els.messageInput.value = "";
+  postAction("/api/tasks/current/message", { message });
+});
 els.approveSpecButton.addEventListener("click", () => {
   state.specificationReviewBinding = window.HarnessAssurance.populateDialog(state.currentTask, {
     dialog: els.specificationDialog,

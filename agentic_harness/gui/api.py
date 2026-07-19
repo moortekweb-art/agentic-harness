@@ -1203,6 +1203,16 @@ def command_task(
         if feedback:
             args.extend(["--feedback", feedback])
         result = bridge.run(args)
+    elif command == "nudge":
+        feedback = str(body.get("feedback", "")).strip()
+        if not feedback:
+            return _task(
+                status="blocked",
+                summary="Guidance cannot be empty.",
+                needs_human=True,
+                advanced_details={"command": command},
+            )
+        result = bridge.run(["nudge", "--feedback", feedback])
     elif command == "stop":
         result = bridge.run(["stop"])
     else:
@@ -1471,6 +1481,11 @@ def _allowed_actions(status: str) -> list[dict[str, Any]]:
     if status in {"starting", "working", "checking"}:
         return [
             {
+                "action": "message",
+                "label": "Send guidance",
+                "enabled": True,
+            },
+            {
                 "action": "stop",
                 "label": "Stop safely",
                 "enabled": True,
@@ -1478,6 +1493,11 @@ def _allowed_actions(status: str) -> list[dict[str, Any]]:
         ]
     if status == "needs_review":
         return [
+            {
+                "action": "message",
+                "label": "Send guidance and continue",
+                "enabled": True,
+            },
             {
                 "action": "continue",
                 "label": "Continue with a note",
