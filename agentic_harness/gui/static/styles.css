@@ -929,6 +929,43 @@ summary .icon {
   margin-top: 10px;
 }
 
+.recovery-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px 18px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 88%, var(--warn) 12%);
+  box-shadow: var(--card-shadow);
+}
+
+.recovery-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.recovery-card .recovery-copy > p:last-child {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.recovery-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.recovery-card .recovery-status {
+  grid-column: 1 / -1;
+  min-height: 1.5em;
+  margin: 0;
+  color: var(--muted);
+}
+
 button {
   display: inline-flex;
   align-items: center;
@@ -955,6 +992,15 @@ button.primary {
 
 button.primary:hover {
   background: var(--accent-strong);
+}
+
+button.secondary {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  background: color-mix(in srgb, var(--panel) 86%, var(--warn) 14%);
+}
+
+button.secondary:hover {
+  background: color-mix(in srgb, var(--panel) 78%, var(--warn) 22%);
 }
 
 button.danger {
@@ -1039,6 +1085,25 @@ button:disabled {
 
 button[aria-busy="true"]:disabled {
   cursor: progress;
+}
+
+@media (max-width: 640px) {
+  .recovery-card {
+    grid-template-columns: 1fr;
+  }
+
+  .recovery-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .recovery-actions .secondary {
+    width: 100%;
+  }
+
+  .recovery-card .recovery-status {
+    grid-column: 1;
+  }
 }
 
 .status-head {

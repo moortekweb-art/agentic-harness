@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from datetime import UTC, datetime
 from inspect import Parameter, signature
 from pathlib import Path
@@ -35,6 +37,7 @@ _TECHNICAL_SUMMARY_TERMS = (
     "run_dir",
 )
 _PERMANENT_COMMAND_FAILURES = frozenset({2, 126, 127})
+_MAX_START_TICKET_BYTES = 128 * 1024
 
 
 _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
@@ -805,6 +808,8 @@ def _objective_with_effort(objective: str, effort: str) -> str:
     }
     return "\n".join(
         [
+            objective,
+            "",
             "Managed task request",
             "",
             "Original objective (preserve this exactly):",
@@ -1065,7 +1070,12 @@ def start_task(
         )
     readiness = readiness_payload(bridge)
     if readiness.get("can_queue") is not True:
-        status = "needs_review" if readiness.get("requires_review") is True else "blocked"
+        readiness_status = str(readiness.get("state") or "")
+        status = readiness_status if readiness_status in {
+            "needs_review",
+            "needs_attention",
+            "blocked",
+        } else "blocked"
         return _task(
             status=status,
             summary=str(
@@ -1134,8 +1144,30 @@ def start_task(
             needs_human=True,
             advanced_details={"error": str(exc)},
         )
+    task = task_from_command_result(result, fallback_status="starting")
+    if (
+        route == "mode1"
+        and result.returncode == 0
+        and isinstance(bridge, LocalGoalBridge)
+        and not _start_receipt_matches_objective(result, objective)
+    ):
+        task = _task(
+            status="blocked",
+            summary=(
+                "Your task was not started because another task acquired the local lane first. "
+                "No guidance or labels were attached to that other task. Refresh and try again "
+                "after it finishes."
+            ),
+            needs_human=True,
+            advanced_details={
+                "args": result.args,
+                "returncode": result.returncode,
+                "error": "start_identity_mismatch",
+                "observed_run_dir": _started_run_dir(result),
+            },
+        )
     return _annotate_requested_execution(
-        task_from_command_result(result, fallback_status="starting"),
+        task,
         objective=objective,
         route=route,
         effort=effort,
@@ -1143,6 +1175,65 @@ def start_task(
         safe_areas=safe_areas,
         checks=checks,
     )
+
+
+def _started_run_dir(result: CommandResult) -> str:
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "run_dir" and value.strip():
+            return value.strip().rstrip("/")
+    return ""
+
+
+def _start_receipt_matches_objective(result: CommandResult, objective: str) -> bool:
+    """Bind a successful Mode 1 start only to its exact harness-owned ticket."""
+
+    run_dir = _started_run_dir(result)
+    if not run_dir:
+        return False
+    current = Path(run_dir)
+    if not current.is_absolute():
+        return False
+    descriptor = -1
+    try:
+        resolved_current = current.resolve(strict=True)
+        if resolved_current != current or not resolved_current.is_dir():
+            return False
+        ticket = resolved_current / "ticket.json"
+        ticket_stat = os.lstat(ticket)
+        if stat.S_ISLNK(ticket_stat.st_mode) or not stat.S_ISREG(ticket_stat.st_mode):
+            return False
+        if ticket_stat.st_size > _MAX_START_TICKET_BYTES:
+            return False
+        descriptor = os.open(
+            ticket,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        observed = os.fstat(descriptor)
+        if (ticket_stat.st_dev, ticket_stat.st_ino) != (observed.st_dev, observed.st_ino):
+            return False
+        if not stat.S_ISREG(observed.st_mode):
+            return False
+        raw = os.read(descriptor, _MAX_START_TICKET_BYTES + 1)
+        if len(raw) > _MAX_START_TICKET_BYTES:
+            return False
+        payload = json.loads(raw.decode("utf-8"))
+        criteria = payload.get("done_criteria") if isinstance(payload, dict) else None
+        source_goal = str(payload.get("source_goal") or "") if isinstance(payload, dict) else ""
+        turnstone_marker = (
+            "Original objective (preserve this exactly):\n"
+            f"{objective}\n\nExecution effort:"
+        )
+        return (isinstance(criteria, list) and objective in criteria) or (
+            turnstone_marker in source_goal
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return False
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def status_task(bridge: LocalGoalBridge) -> TaskPayload:
@@ -1514,6 +1605,19 @@ def _allowed_actions(status: str) -> list[dict[str, Any]]:
                 "enabled": True,
             },
         ]
+    if status == "needs_attention":
+        return [
+            {
+                "action": "continue",
+                "label": "Continue",
+                "enabled": True,
+            },
+            {
+                "action": "stop",
+                "label": "Stop safely",
+                "enabled": True,
+            },
+        ]
     return []
 
 
@@ -1524,6 +1628,7 @@ def _label_for_status(status: str) -> str:
         "working": "Working",
         "checking": "Checking work",
         "needs_review": "Needs review",
+        "needs_attention": "Needs attention",
         "done": "Done",
         "blocked": "Blocked",
         "stopped": "Stopped",
@@ -1534,7 +1639,7 @@ def _progress_for_status(status: str) -> dict[str, Any]:
     """Expose only progress that the external runtime can honestly measure."""
     if status == "done":
         return {"determinate": True, "percent": 100, "label": "Complete"}
-    if status in {"starting", "working", "checking", "needs_review"}:
+    if status in {"starting", "working", "checking", "needs_review", "needs_attention"}:
         return {"determinate": False, "percent": None, "label": "In progress"}
     return {"determinate": False, "percent": None, "label": ""}
 
@@ -1657,7 +1762,7 @@ def _runtime_events(
     checkpoint: str,
     updated_at: str,
 ) -> list[dict[str, Any]]:
-    if status not in {"starting", "working", "checking", "needs_review"}:
+    if status not in {"starting", "working", "checking", "needs_review", "needs_attention"}:
         return []
     if status == "working" and iteration:
         summary = f"Agent pass {iteration} is active."
@@ -1686,6 +1791,7 @@ def _workflow_plan(status: str) -> list[dict[str, str]]:
         "working": 1,
         "checking": 2,
         "needs_review": 2,
+        "needs_attention": 1,
         "done": 3,
         "blocked": 1,
         "stopped": 1,
@@ -1710,6 +1816,7 @@ def _agent_loop_for_status(status: str) -> dict[str, Any]:
         "working": "Act",
         "checking": "Check",
         "needs_review": "Review",
+        "needs_attention": "Review",
         "done": "Review",
         "blocked": "Review",
         "stopped": "Review",
@@ -1741,9 +1848,11 @@ def _readiness_gate(status: str, summary: str, details: dict[str, Any]) -> dict[
             active_run_dir = run_dir if isinstance(run_dir, str) else ""
     requires_review = status == "needs_review"
     can_start = status in {"ready", "done", "stopped"}
-    can_queue = status not in {"needs_review", "blocked"}
+    can_queue = status not in {"needs_review", "needs_attention", "blocked"}
     if requires_review:
         next_action = "Review or continue the current work before starting another task."
+    elif status == "needs_attention":
+        next_action = "Open the current task, then continue or stop it before starting another task."
     elif status == "blocked":
         next_action = "Resolve the blocker before starting another task."
     elif status in {"working", "checking", "starting"}:
@@ -1904,6 +2013,8 @@ def _normalize_status(value: Any) -> str:
     normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
     if normalized in {"needs_review", "awaiting_review", "review", "review_required"}:
         return "needs_review"
+    if normalized in {"needs_attention", "attention_required"}:
+        return "needs_attention"
     if normalized in {"accepted", "done", "complete", "completed", "success"}:
         return "done"
     if normalized in {"blocked", "failed", "failure", "error", "operator_intervention_required"}:

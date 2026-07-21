@@ -24,6 +24,7 @@ const STATUS_ICONS = Object.freeze({
   checking: "loader-circle",
   stopping: "loader-circle",
   needs_review: "circle-alert",
+  needs_attention: "octagon-alert",
   done: "circle-check",
   blocked: "octagon-alert",
   stopped: "circle-stop",
@@ -137,6 +138,13 @@ const els = {
   startButton: byId("startButton"),
   startHelp: byId("startHelp"),
   checkButton: byId("checkButton"),
+  recoveryCard: byId("recoveryCard"),
+  recoveryTitle: byId("recoveryTitle"),
+  recoverySummary: byId("recoverySummary"),
+  recoveryContinueButton: byId("recoveryContinueButton"),
+  recoveryStopButton: byId("recoveryStopButton"),
+  recoveryOpenTaskButton: byId("recoveryOpenTaskButton"),
+  recoveryStatus: byId("recoveryStatus"),
   statusLabel: byId("statusLabel"),
   statusIndicator: byId("statusIndicator"),
   statusIcon: byId("statusIcon"),
@@ -495,7 +503,7 @@ function readinessPresentation(readiness = state.readiness) {
     "verification_required",
     "connection_test_required",
   ].includes(readiness?.state);
-  const blocked = ["blocked", "configuration_error"].includes(readiness?.state);
+  const blocked = ["blocked", "needs_attention", "configuration_error"].includes(readiness?.state);
   return {
     known,
     ready,
@@ -1094,10 +1102,64 @@ function updateStartButton() {
   }
 }
 
+function renderRecovery() {
+  const readinessState = String(state.readiness?.state || "");
+  const task = state.currentTask || state.liveTask || {};
+  const canContinue = hasAction(task, "continue");
+  const canStop = hasAction(task, "stop");
+  const hasTask = Boolean(task?.id);
+  const show = state.readiness?.can_start === false
+    && ["needs_review", "needs_attention", "blocked", "configuration_error"].includes(readinessState);
+
+  els.recoveryCard.hidden = !show;
+  if (!show) {
+    els.recoveryContinueButton.hidden = true;
+    els.recoveryStopButton.hidden = true;
+    els.recoveryOpenTaskButton.hidden = true;
+    els.recoveryStatus.textContent = "";
+    return;
+  }
+
+  els.recoveryTitle.textContent = readinessState === "needs_review"
+    ? "Current task needs your decision"
+    : readinessState === "configuration_error"
+      ? "Configuration needs repair"
+      : "Current task needs attention";
+  els.recoverySummary.textContent = state.readiness?.summary
+    || state.readiness?.next_action
+    || "Choose what should happen before starting another task.";
+  els.recoveryContinueButton.hidden = !hasTask || !canContinue;
+  els.recoveryStopButton.hidden = !hasTask || !canStop;
+  els.recoveryOpenTaskButton.hidden = !hasTask;
+  els.recoveryStatus.textContent = hasTask
+    ? canContinue || canStop
+      ? "Use a button here, or open the task to review its details and result."
+      : "Open the current task to see the exact blocker and available decision."
+    : "Refresh once. If this remains blocked, the installation owner must repair the configuration.";
+}
+
+function openCurrentTaskFromRecovery() {
+  showView("tasks", { focus: true });
+}
+
+function continueFromRecovery() {
+  const task = state.currentTask || state.liveTask || {};
+  if (!task.id || !hasAction(task, "continue")) return;
+  els.continueDialog.showModal();
+}
+
+function stopFromRecovery() {
+  const task = state.currentTask || state.liveTask || {};
+  if (!task.id || !hasAction(task, "stop")) return;
+  if (window.confirm("Stop this task now? Its progress and evidence will be kept.")) {
+    postAction("/api/tasks/current/stop");
+  }
+}
+
 function renderHealth(health) {
   const previousSignature = state.readinessSignature;
   state.readiness = health.readiness || {};
-  state.readinessSignature = `${state.readiness.state || ""}:${String(state.readiness.can_start)}`;
+  state.readinessSignature = `${state.readiness.state || ""}:${String(state.readiness.can_start)}:${String(state.readiness.can_queue)}`;
   const presentation = readinessPresentation();
   els.healthText.textContent = presentation.label;
   els.health.className = presentation.ready
@@ -1111,6 +1173,7 @@ function renderHealth(health) {
   );
   els.health.setAttribute("aria-label", presentation.label);
   els.health.title = state.readiness.summary || presentation.label;
+  renderRecovery();
   renderExpectationSummary();
   updateStartButton();
   const readinessChanged = Boolean(previousSignature)
@@ -1297,7 +1360,7 @@ function renderTask(task) {
   els.taskContext.hidden = !state.viewingHistoryId;
   const status = task.status || "ready";
   const receipt = receiptContext(task);
-  const activeStatus = ["starting", "working", "checking", "stopping", "needs_review", "blocked"]
+  const activeStatus = ["starting", "working", "checking", "stopping", "needs_review", "needs_attention", "blocked"]
     .includes(status);
   const taskAvailabilityState = receipt.terminal ? "terminal" : activeStatus ? "active" : "idle";
   const previousTaskAvailabilityState = state.taskAvailabilityState;
@@ -1323,7 +1386,7 @@ function renderTask(task) {
         ? "blocked"
         : status;
   document.body.dataset.taskActive = String(
-    ["starting", "working", "checking", "stopping", "needs_review", "blocked"].includes(status),
+    ["starting", "working", "checking", "stopping", "needs_review", "needs_attention", "blocked"].includes(status),
   );
   document.body.dataset.taskComplete = String(receipt.terminal);
   document.body.dataset.demo = String(task.metadata?.demo?.enabled === true);
@@ -1349,7 +1412,7 @@ function renderTask(task) {
   const progress = normalizeProgress(task);
   const percent = Number(progress.percent);
   const indeterminate = progress.determinate === false
-    && ["starting", "working", "checking", "needs_review"].includes(status);
+    && ["starting", "working", "checking", "needs_review", "needs_attention"].includes(status);
   const determinate = progress.determinate === true && Number.isFinite(percent);
   els.progressGroup.hidden = !(determinate || indeterminate);
   if (determinate) {
@@ -1470,6 +1533,7 @@ function renderTask(task) {
     metadata: task.metadata || {},
   }, null, 2);
   renderStatusFooter(task);
+  renderRecovery();
 }
 
 function renderConversation(task) {
@@ -1581,9 +1645,9 @@ function renderHistory(tasks) {
       ? "verified"
       : receipt.category === "failed"
         ? "failed"
-        : receipt.category === "blocked" || task.status === "blocked"
+        : receipt.category === "blocked" || ["blocked", "needs_attention"].includes(task.status)
           ? "blocked"
-          : ["starting", "working", "checking", "needs_review", "stopping"].includes(task.status)
+          : ["starting", "working", "checking", "needs_review", "needs_attention", "stopping"].includes(task.status)
             ? "active"
             : "all";
     const routeKey = task.metadata?.route_key || task.metadata?.managed_route?.key || task.metadata?.mode || "";
@@ -1609,7 +1673,7 @@ function renderHistory(tasks) {
       ? "verified"
       : receipt.category === "failed"
         ? "failed"
-        : receipt.category === "blocked" || task.status === "blocked"
+        : receipt.category === "blocked" || ["blocked", "needs_attention"].includes(task.status)
           ? "blocked"
           : "active";
     const mark = document.createElement("span");
@@ -1711,7 +1775,7 @@ function updateDemoCallout(task = null) {
   els.demoCallout.hidden = !available;
   if (!available) return;
   const isDemo = task?.metadata?.demo?.enabled === true;
-  const active = isDemo && ["starting", "working", "checking", "stopping", "needs_review"].includes(task.status);
+  const active = isDemo && ["starting", "working", "checking", "stopping", "needs_review", "needs_attention"].includes(task.status);
   const verified = isDemo && task.result_category === "verified_done";
   if (active) {
     els.demoTitle.textContent = "Safe demo running";
@@ -2220,7 +2284,7 @@ async function startWork() {
         throw startError;
       }
       if (
-        !["starting", "working", "checking", "needs_review"].includes(recovered.status)
+        !["starting", "working", "checking", "needs_review", "needs_attention", "blocked"].includes(recovered.status)
         || !taskMatchesPendingStart(recovered)
       ) {
         state.pendingStartObjective = "";
@@ -2358,8 +2422,13 @@ async function runAction(action) {
     await action();
     await refreshHealth();
   } catch (error) {
-    els.summary.textContent = error instanceof Error ? error.message : "The request failed.";
+    const message = error instanceof Error ? error.message : "The request failed.";
+    els.summary.textContent = message;
     els.statusLabel.textContent = "Needs attention";
+    if (state.activeView === "home") {
+      els.startHelp.textContent = message || state.readiness?.next_action
+        || "The request needs attention before this task can start.";
+    }
   } finally {
     setBusy(false);
   }
@@ -2460,6 +2529,9 @@ function handleShortcut(event) {
 
 els.startButton.addEventListener("click", startWork);
 els.checkButton.addEventListener("click", () => runAction(refreshTaskAndModes));
+els.recoveryContinueButton.addEventListener("click", continueFromRecovery);
+els.recoveryStopButton.addEventListener("click", stopFromRecovery);
+els.recoveryOpenTaskButton.addEventListener("click", openCurrentTaskFromRecovery);
 els.homeTab.addEventListener("click", () => showView("home"));
 els.tasksTab.addEventListener("click", () => showView("tasks"));
 els.historyTab.addEventListener("click", () => showView("history"));

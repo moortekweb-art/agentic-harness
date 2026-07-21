@@ -247,6 +247,42 @@ def test_starting_a_human_goal_invalidates_previous_status_and_last_run(tmp_path
     assert sum("last-run" in call for call in calls) == 2
 
 
+def test_mode1_forwards_every_preregistered_verification_command(tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        command = list(args[0])
+        calls.append(command)
+        stdout = (
+            '{"lanes":{"local":{"executor":"opencode"}}}'
+            if command[-2:] == ["capabilities", "--json"]
+            else "run_dir=/tmp/run\nstarted\n"
+        )
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+    checks = ("python3 -m pytest -q", "python3 scripts/verify_result.py")
+
+    bridge.start_human_goal(
+        mode_key="local",
+        objective="verified work",
+        checks=checks,
+    )
+
+    start = next(call for call in calls if "quick-start" in call)
+    assert start[start.index("--title") + 1] == "verified work"
+    observed = [
+        start[index + 1]
+        for index, value in enumerate(start)
+        if value == "--verification-command"
+    ]
+    assert observed == list(checks)
+
+
 def test_local_goal_bridge_monitor_never_requests_auto_accept(tmp_path) -> None:
     calls: list[list[str]] = []
 

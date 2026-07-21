@@ -778,6 +778,104 @@ class ReadyCaptureBridge:
         )
 
 
+class TicketBoundRaceBridge(LocalGoalBridge):
+    def __init__(self, root: Path, *, ticket_objective: str) -> None:
+        local_goal = root / "local-goal"
+        local_goal.write_text("#!/bin/sh\n", encoding="utf-8")
+        local_goal.chmod(0o700)
+        super().__init__(doc_root=root, local_goal=local_goal)
+        self.ticket_objective = ticket_objective
+
+    def available(self) -> bool:
+        return True
+
+    def background_supervision(self) -> dict[str, object]:
+        return {"active": True, "state": "active", "timer_active": True}
+
+    def status(self, *, json_output: bool = False) -> CommandResult:
+        return CommandResult(
+            ("local-goal", "status", "--json"),
+            0,
+            json.dumps(
+                {
+                    "classification": "idle",
+                    "active_goal": None,
+                    "capabilities": {
+                        "current_state": {
+                            "classification": "idle",
+                            "local_goal_lane_free": True,
+                        }
+                    },
+                }
+            ),
+            "",
+        )
+
+    def model_profile_status(self) -> CommandResult:
+        return CommandResult(
+            ("local-goal", "model-profile-status", "--json"),
+            0,
+            _profile_status("qwen-primary"),
+            "",
+        )
+
+    def start_human_goal(self, **kwargs: object) -> CommandResult:
+        run = Path(self.doc_root) / "runs" / "observed-run"
+        run.mkdir(parents=True)
+        (run / "ticket.json").write_text(
+            json.dumps(
+                {
+                    "done_criteria": ["Managed task request"],
+                    "source_goal": (
+                        "Managed task request\n\n"
+                        "Original objective (preserve this exactly):\n"
+                        f"{self.ticket_objective}\n\nExecution effort: quick"
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+        return CommandResult(
+            ("local-goal", "quick-start"),
+            0,
+            f"run_dir={run}\nstarted local-node1-goal\n",
+            "",
+        )
+
+
+def test_managed_start_refuses_to_bind_another_tasks_run(tmp_path: Path) -> None:
+    body = {
+        "route": "mode1",
+        "effort": "quick",
+        "objective": "Create my exact canary",
+    }
+    task = gui_api.start_task(
+        TicketBoundRaceBridge(tmp_path, ticket_objective="Read an unrelated README"),
+        body,
+    )
+    enriched = GuiSession().enrich(task, body)
+
+    assert task["status"] == "blocked"
+    assert task["advanced_details"]["error"] == "start_identity_mismatch"
+    assert enriched["metadata"]["start_accepted"] is False
+
+
+def test_managed_start_binds_matching_harness_ticket(tmp_path: Path) -> None:
+    body = {
+        "route": "mode1",
+        "effort": "quick",
+        "objective": "Create my exact canary",
+    }
+    task = gui_api.start_task(
+        TicketBoundRaceBridge(tmp_path, ticket_objective=body["objective"]),
+        body,
+    )
+    enriched = GuiSession().enrich(task, body)
+
+    assert task["status"] == "starting"
+    assert enriched["metadata"]["start_accepted"] is True
+
+
 def test_managed_modes_endpoint_exposes_only_proven_local_profiles() -> None:
     with _api_server(ReadyCaptureBridge()) as base_url:
         payload = _get_json(base_url, "/api/modes")
@@ -807,6 +905,12 @@ def test_standard_effort_defaults_to_mode1_instead_of_silently_selecting_mode2()
     assert len(bridge.starts) == 1
     assert bridge.starts[0]["mode_key"] == "mode1"
     assert bridge.starts[0].get("mode_key") != "mode2"
+    managed_objective = str(bridge.starts[0]["objective"])
+    assert managed_objective.startswith(
+        "Use the normal managed route with a balanced effort budget\n\n"
+        "Managed task request"
+    )
+    assert "Execution effort: standard" in managed_objective
 
 
 def test_managed_api_defaults_execution_profile_to_qwen_primary() -> None:
@@ -984,6 +1088,343 @@ def test_managed_execution_metadata_survives_gui_restart_without_leaking_to_anot
     assert unrelated["objective"] == "A different task"
 
 
+def test_managed_conversation_follows_explicit_continuation_lineage_across_restart(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    runs = tmp_path / "runs"
+    original_run = runs / "original-run"
+    continued_run = runs / "continued-run"
+    original_run.mkdir(parents=True)
+    continued_run.mkdir()
+
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {
+            "id": original_run.name,
+            "status": "working",
+            "summary": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": original_run.name,
+                        "run_dir": str(original_run),
+                    }
+                }
+            },
+        },
+        {
+            "objective": "Complete the supervised task",
+            "route": "mode1",
+            "effort": "quick",
+        },
+    )
+    session.record(started)
+    assert session.append_user_message(started, "Use the GUI value.", action="nudge") == 1
+    session.mark_message_delivery(1, "delivered")
+
+    (continued_run / "ticket.json").write_text(
+        json.dumps({"continued_from_run": str(original_run)}),
+        encoding="utf-8",
+    )
+    continued_task = {
+        "id": continued_run.name,
+        "status": "needs_review",
+        "summary": "ready for review",
+        "metadata": {},
+        "advanced_details": {
+            "payload": {
+                "active_goal": {
+                    "id": continued_run.name,
+                    "run_dir": str(continued_run),
+                }
+            }
+        },
+    }
+    continued = session.record(continued_task)
+
+    assert continued["objective"] == "Complete the supervised task"
+    assert continued["metadata"]["conversation"][0]["text"] == "Use the GUI value."
+    assert session.append_user_message(
+        continued,
+        "Add the evidence path.",
+        action="continue",
+    ) == 2
+
+    restarted = GuiSession(state_path)
+    refreshed = restarted.record(continued_task)
+
+    assert [row["revision"] for row in refreshed["metadata"]["conversation"]] == [1, 2]
+    assert refreshed["metadata"]["conversation"][0]["delivery"] == "delivered"
+
+
+def test_managed_conversation_does_not_follow_unlinked_sibling_run(tmp_path: Path) -> None:
+    state_path = tmp_path / "gui-session.json"
+    runs = tmp_path / "runs"
+    original_run = runs / "original-run"
+    unrelated_run = runs / "unrelated-run"
+    original_run.mkdir(parents=True)
+    unrelated_run.mkdir()
+    (unrelated_run / "ticket.json").write_text("{}", encoding="utf-8")
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {
+            "id": original_run.name,
+            "status": "working",
+            "summary": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": original_run.name,
+                        "run_dir": str(original_run),
+                    }
+                }
+            },
+        },
+        {"objective": "Owned task", "route": "mode1", "effort": "quick"},
+    )
+    session.record(started)
+    session.append_user_message(started, "Do not leak this.", action="nudge")
+
+    unrelated = session.record(
+        {
+            "id": unrelated_run.name,
+            "status": "working",
+            "objective": "Different task",
+            "summary": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": unrelated_run.name,
+                        "run_dir": str(unrelated_run),
+                    }
+                }
+            },
+        }
+    )
+
+    assert unrelated["objective"] == "Different task"
+    assert "conversation" not in unrelated["metadata"]
+
+
+def test_managed_conversation_waits_for_continuation_ticket_startup_race(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    runs = tmp_path / "runs"
+    original_run = runs / "original-run"
+    continued_run = runs / "continued-run"
+    original_run.mkdir(parents=True)
+    continued_run.mkdir()
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {
+            "id": original_run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": original_run.name,
+                        "run_dir": str(original_run),
+                    }
+                }
+            },
+        },
+        {"objective": "Owned task", "route": "mode1", "effort": "quick"},
+    )
+    session.record(started)
+    session.append_user_message(started, "Keep this guidance.", action="nudge")
+
+    continued_task = {
+        "id": continued_run.name,
+        "status": "working",
+        "objective": "Transient backend title",
+        "metadata": {},
+        "advanced_details": {
+            "payload": {
+                "active_goal": {
+                    "id": continued_run.name,
+                    "run_dir": str(continued_run),
+                }
+            }
+        },
+    }
+    pending = session.record(continued_task)
+
+    assert pending["objective"] == "Transient backend title"
+    assert "conversation" not in pending["metadata"]
+
+    (continued_run / "ticket.json").write_text(
+        json.dumps({"continued_from_run": str(original_run)}),
+        encoding="utf-8",
+    )
+    linked = session.record(continued_task)
+
+    assert linked["objective"] == "Owned task"
+    assert linked["metadata"]["conversation"][0]["text"] == "Keep this guidance."
+
+def test_managed_conversation_survives_ready_gap_before_continuation(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    runs = tmp_path / "runs"
+    original_run = runs / "original-run"
+    continued_run = runs / "continued-run"
+    stale_completed_run = runs / "stale-completed-run"
+    original_run.mkdir(parents=True)
+    continued_run.mkdir()
+    stale_completed_run.mkdir()
+    (stale_completed_run / "ticket.json").write_text("{}", encoding="utf-8")
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {
+            "id": original_run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": original_run.name,
+                        "run_dir": str(original_run),
+                    }
+                }
+            },
+        },
+        {"objective": "Owned task", "route": "mode1", "effort": "quick"},
+    )
+    session.record(started)
+    session.append_user_message(started, "Keep this guidance.", action="nudge")
+    session.expect_continuation(started)
+
+    session.record({"status": "ready", "metadata": {}})
+    session.record(
+        {
+            "id": stale_completed_run.name,
+            "status": "done",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": stale_completed_run.name,
+                        "run_dir": str(stale_completed_run),
+                    }
+                }
+            },
+        }
+    )
+    restarted = GuiSession(state_path)
+    restarted.record({"status": "ready", "metadata": {}})
+    (continued_run / "ticket.json").write_text(
+        json.dumps({"continued_from_run": str(original_run)}),
+        encoding="utf-8",
+    )
+    linked = restarted.record(
+        {
+            "id": continued_run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": continued_run.name,
+                        "run_dir": str(continued_run),
+                    }
+                }
+            },
+        }
+    )
+
+    assert linked["objective"] == "Owned task"
+    assert linked["metadata"]["conversation"][0]["text"] == "Keep this guidance."
+
+    parent_snapshot = restarted.record(started)
+    linked_again = restarted.record(
+        {
+            "id": continued_run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": continued_run.name,
+                        "run_dir": str(continued_run),
+                    }
+                }
+            },
+        }
+    )
+
+    assert parent_snapshot["metadata"]["conversation"][0]["text"] == "Keep this guidance."
+    assert linked_again["metadata"]["conversation"][0]["text"] == "Keep this guidance."
+
+    feedback = restarted.continuation_feedback("Run the check again.")
+    assert "Revision 1: Keep this guidance." in feedback
+    assert feedback.endswith("Continuation feedback:\n\nRun the check again.")
+
+
+def test_managed_conversation_follows_parallel_sibling_continuation_after_restart(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    runs = tmp_path / "runs"
+    original_run = runs / "original-run"
+    first_continuation = runs / "first-continuation"
+    sibling_continuation = runs / "sibling-continuation"
+    for run in (original_run, first_continuation, sibling_continuation):
+        run.mkdir(parents=True, exist_ok=True)
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {
+            "id": original_run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": original_run.name,
+                        "run_dir": str(original_run),
+                    }
+                }
+            },
+        },
+        {"objective": "Owned task", "route": "mode1", "effort": "quick"},
+    )
+    session.record(started)
+    session.append_user_message(started, "Keep this guidance.", action="nudge")
+
+    def task_for(run: Path) -> dict[str, object]:
+        return {
+            "id": run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {"id": run.name, "run_dir": str(run)}
+                }
+            },
+        }
+
+    for run in (first_continuation, sibling_continuation):
+        (run / "ticket.json").write_text(
+            json.dumps({"continued_from_run": str(original_run)}),
+            encoding="utf-8",
+        )
+
+    first = session.record(task_for(first_continuation))
+    assert first["metadata"]["conversation"][0]["revision"] == 1
+
+    restarted = GuiSession(state_path)
+    sibling = restarted.record(task_for(sibling_continuation))
+
+    assert sibling["objective"] == "Owned task"
+    assert sibling["metadata"]["conversation"][0]["text"] == "Keep this guidance."
+    assert restarted.append_user_message(sibling, "Second message.", action="nudge") == 2
+
+
 def test_started_goal_needing_profile_reconciliation_keeps_its_labels_after_restart(
     tmp_path: Path,
 ) -> None:
@@ -1071,18 +1512,22 @@ def test_transient_failed_start_cannot_claim_an_observed_run() -> None:
     assert "route_key" not in observed["metadata"]
 
 
-def test_managed_session_uses_project_state_root_not_wrapper_doc_root(
+def test_managed_session_uses_operator_state_root_not_worker_workspace(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     project = tmp_path / "project"
-    wrapper_docs = tmp_path / "wrapper-docs"
+    state_home = tmp_path / "operator-state"
     monkeypatch.delenv("AGENTIC_HARNESS_GUI_SESSION_PATH", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
 
     state_path = _managed_session_path(project)
 
-    assert state_path == project.resolve() / ".agentic-harness" / "gui-session.v1.json"
-    assert wrapper_docs not in state_path.parents
+    assert state_path is not None
+    assert state_path.parent == state_home / "agentic-harness" / "gui-sessions"
+    assert state_path.suffix == ".json"
+    assert project.resolve() not in state_path.parents
+    assert state_path != project.resolve() / ".agentic-harness" / "gui-session.v1.json"
 
 
 def test_identityless_start_is_not_rebound_after_restart(tmp_path: Path) -> None:

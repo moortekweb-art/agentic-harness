@@ -48,6 +48,7 @@ from agentic_harness.gui.api import (
 
 MAX_REQUEST_BYTES = 1_048_576
 MAX_CONVERSATION_BYTES = 64 * 1024
+MAX_CONTINUATION_TICKET_BYTES = 128 * 1024
 STREAM_MONITOR_INTERVAL_SECONDS = 8.0
 GUI_SESSION_PATH_ENV = "AGENTIC_HARNESS_GUI_SESSION_PATH"
 SECURITY_HEADERS = {
@@ -482,7 +483,22 @@ def make_handler(
                 if active is not None:
                     self._json(active.continue_task(str(body.get("feedback") or "")))
                 else:
-                    task = command_task(bridge, "continue", body)
+                    current = session.record(status_task(bridge))
+                    try:
+                        session.expect_continuation(current)
+                    except GuiSecurityError as exc:
+                        self._json(
+                            {"ok": False, "error": str(exc)},
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
+                    continuation_body = dict(body)
+                    continuation_body["feedback"] = session.continuation_feedback(
+                        str(body.get("feedback") or "")
+                    )
+                    task = command_task(bridge, "continue", continuation_body)
+                    if str(task.get("status") or "") == "blocked":
+                        session.cancel_continuation()
                     task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/message":
@@ -917,6 +933,8 @@ class GuiSession:
         self._active_objective = ""
         self._active_metadata: dict[str, Any] = {}
         self._active_identity = _empty_identity()
+        self._active_lineage: list[dict[str, str]] = []
+        self._continuation_pending = False
         self._state_path = Path(state_path).expanduser() if state_path else None
         self._lock = RLock()
         self._last_serialized = ""
@@ -958,6 +976,7 @@ class GuiSession:
                 self._active_metadata = _safe_metadata(metadata)
                 identity = _task_identity(task)
                 self._active_identity = identity
+                self._active_lineage = [identity] if _has_identity(identity) else []
                 if not _has_identity(identity) and self._state_path is not None:
                     self._active_durability_warning = (
                         "The task started without a durable run id. Its labels will remain "
@@ -972,7 +991,12 @@ class GuiSession:
     def _reconcile_active_objective(self, task: dict[str, Any]) -> dict[str, Any]:
         task = dict(task)
         identity = _task_identity(task)
-        if str(task.get("status", "")) == "ready" and not _has_identity(identity):
+        status = str(task.get("status", ""))
+        if self._continuation_pending and status in {"ready", "done"}:
+            return task
+        if status == "ready" and not _has_identity(identity):
+            if self._continuation_pending:
+                return task
             self._clear_active()
             return task
         if not self._active_objective and not self._active_metadata:
@@ -981,13 +1005,37 @@ class GuiSession:
             if not _has_identity(identity):
                 return task
             if not _identities_match(self._active_identity, identity):
-                self._clear_active()
-                return task
+                known_lineage = [self._active_identity, *self._active_lineage]
+                identity_is_known = any(
+                    _identities_match(candidate, identity) for candidate in known_lineage
+                )
+                if identity_is_known:
+                    self._active_identity = identity
+                else:
+                    lineage_state, parent_identity = _continuation_parent_identity(identity)
+                    if lineage_state == "pending":
+                        return task
+                    parent_is_known = any(
+                        _identities_match(candidate, parent_identity)
+                        for candidate in known_lineage
+                    )
+                    if lineage_state == "linked" and parent_is_known:
+                        self._active_identity = identity
+                        self._continuation_pending = False
+                        if not any(
+                            _identities_match(candidate, identity)
+                            for candidate in self._active_lineage
+                        ):
+                            self._active_lineage.append(identity)
+                    else:
+                        self._clear_active()
+                        return task
         elif _has_identity(identity):
             # This binding is permitted only for an identityless start still
             # held in this process. Identityless active state is never loaded
             # from disk, so a restart cannot attach it to unrelated work.
             self._active_identity = identity
+            self._active_lineage = [identity]
             self._active_durability_warning = ""
         if self._active_objective:
             task["objective"] = self._active_objective
@@ -1019,6 +1067,8 @@ class GuiSession:
         self._active_objective = ""
         self._active_metadata = {}
         self._active_identity = _empty_identity()
+        self._active_lineage = []
+        self._continuation_pending = False
         self._active_durability_warning = ""
 
     def record(self, task: dict[str, Any]) -> dict[str, Any]:
@@ -1083,8 +1133,31 @@ class GuiSession:
                 }
             )
             self._active_metadata["conversation"] = conversation[-100:]
+            if action == "continue":
+                self._continuation_pending = True
             self._save_locked()
             return revision
+
+    def expect_continuation(self, task: dict[str, Any]) -> None:
+        """Hold GUI ownership across the managed backend's ready-before-start gap."""
+        with self._lock:
+            task = self._reconcile_active_objective(task)
+            identity = _task_identity(task)
+            if not _has_identity(self._active_identity):
+                return
+            if not _has_identity(identity) or not _identities_match(
+                self._active_identity, identity
+            ):
+                raise GuiSecurityError(
+                    "The active run identity changed; refresh before continuing."
+                )
+            self._continuation_pending = True
+            self._save_locked()
+
+    def cancel_continuation(self) -> None:
+        with self._lock:
+            self._continuation_pending = False
+            self._save_locked()
 
     def controlling_guidance(self) -> str:
         """Return the complete revision history so a newer nudge cannot erase an older one."""
@@ -1101,6 +1174,25 @@ class GuiSession:
             )
             return "\n\n".join(lines)
 
+    def continuation_feedback(self, feedback: str) -> str:
+        """Carry every GUI revision into an explicit managed continuation."""
+        with self._lock:
+            messages = self._conversation_locked()
+            if not messages:
+                return feedback
+            lines = [
+                "Supervised GUI guidance retained from the exact continuation lineage. "
+                "Later revisions control when instructions conflict."
+            ]
+            lines.extend(
+                f"Revision {row['revision']}: {row['text']}"
+                for row in messages
+                if row.get("role") == "user"
+            )
+            if feedback:
+                lines.extend(["Continuation feedback:", feedback])
+            return "\n\n".join(lines)
+
     def mark_message_delivery(self, revision: int, delivery: str) -> None:
         with self._lock:
             conversation = self._conversation_locked()
@@ -1109,6 +1201,8 @@ class GuiSession:
                     row["delivery"] = delivery
                     break
             self._active_metadata["conversation"] = conversation
+            if delivery == "failed":
+                self._continuation_pending = False
             self._save_locked()
 
     def _conversation_locked(self) -> list[dict[str, Any]]:
@@ -1208,6 +1302,8 @@ class GuiSession:
             "active_identity": (
                 self._active_identity if _has_identity(self._active_identity) else None
             ),
+            "active_lineage": self._active_lineage[-MAX_GUI_HISTORY:],
+            "continuation_pending": self._continuation_pending,
             "records": records[:MAX_GUI_HISTORY],
         }
 
@@ -1253,12 +1349,26 @@ class GuiSession:
                 }
             )
         active_identity = _identity_from_value(payload.get("active_identity"))
+        lineage_value = payload.get("active_lineage")
+        loaded_lineage = (
+            [
+                identity
+                for value in lineage_value[-MAX_GUI_HISTORY:]
+                if _has_identity(identity := _identity_from_value(value))
+            ]
+            if isinstance(lineage_value, list)
+            else []
+        )
         if _has_identity(active_identity):
             for record in normalized_records:
                 if _identities_match(active_identity, record["identity"]):
                     self._active_identity = active_identity
+                    self._active_lineage = loaded_lineage or [active_identity]
                     self._active_objective = str(record.get("objective") or "")
                     self._active_metadata = _safe_metadata(record.get("metadata"))
+                    self._continuation_pending = bool(
+                        payload.get("continuation_pending")
+                    )
                     break
         self._next_id = len(self._history) + 1
         self._last_serialized = json.dumps(
@@ -1301,7 +1411,15 @@ def _managed_session_path(project_dir: str | Path | None) -> Path | None:
         return Path(value).expanduser()
     if project_dir is None:
         return None
-    return Path(project_dir).expanduser().resolve() / ".agentic-harness" / "gui-session.v1.json"
+    project = Path(project_dir).expanduser().resolve()
+    state_home = os.environ.get("XDG_STATE_HOME", "").strip()
+    state_root = (
+        Path(state_home).expanduser()
+        if state_home
+        else Path.home() / ".local" / "state"
+    )
+    project_key = hashlib.sha256(str(project).encode("utf-8")).hexdigest()[:24]
+    return state_root / "agentic-harness" / "gui-sessions" / f"{project_key}.json"
 
 
 def _read_session_state(path: Path) -> str | None:
@@ -1610,6 +1728,82 @@ def _identities_match(left: dict[str, str], right: dict[str, str]) -> bool:
     left_id = left.get("run_id", "")
     right_id = right.get("run_id", "")
     return bool(left_id and right_id and left_id == right_id)
+
+
+def _continuation_parent_identity(identity: dict[str, str]) -> tuple[str, dict[str, str]]:
+    """Classify and return the filesystem-bound parent of a continuation run.
+
+    Managed continuation runs receive a new run id. GUI-owned conversation may
+    follow that transition only when the harness-owned ticket in the new run
+    explicitly names the previous sibling run. Lexical or parent symlinks,
+    oversized tickets, and cross-directory links fail closed. A missing or
+    partially written ticket is pending so a startup race cannot erase state.
+    """
+
+    run_dir = str(identity.get("run_dir") or "").strip().rstrip("/")
+    if not run_dir:
+        return "unlinked", _empty_identity()
+    current = Path(run_dir)
+    if not current.is_absolute():
+        return "unlinked", _empty_identity()
+    ticket = current / "ticket.json"
+    descriptor = -1
+    try:
+        resolved_current = current.resolve(strict=True)
+        if resolved_current != current or not resolved_current.is_dir():
+            return "unlinked", _empty_identity()
+        try:
+            ticket_stat = os.lstat(ticket)
+        except OSError:
+            return "pending", _empty_identity()
+        if _path_is_link_like(ticket, ticket_stat) or not stat.S_ISREG(ticket_stat.st_mode):
+            return "unlinked", _empty_identity()
+        if ticket_stat.st_size > MAX_CONTINUATION_TICKET_BYTES:
+            return "unlinked", _empty_identity()
+        descriptor = os.open(
+            ticket,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        observed = os.fstat(descriptor)
+        if (ticket_stat.st_dev, ticket_stat.st_ino) != (observed.st_dev, observed.st_ino):
+            return "pending", _empty_identity()
+        if not stat.S_ISREG(observed.st_mode):
+            return "unlinked", _empty_identity()
+        raw = os.read(descriptor, MAX_CONTINUATION_TICKET_BYTES + 1)
+        if len(raw) > MAX_CONTINUATION_TICKET_BYTES:
+            return "unlinked", _empty_identity()
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
+            return "unlinked", _empty_identity()
+        previous_value = str(payload.get("continued_from_run") or "").strip().rstrip("/")
+        if not previous_value:
+            return "unlinked", _empty_identity()
+        previous = Path(previous_value)
+        if not previous.is_absolute():
+            return "unlinked", _empty_identity()
+        resolved_previous = previous.resolve(strict=True)
+        if resolved_previous != previous or not resolved_previous.is_dir():
+            return "unlinked", _empty_identity()
+        if resolved_previous.parent != resolved_current.parent:
+            return "unlinked", _empty_identity()
+        if resolved_previous == resolved_current:
+            return "unlinked", _empty_identity()
+        return (
+            "linked",
+            {
+                "run_dir": str(resolved_previous),
+                "run_id": resolved_previous.name,
+            },
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return "pending", _empty_identity()
+    except (OSError, ValueError):
+        return "unlinked", _empty_identity()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _task_identity(task: dict[str, Any]) -> dict[str, str]:

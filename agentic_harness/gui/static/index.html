@@ -421,6 +421,20 @@
             <textarea id="safeAreas" rows="3" placeholder="Example: docs or src/components — one per line"></textarea>
           </details>
 
+          <section class="recovery-card" id="recoveryCard" aria-labelledby="recoveryTitle" hidden>
+            <div class="recovery-copy">
+              <p class="eyebrow">Action needed</p>
+              <h3 id="recoveryTitle">Current task needs your decision</h3>
+              <p id="recoverySummary">Choose what should happen to the current task before starting another one.</p>
+            </div>
+            <div class="recovery-actions">
+              <button type="button" class="secondary" id="recoveryContinueButton" hidden>Continue task</button>
+              <button type="button" class="secondary danger" id="recoveryStopButton" hidden>Stop task</button>
+              <button type="button" class="secondary" id="recoveryOpenTaskButton" hidden>Open current task</button>
+            </div>
+            <p class="recovery-status" id="recoveryStatus" role="status" aria-live="polite"></p>
+          </section>
+
           <div class="actions">
             <button class="primary" id="startButton" title="Start this verified task" disabled>
               <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>
