@@ -1275,8 +1275,11 @@ def test_managed_conversation_survives_ready_gap_before_continuation(
     runs = tmp_path / "runs"
     original_run = runs / "original-run"
     continued_run = runs / "continued-run"
+    stale_completed_run = runs / "stale-completed-run"
     original_run.mkdir(parents=True)
     continued_run.mkdir()
+    stale_completed_run.mkdir()
+    (stale_completed_run / "ticket.json").write_text("{}", encoding="utf-8")
     session = GuiSession(state_path)
     started = session.enrich(
         {
@@ -1299,6 +1302,21 @@ def test_managed_conversation_survives_ready_gap_before_continuation(
     session.expect_continuation(started)
 
     session.record({"status": "ready", "metadata": {}})
+    session.record(
+        {
+            "id": stale_completed_run.name,
+            "status": "done",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": stale_completed_run.name,
+                        "run_dir": str(stale_completed_run),
+                    }
+                }
+            },
+        }
+    )
     restarted = GuiSession(state_path)
     restarted.record({"status": "ready", "metadata": {}})
     (continued_run / "ticket.json").write_text(

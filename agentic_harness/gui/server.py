@@ -987,7 +987,10 @@ class GuiSession:
     def _reconcile_active_objective(self, task: dict[str, Any]) -> dict[str, Any]:
         task = dict(task)
         identity = _task_identity(task)
-        if str(task.get("status", "")) == "ready" and not _has_identity(identity):
+        status = str(task.get("status", ""))
+        if self._continuation_pending and status in {"ready", "done"}:
+            return task
+        if status == "ready" and not _has_identity(identity):
             if self._continuation_pending:
                 return task
             self._clear_active()
