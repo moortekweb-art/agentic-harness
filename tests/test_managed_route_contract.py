@@ -905,6 +905,12 @@ def test_standard_effort_defaults_to_mode1_instead_of_silently_selecting_mode2()
     assert len(bridge.starts) == 1
     assert bridge.starts[0]["mode_key"] == "mode1"
     assert bridge.starts[0].get("mode_key") != "mode2"
+    managed_objective = str(bridge.starts[0]["objective"])
+    assert managed_objective.startswith(
+        "Use the normal managed route with a balanced effort budget\n\n"
+        "Managed task request"
+    )
+    assert "Execution effort: standard" in managed_objective
 
 
 def test_managed_api_defaults_execution_profile_to_qwen_primary() -> None:

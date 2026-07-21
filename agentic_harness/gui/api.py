@@ -808,6 +808,8 @@ def _objective_with_effort(objective: str, effort: str) -> str:
     }
     return "\n".join(
         [
+            objective,
+            "",
             "Managed task request",
             "",
             "Original objective (preserve this exactly):",
