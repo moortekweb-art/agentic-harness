@@ -823,7 +823,16 @@ class TicketBoundRaceBridge(LocalGoalBridge):
         run = Path(self.doc_root) / "runs" / "observed-run"
         run.mkdir(parents=True)
         (run / "ticket.json").write_text(
-            json.dumps({"done_criteria": [self.ticket_objective]}),
+            json.dumps(
+                {
+                    "done_criteria": ["Managed task request"],
+                    "source_goal": (
+                        "Managed task request\n\n"
+                        "Original objective (preserve this exactly):\n"
+                        f"{self.ticket_objective}\n\nExecution effort: quick"
+                    ),
+                }
+            ),
             encoding="utf-8",
         )
         return CommandResult(

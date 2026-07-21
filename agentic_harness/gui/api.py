@@ -1219,7 +1219,14 @@ def _start_receipt_matches_objective(result: CommandResult, objective: str) -> b
             return False
         payload = json.loads(raw.decode("utf-8"))
         criteria = payload.get("done_criteria") if isinstance(payload, dict) else None
-        return isinstance(criteria, list) and objective in criteria
+        source_goal = str(payload.get("source_goal") or "") if isinstance(payload, dict) else ""
+        turnstone_marker = (
+            "Original objective (preserve this exactly):\n"
+            f"{objective}\n\nExecution effort:"
+        )
+        return (isinstance(criteria, list) and objective in criteria) or (
+            turnstone_marker in source_goal
+        )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return False
     finally:
