@@ -492,7 +492,11 @@ def make_handler(
                             status=HTTPStatus.CONFLICT,
                         )
                         return
-                    task = command_task(bridge, "continue", body)
+                    continuation_body = dict(body)
+                    continuation_body["feedback"] = session.continuation_feedback(
+                        str(body.get("feedback") or "")
+                    )
+                    task = command_task(bridge, "continue", continuation_body)
                     if str(task.get("status") or "") == "blocked":
                         session.cancel_continuation()
                     task = session.record(task)
@@ -1168,6 +1172,25 @@ class GuiSession:
                 for row in messages
                 if row.get("role") == "user"
             )
+            return "\n\n".join(lines)
+
+    def continuation_feedback(self, feedback: str) -> str:
+        """Carry every GUI revision into an explicit managed continuation."""
+        with self._lock:
+            messages = self._conversation_locked()
+            if not messages:
+                return feedback
+            lines = [
+                "Supervised GUI guidance retained from the exact continuation lineage. "
+                "Later revisions control when instructions conflict."
+            ]
+            lines.extend(
+                f"Revision {row['revision']}: {row['text']}"
+                for row in messages
+                if row.get("role") == "user"
+            )
+            if feedback:
+                lines.extend(["Continuation feedback:", feedback])
             return "\n\n".join(lines)
 
     def mark_message_delivery(self, revision: int, delivery: str) -> None:

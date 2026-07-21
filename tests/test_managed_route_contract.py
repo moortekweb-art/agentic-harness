@@ -1361,6 +1361,10 @@ def test_managed_conversation_survives_ready_gap_before_continuation(
     assert parent_snapshot["metadata"]["conversation"][0]["text"] == "Keep this guidance."
     assert linked_again["metadata"]["conversation"][0]["text"] == "Keep this guidance."
 
+    feedback = restarted.continuation_feedback("Run the check again.")
+    assert "Revision 1: Keep this guidance." in feedback
+    assert feedback.endswith("Continuation feedback:\n\nRun the check again.")
+
 
 def test_managed_conversation_follows_parallel_sibling_continuation_after_restart(
     tmp_path: Path,
