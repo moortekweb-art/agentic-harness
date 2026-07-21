@@ -918,6 +918,7 @@ class GuiSession:
         self._active_objective = ""
         self._active_metadata: dict[str, Any] = {}
         self._active_identity = _empty_identity()
+        self._active_lineage: list[dict[str, str]] = []
         self._state_path = Path(state_path).expanduser() if state_path else None
         self._lock = RLock()
         self._last_serialized = ""
@@ -959,6 +960,7 @@ class GuiSession:
                 self._active_metadata = _safe_metadata(metadata)
                 identity = _task_identity(task)
                 self._active_identity = identity
+                self._active_lineage = [identity] if _has_identity(identity) else []
                 if not _has_identity(identity) and self._state_path is not None:
                     self._active_durability_warning = (
                         "The task started without a durable run id. Its labels will remain "
@@ -985,10 +987,18 @@ class GuiSession:
                 lineage_state, parent_identity = _continuation_parent_identity(identity)
                 if lineage_state == "pending":
                     return task
-                if lineage_state == "linked" and _identities_match(
-                    self._active_identity, parent_identity
-                ):
+                known_lineage = [self._active_identity, *self._active_lineage]
+                parent_is_known = any(
+                    _identities_match(candidate, parent_identity)
+                    for candidate in known_lineage
+                )
+                if lineage_state == "linked" and parent_is_known:
                     self._active_identity = identity
+                    if not any(
+                        _identities_match(candidate, identity)
+                        for candidate in self._active_lineage
+                    ):
+                        self._active_lineage.append(identity)
                 else:
                     self._clear_active()
                     return task
@@ -997,6 +1007,7 @@ class GuiSession:
             # held in this process. Identityless active state is never loaded
             # from disk, so a restart cannot attach it to unrelated work.
             self._active_identity = identity
+            self._active_lineage = [identity]
             self._active_durability_warning = ""
         if self._active_objective:
             task["objective"] = self._active_objective
@@ -1028,6 +1039,7 @@ class GuiSession:
         self._active_objective = ""
         self._active_metadata = {}
         self._active_identity = _empty_identity()
+        self._active_lineage = []
         self._active_durability_warning = ""
 
     def record(self, task: dict[str, Any]) -> dict[str, Any]:
@@ -1217,6 +1229,7 @@ class GuiSession:
             "active_identity": (
                 self._active_identity if _has_identity(self._active_identity) else None
             ),
+            "active_lineage": self._active_lineage[-MAX_GUI_HISTORY:],
             "records": records[:MAX_GUI_HISTORY],
         }
 
@@ -1262,10 +1275,21 @@ class GuiSession:
                 }
             )
         active_identity = _identity_from_value(payload.get("active_identity"))
+        lineage_value = payload.get("active_lineage")
+        loaded_lineage = (
+            [
+                identity
+                for value in lineage_value[-MAX_GUI_HISTORY:]
+                if _has_identity(identity := _identity_from_value(value))
+            ]
+            if isinstance(lineage_value, list)
+            else []
+        )
         if _has_identity(active_identity):
             for record in normalized_records:
                 if _identities_match(active_identity, record["identity"]):
                     self._active_identity = active_identity
+                    self._active_lineage = loaded_lineage or [active_identity]
                     self._active_objective = str(record.get("objective") or "")
                     self._active_metadata = _safe_metadata(record.get("metadata"))
                     break

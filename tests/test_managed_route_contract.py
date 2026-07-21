@@ -1164,6 +1164,65 @@ def test_managed_conversation_waits_for_continuation_ticket_startup_race(
     assert linked["metadata"]["conversation"][0]["text"] == "Keep this guidance."
 
 
+def test_managed_conversation_follows_parallel_sibling_continuation_after_restart(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    runs = tmp_path / "runs"
+    original_run = runs / "original-run"
+    first_continuation = runs / "first-continuation"
+    sibling_continuation = runs / "sibling-continuation"
+    for run in (original_run, first_continuation, sibling_continuation):
+        run.mkdir(parents=True, exist_ok=True)
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {
+            "id": original_run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": original_run.name,
+                        "run_dir": str(original_run),
+                    }
+                }
+            },
+        },
+        {"objective": "Owned task", "route": "mode1", "effort": "quick"},
+    )
+    session.record(started)
+    session.append_user_message(started, "Keep this guidance.", action="nudge")
+
+    def task_for(run: Path) -> dict[str, object]:
+        return {
+            "id": run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {"id": run.name, "run_dir": str(run)}
+                }
+            },
+        }
+
+    for run in (first_continuation, sibling_continuation):
+        (run / "ticket.json").write_text(
+            json.dumps({"continued_from_run": str(original_run)}),
+            encoding="utf-8",
+        )
+
+    first = session.record(task_for(first_continuation))
+    assert first["metadata"]["conversation"][0]["revision"] == 1
+
+    restarted = GuiSession(state_path)
+    sibling = restarted.record(task_for(sibling_continuation))
+
+    assert sibling["objective"] == "Owned task"
+    assert sibling["metadata"]["conversation"][0]["text"] == "Keep this guidance."
+    assert restarted.append_user_message(sibling, "Second message.", action="nudge") == 2
+
+
 def test_started_goal_needing_profile_reconciliation_keeps_its_labels_after_restart(
     tmp_path: Path,
 ) -> None:
