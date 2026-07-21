@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from datetime import UTC, datetime
 from inspect import Parameter, signature
 from pathlib import Path
@@ -35,6 +37,7 @@ _TECHNICAL_SUMMARY_TERMS = (
     "run_dir",
 )
 _PERMANENT_COMMAND_FAILURES = frozenset({2, 126, 127})
+_MAX_START_TICKET_BYTES = 128 * 1024
 
 
 _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
@@ -1139,8 +1142,30 @@ def start_task(
             needs_human=True,
             advanced_details={"error": str(exc)},
         )
+    task = task_from_command_result(result, fallback_status="starting")
+    if (
+        route == "mode1"
+        and result.returncode == 0
+        and isinstance(bridge, LocalGoalBridge)
+        and not _start_receipt_matches_objective(result, objective)
+    ):
+        task = _task(
+            status="blocked",
+            summary=(
+                "Your task was not started because another task acquired the local lane first. "
+                "No guidance or labels were attached to that other task. Refresh and try again "
+                "after it finishes."
+            ),
+            needs_human=True,
+            advanced_details={
+                "args": result.args,
+                "returncode": result.returncode,
+                "error": "start_identity_mismatch",
+                "observed_run_dir": _started_run_dir(result),
+            },
+        )
     return _annotate_requested_execution(
-        task_from_command_result(result, fallback_status="starting"),
+        task,
         objective=objective,
         route=route,
         effort=effort,
@@ -1148,6 +1173,58 @@ def start_task(
         safe_areas=safe_areas,
         checks=checks,
     )
+
+
+def _started_run_dir(result: CommandResult) -> str:
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "run_dir" and value.strip():
+            return value.strip().rstrip("/")
+    return ""
+
+
+def _start_receipt_matches_objective(result: CommandResult, objective: str) -> bool:
+    """Bind a successful Mode 1 start only to its exact harness-owned ticket."""
+
+    run_dir = _started_run_dir(result)
+    if not run_dir:
+        return False
+    current = Path(run_dir)
+    if not current.is_absolute():
+        return False
+    descriptor = -1
+    try:
+        resolved_current = current.resolve(strict=True)
+        if resolved_current != current or not resolved_current.is_dir():
+            return False
+        ticket = resolved_current / "ticket.json"
+        ticket_stat = os.lstat(ticket)
+        if stat.S_ISLNK(ticket_stat.st_mode) or not stat.S_ISREG(ticket_stat.st_mode):
+            return False
+        if ticket_stat.st_size > _MAX_START_TICKET_BYTES:
+            return False
+        descriptor = os.open(
+            ticket,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        observed = os.fstat(descriptor)
+        if (ticket_stat.st_dev, ticket_stat.st_ino) != (observed.st_dev, observed.st_ino):
+            return False
+        if not stat.S_ISREG(observed.st_mode):
+            return False
+        raw = os.read(descriptor, _MAX_START_TICKET_BYTES + 1)
+        if len(raw) > _MAX_START_TICKET_BYTES:
+            return False
+        payload = json.loads(raw.decode("utf-8"))
+        criteria = payload.get("done_criteria") if isinstance(payload, dict) else None
+        return isinstance(criteria, list) and objective in criteria
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return False
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def status_task(bridge: LocalGoalBridge) -> TaskPayload:

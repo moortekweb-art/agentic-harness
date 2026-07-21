@@ -30,6 +30,10 @@ Version 0.13.2 is a security and crash-consistency update for Verified Best-of-N
   managed continuation only when its bounded, no-follow ticket explicitly
   names the prior sibling run; unrelated runs fail closed without inheriting
   task guidance.
+- Binds a successful local GUI start to the exact harness ticket and requested
+  completion criterion. If another client wins the local-lane race, the GUI
+  rejects the start instead of attaching the pending objective or guidance to
+  that other task.
 
 ## Compatibility
 

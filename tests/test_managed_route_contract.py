@@ -778,6 +778,95 @@ class ReadyCaptureBridge:
         )
 
 
+class TicketBoundRaceBridge(LocalGoalBridge):
+    def __init__(self, root: Path, *, ticket_objective: str) -> None:
+        local_goal = root / "local-goal"
+        local_goal.write_text("#!/bin/sh\n", encoding="utf-8")
+        local_goal.chmod(0o700)
+        super().__init__(doc_root=root, local_goal=local_goal)
+        self.ticket_objective = ticket_objective
+
+    def available(self) -> bool:
+        return True
+
+    def background_supervision(self) -> dict[str, object]:
+        return {"active": True, "state": "active", "timer_active": True}
+
+    def status(self, *, json_output: bool = False) -> CommandResult:
+        return CommandResult(
+            ("local-goal", "status", "--json"),
+            0,
+            json.dumps(
+                {
+                    "classification": "idle",
+                    "active_goal": None,
+                    "capabilities": {
+                        "current_state": {
+                            "classification": "idle",
+                            "local_goal_lane_free": True,
+                        }
+                    },
+                }
+            ),
+            "",
+        )
+
+    def model_profile_status(self) -> CommandResult:
+        return CommandResult(
+            ("local-goal", "model-profile-status", "--json"),
+            0,
+            _profile_status("qwen-primary"),
+            "",
+        )
+
+    def start_human_goal(self, **kwargs: object) -> CommandResult:
+        run = Path(self.doc_root) / "runs" / "observed-run"
+        run.mkdir(parents=True)
+        (run / "ticket.json").write_text(
+            json.dumps({"done_criteria": [self.ticket_objective]}),
+            encoding="utf-8",
+        )
+        return CommandResult(
+            ("local-goal", "quick-start"),
+            0,
+            f"run_dir={run}\nstarted local-node1-goal\n",
+            "",
+        )
+
+
+def test_managed_start_refuses_to_bind_another_tasks_run(tmp_path: Path) -> None:
+    body = {
+        "route": "mode1",
+        "effort": "quick",
+        "objective": "Create my exact canary",
+    }
+    task = gui_api.start_task(
+        TicketBoundRaceBridge(tmp_path, ticket_objective="Read an unrelated README"),
+        body,
+    )
+    enriched = GuiSession().enrich(task, body)
+
+    assert task["status"] == "blocked"
+    assert task["advanced_details"]["error"] == "start_identity_mismatch"
+    assert enriched["metadata"]["start_accepted"] is False
+
+
+def test_managed_start_binds_matching_harness_ticket(tmp_path: Path) -> None:
+    body = {
+        "route": "mode1",
+        "effort": "quick",
+        "objective": "Create my exact canary",
+    }
+    task = gui_api.start_task(
+        TicketBoundRaceBridge(tmp_path, ticket_objective=body["objective"]),
+        body,
+    )
+    enriched = GuiSession().enrich(task, body)
+
+    assert task["status"] == "starting"
+    assert enriched["metadata"]["start_accepted"] is True
+
+
 def test_managed_modes_endpoint_exposes_only_proven_local_profiles() -> None:
     with _api_server(ReadyCaptureBridge()) as base_url:
         payload = _get_json(base_url, "/api/modes")
