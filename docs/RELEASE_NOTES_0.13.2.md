@@ -36,7 +36,9 @@ Version 0.13.2 is a security and crash-consistency update for Verified Best-of-N
   that other task.
 - Forwards every Mode 1 completion check to `quick-start` as a preregistered
   verification command, so the independent reviewer receives the same frozen
-  checks the user configured in the GUI.
+  checks the user configured in the GUI. The requested objective is also the
+  managed ticket title and done criterion, keeping evidence mapping bound to
+  the user's task instead of a generic placeholder.
 
 ## Compatibility
 

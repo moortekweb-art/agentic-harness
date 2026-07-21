@@ -274,6 +274,7 @@ def test_mode1_forwards_every_preregistered_verification_command(tmp_path) -> No
     )
 
     start = next(call for call in calls if "quick-start" in call)
+    assert start[start.index("--title") + 1] == "verified work"
     observed = [
         start[index + 1]
         for index, value in enumerate(start)

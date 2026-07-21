@@ -570,6 +570,8 @@ class LocalGoalBridge:
     ) -> CommandResult:
         args = [
             "quick-start",
+            "--title",
+            goal,
             "--executor",
             _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", executor),
             "--goal",
