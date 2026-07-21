@@ -483,7 +483,18 @@ def make_handler(
                 if active is not None:
                     self._json(active.continue_task(str(body.get("feedback") or "")))
                 else:
+                    current = session.record(status_task(bridge))
+                    try:
+                        session.expect_continuation(current)
+                    except GuiSecurityError as exc:
+                        self._json(
+                            {"ok": False, "error": str(exc)},
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
                     task = command_task(bridge, "continue", body)
+                    if str(task.get("status") or "") == "blocked":
+                        session.cancel_continuation()
                     task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/message":
@@ -919,6 +930,7 @@ class GuiSession:
         self._active_metadata: dict[str, Any] = {}
         self._active_identity = _empty_identity()
         self._active_lineage: list[dict[str, str]] = []
+        self._continuation_pending = False
         self._state_path = Path(state_path).expanduser() if state_path else None
         self._lock = RLock()
         self._last_serialized = ""
@@ -976,6 +988,8 @@ class GuiSession:
         task = dict(task)
         identity = _task_identity(task)
         if str(task.get("status", "")) == "ready" and not _has_identity(identity):
+            if self._continuation_pending:
+                return task
             self._clear_active()
             return task
         if not self._active_objective and not self._active_metadata:
@@ -994,6 +1008,7 @@ class GuiSession:
                 )
                 if lineage_state == "linked" and parent_is_known:
                     self._active_identity = identity
+                    self._continuation_pending = False
                     if not any(
                         _identities_match(candidate, identity)
                         for candidate in self._active_lineage
@@ -1040,6 +1055,7 @@ class GuiSession:
         self._active_metadata = {}
         self._active_identity = _empty_identity()
         self._active_lineage = []
+        self._continuation_pending = False
         self._active_durability_warning = ""
 
     def record(self, task: dict[str, Any]) -> dict[str, Any]:
@@ -1104,8 +1120,31 @@ class GuiSession:
                 }
             )
             self._active_metadata["conversation"] = conversation[-100:]
+            if action == "continue":
+                self._continuation_pending = True
             self._save_locked()
             return revision
+
+    def expect_continuation(self, task: dict[str, Any]) -> None:
+        """Hold GUI ownership across the managed backend's ready-before-start gap."""
+        with self._lock:
+            task = self._reconcile_active_objective(task)
+            identity = _task_identity(task)
+            if not _has_identity(self._active_identity):
+                return
+            if not _has_identity(identity) or not _identities_match(
+                self._active_identity, identity
+            ):
+                raise GuiSecurityError(
+                    "The active run identity changed; refresh before continuing."
+                )
+            self._continuation_pending = True
+            self._save_locked()
+
+    def cancel_continuation(self) -> None:
+        with self._lock:
+            self._continuation_pending = False
+            self._save_locked()
 
     def controlling_guidance(self) -> str:
         """Return the complete revision history so a newer nudge cannot erase an older one."""
@@ -1130,6 +1169,8 @@ class GuiSession:
                     row["delivery"] = delivery
                     break
             self._active_metadata["conversation"] = conversation
+            if delivery == "failed":
+                self._continuation_pending = False
             self._save_locked()
 
     def _conversation_locked(self) -> list[dict[str, Any]]:
@@ -1230,6 +1271,7 @@ class GuiSession:
                 self._active_identity if _has_identity(self._active_identity) else None
             ),
             "active_lineage": self._active_lineage[-MAX_GUI_HISTORY:],
+            "continuation_pending": self._continuation_pending,
             "records": records[:MAX_GUI_HISTORY],
         }
 
@@ -1292,6 +1334,9 @@ class GuiSession:
                     self._active_lineage = loaded_lineage or [active_identity]
                     self._active_objective = str(record.get("objective") or "")
                     self._active_metadata = _safe_metadata(record.get("metadata"))
+                    self._continuation_pending = bool(
+                        payload.get("continuation_pending")
+                    )
                     break
         self._next_id = len(self._history) + 1
         self._last_serialized = json.dumps(

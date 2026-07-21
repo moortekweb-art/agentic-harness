@@ -1268,6 +1268,63 @@ def test_managed_conversation_waits_for_continuation_ticket_startup_race(
     assert linked["metadata"]["conversation"][0]["text"] == "Keep this guidance."
 
 
+def test_managed_conversation_survives_ready_gap_before_continuation(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    runs = tmp_path / "runs"
+    original_run = runs / "original-run"
+    continued_run = runs / "continued-run"
+    original_run.mkdir(parents=True)
+    continued_run.mkdir()
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {
+            "id": original_run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": original_run.name,
+                        "run_dir": str(original_run),
+                    }
+                }
+            },
+        },
+        {"objective": "Owned task", "route": "mode1", "effort": "quick"},
+    )
+    session.record(started)
+    session.append_user_message(started, "Keep this guidance.", action="nudge")
+    session.expect_continuation(started)
+
+    session.record({"status": "ready", "metadata": {}})
+    restarted = GuiSession(state_path)
+    restarted.record({"status": "ready", "metadata": {}})
+    (continued_run / "ticket.json").write_text(
+        json.dumps({"continued_from_run": str(original_run)}),
+        encoding="utf-8",
+    )
+    linked = restarted.record(
+        {
+            "id": continued_run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": continued_run.name,
+                        "run_dir": str(continued_run),
+                    }
+                }
+            },
+        }
+    )
+
+    assert linked["objective"] == "Owned task"
+    assert linked["metadata"]["conversation"][0]["text"] == "Keep this guidance."
+
+
 def test_managed_conversation_follows_parallel_sibling_continuation_after_restart(
     tmp_path: Path,
 ) -> None:
