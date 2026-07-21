@@ -1001,25 +1001,31 @@ class GuiSession:
             if not _has_identity(identity):
                 return task
             if not _identities_match(self._active_identity, identity):
-                lineage_state, parent_identity = _continuation_parent_identity(identity)
-                if lineage_state == "pending":
-                    return task
                 known_lineage = [self._active_identity, *self._active_lineage]
-                parent_is_known = any(
-                    _identities_match(candidate, parent_identity)
-                    for candidate in known_lineage
+                identity_is_known = any(
+                    _identities_match(candidate, identity) for candidate in known_lineage
                 )
-                if lineage_state == "linked" and parent_is_known:
+                if identity_is_known:
                     self._active_identity = identity
-                    self._continuation_pending = False
-                    if not any(
-                        _identities_match(candidate, identity)
-                        for candidate in self._active_lineage
-                    ):
-                        self._active_lineage.append(identity)
                 else:
-                    self._clear_active()
-                    return task
+                    lineage_state, parent_identity = _continuation_parent_identity(identity)
+                    if lineage_state == "pending":
+                        return task
+                    parent_is_known = any(
+                        _identities_match(candidate, parent_identity)
+                        for candidate in known_lineage
+                    )
+                    if lineage_state == "linked" and parent_is_known:
+                        self._active_identity = identity
+                        self._continuation_pending = False
+                        if not any(
+                            _identities_match(candidate, identity)
+                            for candidate in self._active_lineage
+                        ):
+                            self._active_lineage.append(identity)
+                    else:
+                        self._clear_active()
+                        return task
         elif _has_identity(identity):
             # This binding is permitted only for an identityless start still
             # held in this process. Identityless active state is never loaded

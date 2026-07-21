@@ -1267,7 +1267,6 @@ def test_managed_conversation_waits_for_continuation_ticket_startup_race(
     assert linked["objective"] == "Owned task"
     assert linked["metadata"]["conversation"][0]["text"] == "Keep this guidance."
 
-
 def test_managed_conversation_survives_ready_gap_before_continuation(
     tmp_path: Path,
 ) -> None:
@@ -1341,6 +1340,26 @@ def test_managed_conversation_survives_ready_gap_before_continuation(
 
     assert linked["objective"] == "Owned task"
     assert linked["metadata"]["conversation"][0]["text"] == "Keep this guidance."
+
+    parent_snapshot = restarted.record(started)
+    linked_again = restarted.record(
+        {
+            "id": continued_run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": continued_run.name,
+                        "run_dir": str(continued_run),
+                    }
+                }
+            },
+        }
+    )
+
+    assert parent_snapshot["metadata"]["conversation"][0]["text"] == "Keep this guidance."
+    assert linked_again["metadata"]["conversation"][0]["text"] == "Keep this guidance."
 
 
 def test_managed_conversation_follows_parallel_sibling_continuation_after_restart(
