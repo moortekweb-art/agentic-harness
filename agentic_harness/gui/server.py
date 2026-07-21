@@ -1388,7 +1388,15 @@ def _managed_session_path(project_dir: str | Path | None) -> Path | None:
         return Path(value).expanduser()
     if project_dir is None:
         return None
-    return Path(project_dir).expanduser().resolve() / ".agentic-harness" / "gui-session.v1.json"
+    project = Path(project_dir).expanduser().resolve()
+    state_home = os.environ.get("XDG_STATE_HOME", "").strip()
+    state_root = (
+        Path(state_home).expanduser()
+        if state_home
+        else Path.home() / ".local" / "state"
+    )
+    project_key = hashlib.sha256(str(project).encode("utf-8")).hexdigest()[:24]
+    return state_root / "agentic-harness" / "gui-sessions" / f"{project_key}.json"
 
 
 def _read_session_state(path: Path) -> str | None:

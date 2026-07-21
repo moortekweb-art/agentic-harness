@@ -1508,18 +1508,22 @@ def test_transient_failed_start_cannot_claim_an_observed_run() -> None:
     assert "route_key" not in observed["metadata"]
 
 
-def test_managed_session_uses_project_state_root_not_wrapper_doc_root(
+def test_managed_session_uses_operator_state_root_not_worker_workspace(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     project = tmp_path / "project"
-    wrapper_docs = tmp_path / "wrapper-docs"
+    state_home = tmp_path / "operator-state"
     monkeypatch.delenv("AGENTIC_HARNESS_GUI_SESSION_PATH", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
 
     state_path = _managed_session_path(project)
 
-    assert state_path == project.resolve() / ".agentic-harness" / "gui-session.v1.json"
-    assert wrapper_docs not in state_path.parents
+    assert state_path is not None
+    assert state_path.parent == state_home / "agentic-harness" / "gui-sessions"
+    assert state_path.suffix == ".json"
+    assert project.resolve() not in state_path.parents
+    assert state_path != project.resolve() / ".agentic-harness" / "gui-session.v1.json"
 
 
 def test_identityless_start_is_not_rebound_after_restart(tmp_path: Path) -> None:

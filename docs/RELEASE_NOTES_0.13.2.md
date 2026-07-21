@@ -39,6 +39,11 @@ Version 0.13.2 is a security and crash-consistency update for Verified Best-of-N
   checks the user configured in the GUI. The requested objective is also the
   managed ticket title and done criterion, keeping evidence mapping bound to
   the user's task instead of a generic placeholder.
+- Stores the managed GUI conversation and ownership ledger under the operator's
+  state directory (`XDG_STATE_HOME`, or `~/.local/state`) instead of inside the
+  worker-controlled project. Existing in-project GUI session metadata is not
+  imported automatically; set `AGENTIC_HARNESS_GUI_SESSION_PATH` explicitly
+  only when a legacy state file is trusted and migration is intentional.
 
 ## Compatibility
 
