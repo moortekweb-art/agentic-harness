@@ -1062,6 +1062,7 @@ def test_managed_conversation_does_not_follow_unlinked_sibling_run(tmp_path: Pat
     unrelated_run = runs / "unrelated-run"
     original_run.mkdir(parents=True)
     unrelated_run.mkdir()
+    (unrelated_run / "ticket.json").write_text("{}", encoding="utf-8")
     session = GuiSession(state_path)
     started = session.enrich(
         {
@@ -1103,6 +1104,64 @@ def test_managed_conversation_does_not_follow_unlinked_sibling_run(tmp_path: Pat
 
     assert unrelated["objective"] == "Different task"
     assert "conversation" not in unrelated["metadata"]
+
+
+def test_managed_conversation_waits_for_continuation_ticket_startup_race(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    runs = tmp_path / "runs"
+    original_run = runs / "original-run"
+    continued_run = runs / "continued-run"
+    original_run.mkdir(parents=True)
+    continued_run.mkdir()
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {
+            "id": original_run.name,
+            "status": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": original_run.name,
+                        "run_dir": str(original_run),
+                    }
+                }
+            },
+        },
+        {"objective": "Owned task", "route": "mode1", "effort": "quick"},
+    )
+    session.record(started)
+    session.append_user_message(started, "Keep this guidance.", action="nudge")
+
+    continued_task = {
+        "id": continued_run.name,
+        "status": "working",
+        "objective": "Transient backend title",
+        "metadata": {},
+        "advanced_details": {
+            "payload": {
+                "active_goal": {
+                    "id": continued_run.name,
+                    "run_dir": str(continued_run),
+                }
+            }
+        },
+    }
+    pending = session.record(continued_task)
+
+    assert pending["objective"] == "Transient backend title"
+    assert "conversation" not in pending["metadata"]
+
+    (continued_run / "ticket.json").write_text(
+        json.dumps({"continued_from_run": str(original_run)}),
+        encoding="utf-8",
+    )
+    linked = session.record(continued_task)
+
+    assert linked["objective"] == "Owned task"
+    assert linked["metadata"]["conversation"][0]["text"] == "Keep this guidance."
 
 
 def test_started_goal_needing_profile_reconciliation_keeps_its_labels_after_restart(
