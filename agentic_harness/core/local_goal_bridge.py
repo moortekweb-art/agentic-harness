@@ -405,7 +405,11 @@ class LocalGoalBridge:
         capabilities = self.capabilities()
         routing = _routing_defaults(capabilities)
         if route == "mode1":
-            result = self.start_local_goal(objective, executor=routing["executor"])
+            result = self.start_local_goal(
+                objective,
+                executor=routing["executor"],
+                verification=checks,
+            )
         elif route == "legacy-guided":
             result = self.start_guided_goal(
                 objective,
@@ -557,16 +561,23 @@ class LocalGoalBridge:
             self._monitor_cache = None
             self._monitor_cache_at = 0.0
 
-    def start_local_goal(self, goal: str, *, executor: str = "opencode") -> CommandResult:
-        return self.run(
-            [
-                "quick-start",
-                "--executor",
-                _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", executor),
-                "--goal",
-                goal,
-            ]
-        )
+    def start_local_goal(
+        self,
+        goal: str,
+        *,
+        executor: str = "opencode",
+        verification: tuple[str, ...] = (),
+    ) -> CommandResult:
+        args = [
+            "quick-start",
+            "--executor",
+            _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", executor),
+            "--goal",
+            goal,
+        ]
+        for command in verification:
+            args.extend(["--verification-command", command])
+        return self.run(args)
 
     def start_guided_goal(
         self,

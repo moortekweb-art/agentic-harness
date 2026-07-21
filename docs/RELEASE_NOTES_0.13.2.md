@@ -34,6 +34,9 @@ Version 0.13.2 is a security and crash-consistency update for Verified Best-of-N
   completion criterion. If another client wins the local-lane race, the GUI
   rejects the start instead of attaching the pending objective or guidance to
   that other task.
+- Forwards every Mode 1 completion check to `quick-start` as a preregistered
+  verification command, so the independent reviewer receives the same frozen
+  checks the user configured in the GUI.
 
 ## Compatibility
 
