@@ -26,7 +26,10 @@ Version 0.13.2 is a security and crash-consistency update for Verified Best-of-N
 - Keeps recovery scoped to the task. The browser does not receive authority to
   start or enable host background services.
 - Retains the supervised OpenCode conversation and independent verification
-  boundary while the user guides or resumes work.
+  boundary while the user guides or resumes work. Conversation state follows a
+  managed continuation only when its bounded, no-follow ticket explicitly
+  names the prior sibling run; unrelated runs fail closed without inheriting
+  task guidance.
 
 ## Compatibility
 

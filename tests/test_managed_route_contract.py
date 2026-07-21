@@ -984,6 +984,127 @@ def test_managed_execution_metadata_survives_gui_restart_without_leaking_to_anot
     assert unrelated["objective"] == "A different task"
 
 
+def test_managed_conversation_follows_explicit_continuation_lineage_across_restart(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    runs = tmp_path / "runs"
+    original_run = runs / "original-run"
+    continued_run = runs / "continued-run"
+    original_run.mkdir(parents=True)
+    continued_run.mkdir()
+
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {
+            "id": original_run.name,
+            "status": "working",
+            "summary": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": original_run.name,
+                        "run_dir": str(original_run),
+                    }
+                }
+            },
+        },
+        {
+            "objective": "Complete the supervised task",
+            "route": "mode1",
+            "effort": "quick",
+        },
+    )
+    session.record(started)
+    assert session.append_user_message(started, "Use the GUI value.", action="nudge") == 1
+    session.mark_message_delivery(1, "delivered")
+
+    (continued_run / "ticket.json").write_text(
+        json.dumps({"continued_from_run": str(original_run)}),
+        encoding="utf-8",
+    )
+    continued_task = {
+        "id": continued_run.name,
+        "status": "needs_review",
+        "summary": "ready for review",
+        "metadata": {},
+        "advanced_details": {
+            "payload": {
+                "active_goal": {
+                    "id": continued_run.name,
+                    "run_dir": str(continued_run),
+                }
+            }
+        },
+    }
+    continued = session.record(continued_task)
+
+    assert continued["objective"] == "Complete the supervised task"
+    assert continued["metadata"]["conversation"][0]["text"] == "Use the GUI value."
+    assert session.append_user_message(
+        continued,
+        "Add the evidence path.",
+        action="continue",
+    ) == 2
+
+    restarted = GuiSession(state_path)
+    refreshed = restarted.record(continued_task)
+
+    assert [row["revision"] for row in refreshed["metadata"]["conversation"]] == [1, 2]
+    assert refreshed["metadata"]["conversation"][0]["delivery"] == "delivered"
+
+
+def test_managed_conversation_does_not_follow_unlinked_sibling_run(tmp_path: Path) -> None:
+    state_path = tmp_path / "gui-session.json"
+    runs = tmp_path / "runs"
+    original_run = runs / "original-run"
+    unrelated_run = runs / "unrelated-run"
+    original_run.mkdir(parents=True)
+    unrelated_run.mkdir()
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {
+            "id": original_run.name,
+            "status": "working",
+            "summary": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": original_run.name,
+                        "run_dir": str(original_run),
+                    }
+                }
+            },
+        },
+        {"objective": "Owned task", "route": "mode1", "effort": "quick"},
+    )
+    session.record(started)
+    session.append_user_message(started, "Do not leak this.", action="nudge")
+
+    unrelated = session.record(
+        {
+            "id": unrelated_run.name,
+            "status": "working",
+            "objective": "Different task",
+            "summary": "working",
+            "metadata": {},
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "id": unrelated_run.name,
+                        "run_dir": str(unrelated_run),
+                    }
+                }
+            },
+        }
+    )
+
+    assert unrelated["objective"] == "Different task"
+    assert "conversation" not in unrelated["metadata"]
+
+
 def test_started_goal_needing_profile_reconciliation_keeps_its_labels_after_restart(
     tmp_path: Path,
 ) -> None:

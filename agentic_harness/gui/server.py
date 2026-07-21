@@ -48,6 +48,7 @@ from agentic_harness.gui.api import (
 
 MAX_REQUEST_BYTES = 1_048_576
 MAX_CONVERSATION_BYTES = 64 * 1024
+MAX_CONTINUATION_TICKET_BYTES = 128 * 1024
 STREAM_MONITOR_INTERVAL_SECONDS = 8.0
 GUI_SESSION_PATH_ENV = "AGENTIC_HARNESS_GUI_SESSION_PATH"
 SECURITY_HEADERS = {
@@ -981,8 +982,12 @@ class GuiSession:
             if not _has_identity(identity):
                 return task
             if not _identities_match(self._active_identity, identity):
-                self._clear_active()
-                return task
+                parent_identity = _continuation_parent_identity(identity)
+                if _identities_match(self._active_identity, parent_identity):
+                    self._active_identity = identity
+                else:
+                    self._clear_active()
+                    return task
         elif _has_identity(identity):
             # This binding is permitted only for an identityless start still
             # held in this process. Identityless active state is never loaded
@@ -1610,6 +1615,73 @@ def _identities_match(left: dict[str, str], right: dict[str, str]) -> bool:
     left_id = left.get("run_id", "")
     right_id = right.get("run_id", "")
     return bool(left_id and right_id and left_id == right_id)
+
+
+def _continuation_parent_identity(identity: dict[str, str]) -> dict[str, str]:
+    """Return the filesystem-bound parent of an explicit continuation run.
+
+    Managed continuation runs receive a new run id. GUI-owned conversation may
+    follow that transition only when the harness-owned ticket in the new run
+    explicitly names the previous sibling run. Lexical or parent symlinks,
+    oversized tickets, malformed JSON, and cross-directory links fail closed.
+    """
+
+    run_dir = str(identity.get("run_dir") or "").strip().rstrip("/")
+    if not run_dir:
+        return _empty_identity()
+    current = Path(run_dir)
+    if not current.is_absolute():
+        return _empty_identity()
+    ticket = current / "ticket.json"
+    descriptor = -1
+    try:
+        resolved_current = current.resolve(strict=True)
+        if resolved_current != current or not resolved_current.is_dir():
+            return _empty_identity()
+        ticket_stat = os.lstat(ticket)
+        if _path_is_link_like(ticket, ticket_stat) or not stat.S_ISREG(ticket_stat.st_mode):
+            return _empty_identity()
+        if ticket_stat.st_size > MAX_CONTINUATION_TICKET_BYTES:
+            return _empty_identity()
+        descriptor = os.open(
+            ticket,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        observed = os.fstat(descriptor)
+        if (ticket_stat.st_dev, ticket_stat.st_ino) != (observed.st_dev, observed.st_ino):
+            return _empty_identity()
+        if not stat.S_ISREG(observed.st_mode):
+            return _empty_identity()
+        raw = os.read(descriptor, MAX_CONTINUATION_TICKET_BYTES + 1)
+        if len(raw) > MAX_CONTINUATION_TICKET_BYTES:
+            return _empty_identity()
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
+            return _empty_identity()
+        previous_value = str(payload.get("continued_from_run") or "").strip().rstrip("/")
+        if not previous_value:
+            return _empty_identity()
+        previous = Path(previous_value)
+        if not previous.is_absolute():
+            return _empty_identity()
+        resolved_previous = previous.resolve(strict=True)
+        if resolved_previous != previous or not resolved_previous.is_dir():
+            return _empty_identity()
+        if resolved_previous.parent != resolved_current.parent:
+            return _empty_identity()
+        if resolved_previous == resolved_current:
+            return _empty_identity()
+        return {
+            "run_dir": str(resolved_previous),
+            "run_id": resolved_previous.name,
+        }
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return _empty_identity()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _task_identity(task: dict[str, Any]) -> dict[str, str]:
