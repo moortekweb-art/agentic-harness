@@ -17,6 +17,17 @@ Version 0.13.2 is a security and crash-consistency update for Verified Best-of-N
   GoalSpec, final review, commit, and applied workspace fingerprint all match.
   Divergent state remains blocked.
 
+## Managed GUI recovery
+
+- Preserves the managed runtime's `needs_attention` state instead of flattening
+  it into a generic blocker.
+- Shows clear Continue, Stop safely, and Open current task decisions when an
+  interrupted task prevents new work from starting.
+- Keeps recovery scoped to the task. The browser does not receive authority to
+  start or enable host background services.
+- Retains the supervised OpenCode conversation and independent verification
+  boundary while the user guides or resumes work.
+
 ## Compatibility
 
 Verified Best-of-N configurations that use a repository-local custom verifier

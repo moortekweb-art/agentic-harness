@@ -95,6 +95,33 @@ def test_gui_api_exposes_only_state_appropriate_human_actions() -> None:
     assert ready["allowed_actions"] == []
 
 
+def test_gui_api_preserves_needs_attention_as_an_operator_decision() -> None:
+    attention = task_from_command_result(
+        CommandResult(
+            ("status",),
+            0,
+            json.dumps(
+                {
+                    "classification": "needs_attention",
+                    "active_goal": {
+                        "id": "run-attention",
+                        "accepted": False,
+                        "objective": "repair the interrupted task",
+                    },
+                }
+            ),
+            "",
+        ),
+        fallback_status="working",
+    )
+
+    assert attention["status"] == "needs_attention"
+    assert attention["readiness_gate"]["can_start"] is False
+    assert attention["readiness_gate"]["can_queue"] is False
+    assert attention["agent_loop"]["stage"] == "Review"
+    assert [row["action"] for row in attention["allowed_actions"]] == ["continue", "stop"]
+
+
 def test_managed_task_explains_hybrid_cloud_planner_and_local_execution() -> None:
     payload = {
         "classification": "working",
@@ -889,6 +916,33 @@ def test_start_task_refuses_unowned_background_work() -> None:
     assert task["needs_human"] is True
     assert "background assistant is paused" in task["summary"].lower()
     assert "workspace owner" in task["summary"].lower()
+    assert bridge.commands == []
+
+
+def test_start_task_preserves_needs_attention_instead_of_flattening_to_blocked() -> None:
+    class AttentionBridge(FakeBridge):
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(
+                ("local-goal", "status", "--json"),
+                0,
+                json.dumps(
+                    {
+                        "classification": "needs_attention",
+                        "active_goal": {
+                            "id": "run-attention",
+                            "accepted": False,
+                            "objective": "repair the interrupted task",
+                        },
+                    }
+                ),
+                "",
+            )
+
+    bridge = AttentionBridge()
+    task = start_task(bridge, {"mode": "local", "objective": "new task"})
+
+    assert task["status"] == "needs_attention"
+    assert task["readiness_gate"]["can_start"] is False
     assert bridge.commands == []
 
 
@@ -1769,6 +1823,26 @@ def test_gui_history_selection_survives_live_updates_and_previews_its_own_eviden
     assert "if (force || !state.viewingHistoryId)" in app
     assert "state.viewingHistoryId = task.id" in app
     assert 'state.viewingHistoryId = ""' in app
+
+
+def test_gui_home_exposes_recovery_actions_without_service_controls() -> None:
+    static_root = Path("agentic_harness/gui/static")
+    html = (static_root / "index.html").read_text(encoding="utf-8")
+    javascript = (static_root / "app.js").read_text(encoding="utf-8")
+
+    for element_id in (
+        "recoveryCard",
+        "recoveryContinueButton",
+        "recoveryStopButton",
+        "recoveryOpenTaskButton",
+    ):
+        assert f'id="{element_id}"' in html
+    assert "Current task needs your decision" in html
+    assert "continueFromRecovery" in javascript
+    assert "stopFromRecovery" in javascript
+    assert "openCurrentTaskFromRecovery" in javascript
+    assert "/api/recovery/background-supervision" not in javascript
+    assert "Restart background assistant" not in html
 
 
 def test_gui_server_rejects_non_json_task_post() -> None:

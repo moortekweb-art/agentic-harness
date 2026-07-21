@@ -1065,7 +1065,12 @@ def start_task(
         )
     readiness = readiness_payload(bridge)
     if readiness.get("can_queue") is not True:
-        status = "needs_review" if readiness.get("requires_review") is True else "blocked"
+        readiness_status = str(readiness.get("state") or "")
+        status = readiness_status if readiness_status in {
+            "needs_review",
+            "needs_attention",
+            "blocked",
+        } else "blocked"
         return _task(
             status=status,
             summary=str(
@@ -1514,6 +1519,19 @@ def _allowed_actions(status: str) -> list[dict[str, Any]]:
                 "enabled": True,
             },
         ]
+    if status == "needs_attention":
+        return [
+            {
+                "action": "continue",
+                "label": "Continue",
+                "enabled": True,
+            },
+            {
+                "action": "stop",
+                "label": "Stop safely",
+                "enabled": True,
+            },
+        ]
     return []
 
 
@@ -1524,6 +1542,7 @@ def _label_for_status(status: str) -> str:
         "working": "Working",
         "checking": "Checking work",
         "needs_review": "Needs review",
+        "needs_attention": "Needs attention",
         "done": "Done",
         "blocked": "Blocked",
         "stopped": "Stopped",
@@ -1534,7 +1553,7 @@ def _progress_for_status(status: str) -> dict[str, Any]:
     """Expose only progress that the external runtime can honestly measure."""
     if status == "done":
         return {"determinate": True, "percent": 100, "label": "Complete"}
-    if status in {"starting", "working", "checking", "needs_review"}:
+    if status in {"starting", "working", "checking", "needs_review", "needs_attention"}:
         return {"determinate": False, "percent": None, "label": "In progress"}
     return {"determinate": False, "percent": None, "label": ""}
 
@@ -1657,7 +1676,7 @@ def _runtime_events(
     checkpoint: str,
     updated_at: str,
 ) -> list[dict[str, Any]]:
-    if status not in {"starting", "working", "checking", "needs_review"}:
+    if status not in {"starting", "working", "checking", "needs_review", "needs_attention"}:
         return []
     if status == "working" and iteration:
         summary = f"Agent pass {iteration} is active."
@@ -1686,6 +1705,7 @@ def _workflow_plan(status: str) -> list[dict[str, str]]:
         "working": 1,
         "checking": 2,
         "needs_review": 2,
+        "needs_attention": 1,
         "done": 3,
         "blocked": 1,
         "stopped": 1,
@@ -1710,6 +1730,7 @@ def _agent_loop_for_status(status: str) -> dict[str, Any]:
         "working": "Act",
         "checking": "Check",
         "needs_review": "Review",
+        "needs_attention": "Review",
         "done": "Review",
         "blocked": "Review",
         "stopped": "Review",
@@ -1741,9 +1762,11 @@ def _readiness_gate(status: str, summary: str, details: dict[str, Any]) -> dict[
             active_run_dir = run_dir if isinstance(run_dir, str) else ""
     requires_review = status == "needs_review"
     can_start = status in {"ready", "done", "stopped"}
-    can_queue = status not in {"needs_review", "blocked"}
+    can_queue = status not in {"needs_review", "needs_attention", "blocked"}
     if requires_review:
         next_action = "Review or continue the current work before starting another task."
+    elif status == "needs_attention":
+        next_action = "Open the current task, then continue or stop it before starting another task."
     elif status == "blocked":
         next_action = "Resolve the blocker before starting another task."
     elif status in {"working", "checking", "starting"}:
@@ -1904,6 +1927,8 @@ def _normalize_status(value: Any) -> str:
     normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
     if normalized in {"needs_review", "awaiting_review", "review", "review_required"}:
         return "needs_review"
+    if normalized in {"needs_attention", "attention_required"}:
+        return "needs_attention"
     if normalized in {"accepted", "done", "complete", "completed", "success"}:
         return "done"
     if normalized in {"blocked", "failed", "failure", "error", "operator_intervention_required"}:
