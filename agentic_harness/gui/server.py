@@ -33,10 +33,12 @@ from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.gui.api import (
     command_task,
     details_payload,
+    enrich_managed_task_snapshot,
     execution_efforts_payload,
     execution_profiles_payload,
     health_payload,
     modes_payload,
+    preview_managed_task_path,
     readiness_payload,
     setup_payload,
     start_task,
@@ -290,7 +292,10 @@ def make_handler(
                 else:
                     payload = tasks_payload(bridge)
                     payload["current"] = session.record(payload["current"])
-                    payload["tasks"] = session.history() or payload["tasks"]
+                    payload["tasks"] = [
+                        enrich_managed_task_snapshot(bridge, task)
+                        for task in (session.history() or payload["tasks"])
+                    ]
                     self._json(payload)
             elif route == "/api/tasks/current":
                 if active is not None:
@@ -303,7 +308,12 @@ def make_handler(
                 self._json(
                     {"tasks": active.history(query=query)}
                     if active is not None
-                    else {"tasks": session.history(query=query)}
+                    else {
+                        "tasks": [
+                            enrich_managed_task_snapshot(bridge, task)
+                            for task in session.history(query=query)
+                        ]
+                    }
                 )
             elif route == "/api/tasks/current/events":
                 after_raw = parse_qs(parsed.query).get("after", ["0"])[0]
@@ -312,21 +322,34 @@ def make_handler(
                 except ValueError:
                     after = 0
                 self._json({"events": active.events(after=after) if active is not None else []})
-            elif route == "/api/tasks/current/file" and active is not None:
+            elif route == "/api/tasks/current/file":
                 path = parse_qs(parsed.query).get("path", [""])[0]
                 goal_id = parse_qs(parsed.query).get("goal_id", [""])[0]
                 try:
-                    self._json(active.preview_file(path, goal_id=goal_id))
+                    self._json(
+                        active.preview_file(path, goal_id=goal_id)
+                        if active is not None
+                        else preview_managed_task_path(bridge, path, goal_id=goal_id)
+                    )
                 except (ValueError, OSError) as exc:
                     self._json(
                         {"ok": False, "error": str(exc)},
                         status=HTTPStatus.BAD_REQUEST,
                     )
-            elif route == "/api/tasks/current/artifact" and active is not None:
+            elif route == "/api/tasks/current/artifact":
                 path = parse_qs(parsed.query).get("path", [""])[0]
                 goal_id = parse_qs(parsed.query).get("goal_id", [""])[0]
                 try:
-                    self._json(active.preview_artifact(path, goal_id=goal_id))
+                    self._json(
+                        active.preview_artifact(path, goal_id=goal_id)
+                        if active is not None
+                        else preview_managed_task_path(
+                            bridge,
+                            path,
+                            goal_id=goal_id,
+                            artifact=True,
+                        )
+                    )
                 except (ValueError, OSError) as exc:
                     self._json(
                         {"ok": False, "error": str(exc)},

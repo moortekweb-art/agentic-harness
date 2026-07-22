@@ -1289,6 +1289,13 @@ function verificationSource(row) {
   return row.source || (row.independent ? "independent" : "worker-reported");
 }
 
+function verificationSourceLabel(row) {
+  const source = verificationSource(row);
+  if (source === "independent") return "Independent";
+  if (source === "managed-review") return "Managed review";
+  return "Worker-reported";
+}
+
 function independentReviewRows(final) {
   const rows = [];
   (Array.isArray(final.review_attempts) ? final.review_attempts : []).forEach((attempt) => {
@@ -1512,7 +1519,7 @@ function renderTask(task) {
   textList(els.verification, task.verification, (row) => ({
     text: typeof row === "string"
       ? row
-      : `${verificationSource(row) === "independent" ? "Independent" : "Worker-reported"} · ${row.passed ? "Passed" : "Failed"}: ${row.message || row.name || "Check"}`,
+      : `${verificationSourceLabel(row)} · ${row.passed ? "Passed" : "Needs review"}: ${row.message || row.name || "Check"}`,
     className: typeof row === "object" && row.passed ? "passed" : "failed",
   }), "No verification evidence reported yet.");
   previewList(

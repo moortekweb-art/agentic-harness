@@ -1354,7 +1354,10 @@ def status_task(bridge: LocalGoalBridge) -> TaskPayload:
                     "last_run": last_run,
                 },
             )
-    return task_from_command_result(result, fallback_status="ready")
+    task = task_from_command_result(result, fallback_status="ready")
+    if task["status"] == "needs_review":
+        _attach_managed_review_evidence(task, bridge, payload)
+    return task
 
 
 def watch_task(bridge: LocalGoalBridge) -> TaskPayload:
@@ -1405,6 +1408,64 @@ def details_payload(bridge: LocalGoalBridge) -> dict[str, Any]:
         "task": status,
         "raw": status.get("advanced_details", {}),
     }
+
+
+def preview_managed_task_path(
+    bridge: LocalGoalBridge,
+    path: str,
+    *,
+    goal_id: str = "",
+    artifact: bool = False,
+) -> dict[str, Any]:
+    """Preview evidence that the current managed task explicitly exposes."""
+    if goal_id:
+        run_dir = _managed_run_dir_for_id(bridge, goal_id)
+        if run_dir is None:
+            raise ValueError("Only evidence from a recorded managed task can be previewed.")
+        root = Path(bridge.doc_root).resolve()
+        allowed = set(_managed_owned_files(root, run_dir))
+    else:
+        task = status_task(bridge)
+        if artifact:
+            rows = task.get("artifacts")
+            allowed = (
+                {
+                    str(row.get("path") or "")
+                    for row in rows
+                    if isinstance(row, dict)
+                }
+                if isinstance(rows, list)
+                else set()
+            )
+        else:
+            rows = task.get("changed_files")
+            allowed = {str(row) for row in rows} if isinstance(rows, list) else set()
+    if path not in allowed:
+        kind = "artifact" if artifact else "changed file"
+        raise ValueError(f"Only a recorded {kind} from the current task can be previewed.")
+    return _preview_managed_workspace_file(Path(bridge.doc_root), path)
+
+
+def enrich_managed_task_snapshot(
+    bridge: LocalGoalBridge,
+    task: dict[str, Any],
+) -> dict[str, Any]:
+    """Restore review evidence for a durable managed task in GUI history."""
+    enriched = dict(task)
+    if str(enriched.get("status") or "") != "needs_review":
+        return enriched
+    run_id = str(enriched.get("id") or "").strip()
+    run_dir = _managed_run_dir_for_id(bridge, run_id)
+    if run_dir is None:
+        return enriched
+    gate = enriched.get("readiness_gate")
+    enriched["readiness_gate"] = dict(gate) if isinstance(gate, dict) else {}
+    _attach_managed_review_evidence(
+        enriched,
+        bridge,
+        {"active_goal": {"run_dir": str(run_dir)}},
+    )
+    return enriched
 
 
 def task_from_command_result(result: CommandResult, *, fallback_status: str) -> TaskPayload:
@@ -1978,6 +2039,238 @@ def _artifacts_from_details(details: dict[str, Any]) -> list[dict[str, str]]:
             value = str(artifact).strip()
             normalized.append({"name": value, "path": value})
     return normalized[:12]
+
+
+def _attach_managed_review_evidence(
+    task: TaskPayload,
+    bridge: LocalGoalBridge,
+    payload: dict[str, Any] | None,
+) -> None:
+    run_dir = _managed_active_run_dir(bridge, payload)
+    if run_dir is None:
+        return
+    root = Path(bridge.doc_root).resolve()
+    review = _read_small_json(run_dir / "review.json")
+    independent = _read_small_json(run_dir / "independent-verification.json")
+    owned_files = _managed_owned_files(root, run_dir)
+    summary = _managed_review_summary(review)
+    manual_reason = _managed_manual_review_reason(independent)
+    if summary:
+        task["summary"] = summary
+    if manual_reason:
+        task["summary"] = (
+            f"{task['summary']} Manual review is required because {manual_reason}."
+        )
+    verification = _managed_completion_verification(run_dir)
+    if manual_reason:
+        verification.append(
+            {
+                "name": "human_review",
+                "passed": False,
+                "message": f"Manual review required: {manual_reason}.",
+                "independent": False,
+                "source": "managed-review",
+            }
+        )
+    task["changed_files"] = owned_files
+    task["verification"] = verification[:12]
+    task["artifacts"] = [
+        {"name": f"Result: {Path(path).name}", "path": path}
+        for path in owned_files
+    ]
+    task["readiness_gate"]["summary"] = task["summary"]
+
+
+def _managed_active_run_dir(
+    bridge: LocalGoalBridge,
+    payload: dict[str, Any] | None,
+) -> Path | None:
+    if not isinstance(payload, dict):
+        return None
+    active = payload.get("active_goal")
+    raw = active.get("run_dir") if isinstance(active, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    doc_root = getattr(bridge, "doc_root", None)
+    if doc_root is None:
+        return None
+    root = Path(doc_root).resolve()
+    runs_root = (root / "reports" / "local-node1-goal-harness" / "runs").resolve()
+    run_dir = Path(raw).resolve()
+    try:
+        run_dir.relative_to(runs_root)
+    except ValueError:
+        return None
+    return run_dir if run_dir.is_dir() else None
+
+
+def _managed_run_dir_for_id(bridge: LocalGoalBridge, run_id: str) -> Path | None:
+    doc_root = getattr(bridge, "doc_root", None)
+    if doc_root is None or not run_id or Path(run_id).name != run_id:
+        return None
+    root = Path(doc_root).resolve()
+    runs_root = (root / "reports" / "local-node1-goal-harness" / "runs").resolve()
+    run_dir = (runs_root / run_id).resolve()
+    try:
+        run_dir.relative_to(runs_root)
+    except ValueError:
+        return None
+    return run_dir if run_dir.is_dir() else None
+
+
+def _read_small_json(path: Path) -> dict[str, Any]:
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 2_000_000:
+            return {}
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _managed_owned_files(root: Path, run_dir: Path) -> list[str]:
+    path = run_dir / "owned-files.txt"
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 128_000:
+            return []
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    owned: list[str] = []
+    for value in lines:
+        relative = value.strip()
+        if not relative or Path(relative).is_absolute():
+            continue
+        target = (root / relative).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            continue
+        if target.is_file() and not _sensitive_managed_preview_path(target, root):
+            owned.append(Path(relative).as_posix())
+    return list(dict.fromkeys(owned))[:12]
+
+
+def _managed_review_summary(review: dict[str, Any]) -> str:
+    checks = review.get("checks")
+    if not isinstance(checks, list):
+        return ""
+    for row in checks:
+        if not isinstance(row, dict) or row.get("name") != "summary_present":
+            continue
+        detail = row.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+    return ""
+
+
+def _managed_manual_review_reason(independent: dict[str, Any]) -> str:
+    criteria = independent.get("criteria")
+    if not isinstance(criteria, list):
+        return ""
+    for row in criteria:
+        if not isinstance(row, dict) or row.get("mode") != "manual_only":
+            continue
+        reason = row.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            return reason.strip().rstrip(".")
+    return ""
+
+
+def _managed_completion_verification(run_dir: Path) -> list[dict[str, Any]]:
+    path = run_dir / "verification-results.md"
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 2_000_000:
+            return []
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    rows: list[dict[str, Any]] = []
+    in_completion = False
+    for line in lines:
+        if line.strip() == "## Completion Verification Entries":
+            in_completion = True
+            continue
+        if in_completion and line.startswith("## "):
+            break
+        if in_completion and line.startswith("- "):
+            message = line.removeprefix("- ").strip()
+            if message:
+                rows.append(
+                    {
+                        "name": f"completion_evidence_{len(rows) + 1}",
+                        "passed": True,
+                        "message": message,
+                        "independent": False,
+                        "source": "worker-reported",
+                    }
+                )
+    return rows[:11]
+
+
+def _preview_managed_workspace_file(root: Path, relative: str) -> dict[str, Any]:
+    requested = Path(relative)
+    if requested.is_absolute():
+        raise ValueError("Preview path must be relative to the workspace.")
+    root = root.resolve()
+    component = root
+    for part in requested.parts:
+        component /= part
+        if component.is_symlink():
+            raise ValueError("Preview file is unavailable.")
+    path = (root / requested).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Preview path is outside the workspace.") from exc
+    if _sensitive_managed_preview_path(path, root):
+        raise ValueError("Preview file is unavailable.")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 1_000_000:
+                raise ValueError("Preview file is unavailable or larger than 1 MB.")
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                raw = handle.read(1_000_001)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise ValueError("Preview file is unavailable.") from exc
+    if len(raw) > 1_000_000:
+        raise ValueError("Preview file is larger than 1 MB.")
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Binary files cannot be previewed.") from exc
+    return {"path": requested.as_posix(), "content": content, "truncated": False}
+
+
+def _sensitive_managed_preview_path(path: Path, root: Path) -> bool:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return True
+    parts = {part.lower() for part in relative.parts}
+    name = path.name.lower()
+    dotenv = name == ".env" or name == ".envrc" or name.startswith((".env.", ".env-"))
+    protected = {
+        ".git-credentials",
+        ".netrc",
+        ".npmrc",
+        ".pypirc",
+        "credentials.json",
+        "id_ed25519",
+        "id_rsa",
+        "token.json",
+        "tokens.json",
+    }
+    return (
+        dotenv
+        or bool(parts & {".aws", ".azure", ".docker", ".git", ".gnupg", ".kube", ".ssh"})
+        or name in protected
+        or path.suffix.lower() in {".jks", ".key", ".keystore", ".p12", ".pem", ".pfx"}
+    )
 
 
 def _json_from_output(output: str) -> dict[str, Any] | None:
