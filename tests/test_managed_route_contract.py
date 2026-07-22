@@ -1829,7 +1829,10 @@ def test_session_can_recover_one_exact_foreground_task_after_unrelated_activity(
             "status": "working",
             "objective": "Internal maintenance canary",
             "summary": "working",
-            "metadata": {},
+            "metadata": {
+                "start_accepted": True,
+                "safe_areas": ["canaries/internal_qualification.py"],
+            },
         }
     )
 
@@ -1841,6 +1844,8 @@ def test_session_can_recover_one_exact_foreground_task_after_unrelated_activity(
     assert foreground["summary"] == "Audit complete: 7.5/10"
     assert foreground["artifacts"][0]["path"] == "reports/audit.md"
     assert restarted.task("missing-task") is None
+    assert restarted.latest_foreground_task() is not None
+    assert restarted.latest_foreground_task()["id"] == "human-audit"
 
 
 def test_session_symlink_and_write_failures_are_nonfatal(tmp_path: Path) -> None:

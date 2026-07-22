@@ -1918,6 +1918,15 @@ function renderHistory(tasks) {
         showView("tasks", { focus: true });
         return;
       }
+      if (task.metadata?.start_accepted === true) {
+        rememberForegroundTask(task);
+        state.liveTask = task;
+        state.viewingHistoryId = "";
+        renderTask(task);
+        showView("tasks", { focus: true });
+        refreshTask().catch(() => {});
+        return;
+      }
       state.viewingHistoryId = task.id;
       renderTask(task);
       showView("tasks", { focus: true });

@@ -160,8 +160,10 @@ def test_gui_keeps_the_users_task_pinned_and_loads_its_readable_result() -> None
     assert "async function renderPrimaryResult(task)" in javascript
     assert 'els.resultOutputContent.textContent = "Loading the full result…"' in javascript
     assert 'foreground_metadata["foreground_task"] = True' in server
+    assert "session.latest_foreground_task()" in server
     assert 'foreground_metadata["background_activity"]' in server
     assert 'foreground["allowed_actions"] = []' in server
+    assert "task = public_managed_task(session.record(task))" in server
 
 
 def test_gui_recovers_from_slow_requests_and_failed_status_streams() -> None:

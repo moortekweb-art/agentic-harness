@@ -2224,6 +2224,75 @@ def test_gui_server_websocket_status_upgrade_sends_json_frame() -> None:
     assert b'"status": "working"' in response
 
 
+def test_managed_status_and_stream_keep_the_users_started_task_in_foreground() -> None:
+    class StreamOwnershipBridge(FakeBridge):
+        def start_human_goal(self, **kwargs: object) -> CommandResult:
+            result = super().start_human_goal(**kwargs)  # type: ignore[arg-type]
+            return CommandResult(
+                result.args,
+                0,
+                "queued\nrun_dir=/tmp/runs/user-request-1\n",
+                "",
+            )
+
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(
+                ("local-goal", "status", "--json"),
+                0,
+                json.dumps(
+                    {
+                        "classification": "working",
+                        "active_goal": {
+                            "id": "background-maintenance",
+                            "objective": "Internal maintenance",
+                            "run_dir": "/tmp/runs/background-maintenance",
+                            "tmux_running": True,
+                        },
+                    }
+                ),
+                "",
+            )
+
+    with gui_server(StreamOwnershipBridge()) as base_url:
+        started = post_json(
+            base_url,
+            "/api/tasks",
+            {
+                "mode": "local",
+                "objective": "Prepare Michael's requested result",
+                "safe_areas": ["reports/requested-result.md"],
+            },
+        )
+        current = get_json(base_url, "/api/tasks/current")
+        host, port = base_url.removeprefix("http://").split(":")
+        with socket.create_connection((host, int(port)), timeout=3) as client:
+            client.sendall(
+                (
+                    "GET /api/tasks/stream HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            response = client.recv(8192)
+            response += client.recv(8192)
+
+    assert started["metadata"]["start_accepted"] is True
+    assert current["id"] != "background-maintenance"
+    assert current["objective"] == "Prepare Michael's requested result"
+    assert current["metadata"]["foreground_task"] is True
+    assert current["metadata"]["background_activity"]["id"] == (
+        "background-maintenance"
+    )
+    assert current["allowed_actions"] == []
+    assert b"101 Switching Protocols" in response
+    assert b"Prepare Michael's requested result" in response
+    assert b'"id": "background-maintenance"' in response
+
+
 def test_gui_server_websocket_status_redacts_secret_shaped_task_fields() -> None:
     secret = "opaque-websocket-secret-Z7Q4M9"
 
