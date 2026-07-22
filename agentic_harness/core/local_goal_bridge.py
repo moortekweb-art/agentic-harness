@@ -305,7 +305,10 @@ class LocalGoalBridge:
             build_mode4_audit_goal(options),
             worker=MODE4_WORKER,
             planner="none",
-            executor="direct-glm",
+            # The legacy queue schema accepts the local executor family here;
+            # the explicitly pinned executor-worker is the process that
+            # actually performs this cloud audit.
+            executor="opencode",
             contract=EXTERNAL_AUDIT_CONTRACT,
             route_id=GLM_READONLY_AUDIT_ROUTE_ID,
         )

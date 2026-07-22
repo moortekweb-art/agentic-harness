@@ -214,6 +214,7 @@ def test_mode4_audit_uses_distinct_contract_and_pinned_worker(tmp_path) -> None:
     )
     assert command[command.index("--executor-worker") + 1] == "glm52-direct"
     assert command[command.index("--planner") + 1] == "none"
+    assert command[command.index("--executor") + 1] == "opencode"
 
 
 def test_local_build_can_start_and_verify_glm_advisory_supervision(tmp_path) -> None:
