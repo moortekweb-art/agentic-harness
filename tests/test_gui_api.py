@@ -783,6 +783,28 @@ def test_task_from_command_result_treats_retryable_failure_as_recoverable() -> N
     }
 
 
+def test_pre_execution_ticket_rejection_is_a_permanent_actionable_block() -> None:
+    result = CommandResult(
+        args=("local-goal", "quick-start"),
+        returncode=1,
+        stdout=(
+            "ticket_error: goal requires at least one concrete allowed path\n"
+            "failed pre-execution validation; not starting worker\n"
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="working")
+
+    assert task["status"] == "blocked"
+    assert task["needs_human"] is True
+    assert task["advanced_details"]["permanent_error"] is True
+    assert task["summary"] == (
+        "Your task did not start because its work area was not available to the worker. "
+        "Your request is still saved; choose the entire project or a specific folder and try again."
+    )
+
+
 def test_managed_working_task_exposes_live_iteration_without_fake_percent() -> None:
     run_dir = "/tmp/reports/runs/20260713T075645Z-audit-docs"
     result = CommandResult(

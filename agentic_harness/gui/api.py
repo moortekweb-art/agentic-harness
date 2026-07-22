@@ -1569,11 +1569,16 @@ def task_from_command_result(result: CommandResult, *, fallback_status: str) -> 
             advanced_details=advanced_details,
         )
     if result.returncode != 0:
-        permanent = result.returncode in _PERMANENT_COMMAND_FAILURES
+        ticket_rejected = _ticket_was_rejected_before_start(result)
+        permanent = result.returncode in _PERMANENT_COMMAND_FAILURES or ticket_rejected
         return _task(
             status="blocked" if permanent else "checking",
-            summary=_clean_summary(
-                result.stderr or result.stdout or "The task could not move forward."
+            summary=(
+                _ticket_rejection_summary(result)
+                if ticket_rejected
+                else _clean_summary(
+                    result.stderr or result.stdout or "The task could not move forward."
+                )
             ),
             needs_human=permanent,
             advanced_details={
@@ -1591,6 +1596,30 @@ def task_from_command_result(result: CommandResult, *, fallback_status: str) -> 
         changed_files=_changed_files_from_payload(parsed),
         verification=_verification_from_payload(parsed),
         advanced_details=advanced_details,
+    )
+
+
+def _ticket_was_rejected_before_start(result: CommandResult) -> bool:
+    output = f"{result.stdout}\n{result.stderr}".lower()
+    return "failed pre-execution validation; not starting worker" in output
+
+
+def _ticket_rejection_summary(result: CommandResult) -> str:
+    errors = []
+    for line in f"{result.stdout}\n{result.stderr}".splitlines():
+        prefix, separator, detail = line.partition(":")
+        if separator and prefix.strip() in {"ticket_error", "verification_contract_error"}:
+            errors.append(detail.strip())
+    if any("concrete allowed path" in error for error in errors):
+        return (
+            "Your task did not start because its work area was not available to the worker. "
+            "Your request is still saved; choose the entire project or a specific folder and try again."
+        )
+    if errors:
+        return "Your task did not start. Your request is still saved. " + " ".join(errors)
+    return (
+        "Your task did not start because its safety check could not approve the request. "
+        "Your request is still saved; review the details and try again."
     )
 
 
