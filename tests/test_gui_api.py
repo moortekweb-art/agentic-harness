@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 
@@ -406,6 +407,9 @@ def test_task_from_command_result_maps_review_state() -> None:
     task = task_from_command_result(result, fallback_status="working")
 
     assert task["status"] == "needs_review"
+    assert task["guide"]["title"] == "Your result is ready"
+    assert "did not crash" in task["guide"]["explanation"]
+    assert task["guide"]["next_action"].endswith("choose Ask for changes.")
     assert task["needs_human"] is True
     assert task["summary"] == "ship it"
     assert task["progress"] == {
@@ -504,6 +508,112 @@ def test_task_summary_hides_internal_generated_objective() -> None:
     assert task["advanced_details"]["payload"]["active_goal"]["objective"] == (
         "Mode 3A: Cloud Long-Horizon Goal"
     )
+
+
+def test_managed_review_exposes_current_run_result_and_reason(tmp_path: Path) -> None:
+    bridge, run_id = _managed_review_bridge(tmp_path)
+
+    task = status_task(bridge)  # type: ignore[arg-type]
+
+    assert task["id"] == run_id
+    assert task["status"] == "needs_review"
+    assert "8/10 rating" in task["summary"]
+    assert "no suitable behavioral verifier mapped at intake" in task["summary"]
+    assert task["changed_files"] == ["SYSTEM_AUDIT_2026-07-22.md"]
+    assert task["artifacts"] == [
+        {
+            "name": "Result: SYSTEM_AUDIT_2026-07-22.md",
+            "path": "SYSTEM_AUDIT_2026-07-22.md",
+        }
+    ]
+    assert task["verification"][0]["passed"] is True
+    assert "31 Docker containers" in task["verification"][0]["message"]
+    assert task["verification"][-1] == {
+        "name": "human_review",
+        "passed": False,
+        "message": (
+            "Manual review required: no suitable behavioral verifier mapped at intake."
+        ),
+        "independent": False,
+        "source": "managed-review",
+    }
+    assert task["readiness_gate"]["summary"] == task["summary"]
+    assert task["guide"]["body"] == task["summary"]
+    assert task["guide"]["counts"] == {
+        "changed_files": 1,
+        "checks": 3,
+        "artifacts": 1,
+    }
+
+
+def test_managed_review_artifact_can_be_previewed_but_other_files_cannot(
+    tmp_path: Path,
+) -> None:
+    bridge, run_id = _managed_review_bridge(tmp_path)
+
+    with gui_server(bridge) as base_url:  # type: ignore[arg-type]
+        preview = get_json(
+            base_url,
+            "/api/tasks/current/artifact"
+            f"?path={quote('SYSTEM_AUDIT_2026-07-22.md')}"
+            f"&goal_id={quote(run_id)}",
+        )
+        denied = get_http_error(
+            base_url,
+            "/api/tasks/current/artifact?path=README.md",
+        )
+
+    assert preview == {
+        "path": "SYSTEM_AUDIT_2026-07-22.md",
+        "content": "# System Audit\n\nOverall Score: 8/10\n",
+        "truncated": False,
+    }
+    assert denied.code == 400
+    assert "Only a recorded artifact" in str(denied.payload["error"])
+
+
+def test_managed_review_history_retains_evidence_after_lane_returns_ready(
+    tmp_path: Path,
+) -> None:
+    bridge, run_id = _managed_review_bridge(tmp_path)
+
+    with gui_server(bridge) as base_url:  # type: ignore[arg-type]
+        current = get_json(base_url, "/api/tasks/current")
+        assert current["status"] == "needs_review"
+        bridge.status_payload = {  # type: ignore[attr-defined]
+            "classification": "idle",
+            "active_goal": None,
+            "capabilities": {
+                "current_state": {
+                    "classification": "ready",
+                    "local_goal_lane_free": True,
+                }
+            },
+        }
+        ready = get_json(base_url, "/api/tasks/current")
+        history = get_json(base_url, "/api/tasks/history")
+
+    audit = next(task for task in history["tasks"] if task["id"] == run_id)
+    assert ready["status"] == "ready"
+    assert "8/10 rating" in audit["summary"]
+    assert audit["changed_files"] == ["SYSTEM_AUDIT_2026-07-22.md"]
+    assert audit["artifacts"][0]["path"] == "SYSTEM_AUDIT_2026-07-22.md"
+    assert len(audit["verification"]) == 3
+    assert audit["guide"]["title"] == "Your result is ready"
+    assert audit["guide"]["counts"] == {
+        "changed_files": 1,
+        "checks": 3,
+        "artifacts": 1,
+    }
+
+
+def test_gui_frontend_presents_review_as_a_user_decision() -> None:
+    app = Path("agentic_harness/gui/static/app.js").read_text(encoding="utf-8")
+
+    assert 'const reviewPending = status === "needs_review"' in app
+    assert 'els.progressValue.textContent = "Waiting for your review"' in app
+    assert '? "Review the result and decide"' in app
+    assert '? "Review"' in app
 
 
 def test_task_from_command_result_does_not_treat_accepted_false_as_done() -> None:
@@ -2032,6 +2142,90 @@ def test_gui_server_rejects_cross_origin_websocket() -> None:
     assert b"cross-origin request rejected" in response
 
 
+def _managed_review_bridge(tmp_path: Path) -> tuple[object, str]:
+    doc_root = tmp_path / "docs"
+    run_id = "20260722T001609Z-system-audit"
+    run_dir = doc_root / "reports" / "local-node1-goal-harness" / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (doc_root / "SYSTEM_AUDIT_2026-07-22.md").write_text(
+        "# System Audit\n\nOverall Score: 8/10\n",
+        encoding="utf-8",
+    )
+    (doc_root / "README.md").write_text("not current evidence\n", encoding="utf-8")
+    (run_dir / "owned-files.txt").write_text(
+        "SYSTEM_AUDIT_2026-07-22.md\n",
+        encoding="utf-8",
+    )
+    (run_dir / "review.json").write_text(
+        json.dumps(
+            {
+                "status": "needs_review",
+                "checks": [
+                    {
+                        "name": "summary_present",
+                        "ok": True,
+                        "detail": "System audit completed with 8/10 rating.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "independent-verification.json").write_text(
+        json.dumps(
+            {
+                "criteria": [
+                    {
+                        "mode": "manual_only",
+                        "ok": False,
+                        "reason": "no suitable behavioral verifier mapped at intake",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "verification-results.md").write_text(
+        "# Verification Results\n\n"
+        "## Completion Verification Entries\n\n"
+        "- 31 Docker containers running, 0 unhealthy\n"
+        "- Audit report exists on disk\n",
+        encoding="utf-8",
+    )
+    status_payload = {
+        "contract": "local_node1_goal_supervisor.v1",
+        "classification": "needs_review",
+        "active_goal": {
+            "accepted": False,
+            "awaiting_review": True,
+            "objective": "Do a system audit with a review from 1-10",
+            "run_dir": str(run_dir),
+        },
+    }
+
+    class ManagedReviewBridge:
+        def __init__(self) -> None:
+            self.local_goal = Path("/tmp/local-goal")
+            self.doc_root = doc_root
+            self.status_payload = status_payload
+
+        def available(self) -> bool:
+            return True
+
+        def background_supervision(self) -> dict[str, object]:
+            return {"active": True, "timer_active": True, "state": "active"}
+
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(
+                ("local-goal", "status", "--json"),
+                0,
+                json.dumps(self.status_payload),
+                "",
+            )
+
+    return ManagedReviewBridge(), run_id
+
+
 class FakeBridge:
     local_goal = Path("/tmp/local-goal")
     doc_root = Path("/tmp/docs")
@@ -2057,6 +2251,8 @@ class FakeBridge:
         objective: str,
         safe_areas: tuple[str, ...] = (),
         checks: tuple[str, ...] = (),
+        route_id: str = "",
+        supervision: str = "none",
     ) -> CommandResult:
         result = LocalGoalBridge(
             doc_root=Path("/tmp/docs"),
@@ -2076,6 +2272,8 @@ class FakeBridge:
             objective=objective,
             safe_areas=safe_areas,
             checks=checks,
+            route_id=route_id,
+            supervision=supervision,
         )
         command = list(result.args[1:])
         if command and command[-1].startswith("External long-horizon goal"):

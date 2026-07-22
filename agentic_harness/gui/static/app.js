@@ -48,6 +48,7 @@ const state = {
   executionProfiles: [],
   executionProfile: AUTOMATIC_PROFILE_KEY,
   executionProfileDefault: "",
+  supervision: "none",
   busy: false,
   setupBusy: false,
   authToken: "",
@@ -126,6 +127,9 @@ const els = {
   modelProfileSection: byId("modelProfileSection"),
   modelProfileSelect: byId("modelProfileSelect"),
   modelProfiles: byId("modelProfiles"),
+  advisorySupervisionSection: byId("advisorySupervisionSection"),
+  advisorySupervision: byId("advisorySupervision"),
+  advisorySupervisionText: byId("advisorySupervisionText"),
   approachSection: byId("approachSection"),
   candidateCount: byId("candidateCount"),
   safeAreas: byId("safeAreas"),
@@ -149,6 +153,16 @@ const els = {
   statusIndicator: byId("statusIndicator"),
   statusIcon: byId("statusIcon"),
   summary: byId("summary"),
+  taskGuide: byId("taskGuide"),
+  taskGuideEyebrow: byId("taskGuideEyebrow"),
+  taskGuideTitle: byId("taskGuideTitle"),
+  taskGuideBody: byId("taskGuideBody"),
+  taskGuideExplanation: byId("taskGuideExplanation"),
+  taskGuideNext: byId("taskGuideNext"),
+  taskGuideCounts: byId("taskGuideCounts"),
+  taskGuideFiles: byId("taskGuideFiles"),
+  taskGuideChecks: byId("taskGuideChecks"),
+  taskGuideArtifacts: byId("taskGuideArtifacts"),
   progressGroup: byId("progressGroup"),
   progressTrack: byId("progressTrack"),
   progressValue: byId("progressValue"),
@@ -161,10 +175,13 @@ const els = {
   returnToCurrentButton: byId("returnToCurrentButton"),
   currentCard: byId("currentCard"),
   continueButton: byId("continueButton"),
+  continueButtonLabel: byId("continueButtonLabel"),
   approveSpecButton: byId("approveSpecButton"),
   approveSpecButtonLabel: byId("approveSpecButtonLabel"),
   acceptButton: byId("acceptButton"),
+  acceptButtonLabel: byId("acceptButtonLabel"),
   stopButton: byId("stopButton"),
+  stopButtonLabel: byId("stopButtonLabel"),
   conversationSection: byId("conversationSection"),
   conversationList: byId("conversationList"),
   messageForm: byId("messageForm"),
@@ -456,6 +473,10 @@ function routeUsesExecutionProfiles(route = selectedRoute()) {
   return supportsProfiles && isLocalRoute;
 }
 
+function routeSupportsGlmSupervision(route = selectedRoute()) {
+  return Boolean(route) && (route.route_id === "local-build" || route.key === "mode1");
+}
+
 function selectedExecutionOption() {
   return usesHumanModes() ? selectedRoute() : selectedEffort();
 }
@@ -694,7 +715,7 @@ function renderExpectationSummary() {
               : !readiness.ready
                 ? readiness.summary || "Finish the current setup or task before starting another one."
                 : managed
-                  ? `${routeLabel} will use ${effortLabel.toLowerCase()} effort. ${plainManagedRouteSummary(route)}`
+                  ? `${routeLabel} will use ${effortLabel.toLowerCase()} effort. ${plainManagedRouteSummary(route)}${state.supervision === "glm-5.2" ? " GLM-5.2 advisory supervision will be started and verified." : ""}`
                   : `${effortLabel} uses ${embeddedAssistantSummary(setupWorker)} and independent verification.`;
   els.expectationLocation.textContent = executionChoicesPending
     ? "Checking…"
@@ -721,7 +742,14 @@ function renderExpectationSummary() {
       : !managed && (effort?.requires_scope === true || effort?.requires_enforced_scope === true)
         ? "Limited to selected files"
         : route ? executionMutation(route) : "Can change project files";
-  els.expectationVerification.textContent = humanizeFact(route?.verification || state.setup?.verification?.label, "Independent checks");
+  const judgmentTask = /\b(audit|assess|assessment|review|rate|rating|recommend|report|explain)\b/i
+    .test(els.objective.value.trim());
+  els.expectationVerification.textContent = judgmentTask
+    ? "You will review the result"
+    : "Automatic checks when possible";
+  els.expectationVerification.title = judgmentTask
+    ? "Judgment tasks stop safely so you can approve the result or ask for changes."
+    : "The harness will use independent checks when it can establish a reliable verifier; otherwise it will ask for your review.";
   els.expectationMaturity.textContent = humanizeFact(route?.maturity, managed ? "Supported" : "Production");
 }
 
@@ -866,6 +894,11 @@ function renderModeControls() {
   }
   const profilesApply = state.executionProfiles.length > 0 && routeUsesExecutionProfiles();
   els.modelProfileSection.hidden = !profilesApply;
+  const supervisionApplies = routeSupportsGlmSupervision();
+  if (!supervisionApplies) state.supervision = "none";
+  els.advisorySupervision.checked = state.supervision === "glm-5.2";
+  els.advisorySupervisionText.textContent = "Start and verify GLM-5.2 advisory supervision for this task.";
+  els.advisorySupervisionSection.hidden = !supervisionApplies;
   els.expectationDetails.hidden = usesHumanModes()
     && regularRoutes.length === 0
     && !profilesApply
@@ -918,8 +951,9 @@ function formSnapshot() {
     route: state.route,
     effort: state.effort,
     executionProfile: state.executionProfile,
+    supervision: state.supervision,
     candidateCount: els.candidateCount.value || "1",
-    draftVersion: 5,
+    draftVersion: 6,
   };
 }
 
@@ -948,6 +982,7 @@ function applyFormSnapshot(snapshot) {
   }[snapshot.mode];
   state.effort = snapshot.effort || (legacyManagedMode ? migratedEffort : snapshot.mode) || state.effort;
   state.executionProfile = snapshot.executionProfile || AUTOMATIC_PROFILE_KEY;
+  state.supervision = snapshot.supervision === "glm-5.2" ? "glm-5.2" : "none";
   els.candidateCount.value = snapshot.candidateCount === "3" ? "3" : "1";
   renderModeControls();
   updateAccessSummary();
@@ -963,12 +998,13 @@ function resetNewGoalForm() {
     : state.routeDefault;
   state.effort = state.effortDefault;
   state.executionProfile = AUTOMATIC_PROFILE_KEY;
+  state.supervision = "none";
   els.candidateCount.value = "1";
   state.mode = usesHumanModes() ? state.route : state.effort;
   renderModeControls();
   updateAccessSummary();
   sessionStorage.removeItem(STORAGE_KEY);
-  state.restoredDraftVersion = 5;
+  state.restoredDraftVersion = 6;
   state.undoStack = [];
   state.redoStack = [];
   pushUndo();
@@ -1120,14 +1156,26 @@ function renderRecovery() {
     return;
   }
 
+  const guide = task.guide && typeof task.guide === "object" ? task.guide : {};
   els.recoveryTitle.textContent = readinessState === "needs_review"
-    ? "Current task needs your decision"
+    ? guide.title || "Your result is ready"
     : readinessState === "configuration_error"
       ? "Configuration needs repair"
       : "Current task needs attention";
-  els.recoverySummary.textContent = state.readiness?.summary
+  els.recoverySummary.textContent = readinessState === "needs_review"
+    ? guide.explanation || "The assistant finished and stopped safely for your review."
+    : state.readiness?.summary
     || state.readiness?.next_action
     || "Choose what should happen before starting another task.";
+  els.recoveryContinueButton.textContent = readinessState === "needs_review"
+    ? "Ask for changes"
+    : "Continue task";
+  els.recoveryStopButton.textContent = readinessState === "needs_review"
+    ? "Stop without approving"
+    : "Stop task";
+  els.recoveryOpenTaskButton.textContent = readinessState === "needs_review"
+    ? "Review result"
+    : "Open current task";
   els.recoveryContinueButton.hidden = !hasTask || !canContinue;
   els.recoveryStopButton.hidden = !hasTask || !canStop;
   els.recoveryOpenTaskButton.hidden = !hasTask;
@@ -1273,6 +1321,13 @@ function verificationSource(row) {
   return row.source || (row.independent ? "independent" : "worker-reported");
 }
 
+function verificationSourceLabel(row) {
+  const source = verificationSource(row);
+  if (source === "independent") return "Independent";
+  if (source === "managed-review") return "Managed review";
+  return "Worker-reported";
+}
+
 function independentReviewRows(final) {
   const rows = [];
   (Array.isArray(final.review_attempts) ? final.review_attempts : []).forEach((attempt) => {
@@ -1355,6 +1410,33 @@ function renderFinalReceipt(task, receipt) {
     : "Nothing remains open.";
 }
 
+function renderTaskGuide(task) {
+  const guide = task.guide && typeof task.guide === "object" ? task.guide : {};
+  const show = Boolean(guide.title);
+  els.taskGuide.hidden = !show;
+  if (!show) {
+    els.taskGuide.className = "task-guide";
+    els.taskGuideCounts.hidden = true;
+    return;
+  }
+  els.taskGuide.className = `task-guide ${guide.tone || "active"}`;
+  els.taskGuideEyebrow.textContent = guide.eyebrow || "What is happening";
+  els.taskGuideTitle.textContent = guide.title;
+  els.taskGuideBody.textContent = guide.body || "";
+  els.taskGuideBody.hidden = !guide.body;
+  els.taskGuideExplanation.textContent = guide.explanation || "";
+  els.taskGuideExplanation.hidden = !guide.explanation;
+  els.taskGuideNext.textContent = guide.next_action || "";
+  els.taskGuideNext.hidden = !guide.next_action;
+  const counts = guide.counts && typeof guide.counts === "object" ? guide.counts : {};
+  const showCounts = ["changed_files", "checks", "artifacts"]
+    .some((key) => Number(counts[key] || 0) > 0);
+  els.taskGuideCounts.hidden = !showCounts;
+  els.taskGuideFiles.textContent = String(Number(counts.changed_files || 0));
+  els.taskGuideChecks.textContent = String(Number(counts.checks || 0));
+  els.taskGuideArtifacts.textContent = String(Number(counts.artifacts || 0));
+}
+
 function renderTask(task) {
   state.currentTask = task;
   els.taskContext.hidden = !state.viewingHistoryId;
@@ -1394,7 +1476,10 @@ function renderTask(task) {
   const taskId = String(task.id || "");
   if (receipt.terminal && taskId !== state.lastRenderedTaskId) els.completedDetails.open = false;
   state.lastRenderedTaskId = taskId;
-  els.statusLabel.textContent = receipt.terminal && receipt.final.label
+  const guide = task.guide && typeof task.guide === "object" ? task.guide : {};
+  els.statusLabel.textContent = status === "needs_review" && guide.title
+    ? guide.title
+    : receipt.terminal && receipt.final.label
     ? receipt.final.label
     : rawDoneUnverified
       ? "Checking evidence"
@@ -1404,6 +1489,7 @@ function renderTask(task) {
     : rawDoneUnverified
       ? "Completion is not verified yet."
       : task.summary || "No task is running.";
+  renderTaskGuide(task);
   els.statusIndicator.className = `status-indicator ${visualStatus}`;
   els.statusIcon.setAttribute("href", iconHref(STATUS_ICONS[visualStatus] || "loader-circle"));
   els.statusIndicator.setAttribute("aria-label", els.statusLabel.textContent);
@@ -1411,11 +1497,18 @@ function renderTask(task) {
 
   const progress = normalizeProgress(task);
   const percent = Number(progress.percent);
+  const reviewPending = status === "needs_review";
   const indeterminate = progress.determinate === false
-    && ["starting", "working", "checking", "needs_review", "needs_attention"].includes(status);
+    && ["starting", "working", "checking", "needs_attention"].includes(status);
   const determinate = progress.determinate === true && Number.isFinite(percent);
-  els.progressGroup.hidden = !(determinate || indeterminate);
-  if (determinate) {
+  els.progressGroup.hidden = !(reviewPending || determinate || indeterminate);
+  if (reviewPending) {
+    els.progressValue.textContent = "Waiting for your review";
+    els.progressBar.style.width = "100%";
+    els.progressTrack.className = "progress-track";
+    els.progressTrack.removeAttribute("aria-valuenow");
+    els.progressTrack.setAttribute("aria-valuetext", "Waiting for your review");
+  } else if (determinate) {
     const bounded = Math.max(0, Math.min(100, percent));
     els.progressValue.textContent = `${bounded}%`;
     els.progressBar.style.width = `${bounded}%`;
@@ -1435,10 +1528,14 @@ function renderTask(task) {
   }
 
   const current = task.current && typeof task.current === "object" ? task.current : {};
-  els.currentSubgoal.textContent = task.current && task.current.current_subgoal
+  els.currentSubgoal.textContent = reviewPending
+    ? "Review the result and decide"
+    : task.current && task.current.current_subgoal
     ? task.current.current_subgoal
     : "Waiting for the next step";
-  els.checkpoint.textContent = task.current && task.current.checkpoint
+  els.checkpoint.textContent = reviewPending
+    ? "Review"
+    : task.current && task.current.checkpoint
     ? task.current.checkpoint.replaceAll("_", " ")
     : "Not started";
   els.attemptsValue.textContent = String(
@@ -1496,7 +1593,7 @@ function renderTask(task) {
   textList(els.verification, task.verification, (row) => ({
     text: typeof row === "string"
       ? row
-      : `${verificationSource(row) === "independent" ? "Independent" : "Worker-reported"} · ${row.passed ? "Passed" : "Failed"}: ${row.message || row.name || "Check"}`,
+      : `${verificationSourceLabel(row)} · ${row.passed ? "Passed" : "Needs review"}: ${row.message || row.name || "Check"}`,
     className: typeof row === "object" && row.passed ? "passed" : "failed",
   }), "No verification evidence reported yet.");
   previewList(
@@ -1520,12 +1617,21 @@ function renderTask(task) {
   els.artifactsEvidence.hidden = receipt.terminal;
 
   els.continueButton.hidden = viewingHistory || !hasAction(task, "continue");
+  els.continueButtonLabel.textContent = status === "needs_review"
+    ? "Ask for changes"
+    : "Continue with a note";
   els.approveSpecButton.hidden = viewingHistory || !hasAction(task, "approve_spec");
   els.approveSpecButtonLabel.textContent = task.metadata?.specification_review?.kind === "amendment"
     ? "Review changed conditions"
     : "Approve completion conditions";
   els.acceptButton.hidden = viewingHistory || !hasAction(task, "accept");
+  els.acceptButtonLabel.textContent = status === "needs_review"
+    ? "Approve and finish"
+    : "Accept result";
   els.stopButton.hidden = viewingHistory || !hasAction(task, "stop");
+  els.stopButtonLabel.textContent = status === "needs_review"
+    ? "Stop without approving"
+    : "Stop safely";
   els.advancedDetails.textContent = JSON.stringify({
     id: task.id || "",
     contract: task.contract || "",
@@ -1589,7 +1695,7 @@ function renderConversation(task) {
   }
   const status = String(task.status || "");
   els.messageHint.textContent = status === "needs_review"
-    ? "Sending will reopen the run with this recorded guidance."
+    ? "Describe what should change. Sending this will reopen the task."
     : "Your latest guidance controls if messages conflict.";
 }
 
@@ -2247,10 +2353,12 @@ async function startWork() {
       metadata: {
         updated_at: submittedAt,
         route_key: usesHumanModes() ? state.route : undefined,
+        route_id: usesHumanModes() ? selectedRoute()?.route_id : undefined,
         effort: state.effort,
         execution_profile: routeUsesExecutionProfiles()
           ? state.executionProfile
           : undefined,
+        supervision: routeSupportsGlmSupervision() ? state.supervision : undefined,
       },
     };
     state.liveTask = pendingTask;
@@ -2262,11 +2370,15 @@ async function startWork() {
         method: "POST",
         body: JSON.stringify({
           route: usesHumanModes() ? state.route : undefined,
+          route_id: usesHumanModes() ? selectedRoute()?.route_id : undefined,
           effort: usesHumanModes() ? state.effort : undefined,
           execution_profile: usesHumanModes()
             && routeUsesExecutionProfiles()
             && state.executionProfile !== AUTOMATIC_PROFILE_KEY
             ? state.executionProfile
+            : undefined,
+          supervision: usesHumanModes() && routeSupportsGlmSupervision()
+            ? state.supervision
             : undefined,
           strategy: usesHumanModes() ? undefined : state.effort,
           objective,
@@ -2623,6 +2735,13 @@ els.modelProfileSelect.addEventListener("change", () => {
   renderModeControls();
   pushUndo();
   persistForm();
+});
+els.advisorySupervision.addEventListener("change", () => {
+  state.supervision = els.advisorySupervision.checked ? "glm-5.2" : "none";
+  renderModeControls();
+  pushUndo();
+  persistForm();
+  updateStartButton();
 });
 els.candidateCount.addEventListener("change", () => {
   pushUndo();

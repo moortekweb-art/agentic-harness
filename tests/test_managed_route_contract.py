@@ -23,6 +23,7 @@ from agentic_harness.gui.server import GuiSession, _managed_session_path, make_h
 
 MANAGED_ROUTE_FIELDS = {
     "key",
+    "route_id",
     "technical_mode",
     "mode_number",
     "label",
@@ -502,7 +503,8 @@ def test_managed_mode_contract_exposes_backend_facts_not_effort_aliases() -> Non
     assert by_key["mode1"]["local_only"] is True
     assert by_key["mode2"]["enabled"] is False
     assert by_key["mode2"]["disabled_reason"]
-    assert by_key["mode3a"]["technical_mode"] == "Mode 3A"
+    assert by_key["mode3a"]["technical_mode"] == "Cloud GLM build"
+    assert by_key["mode3a"]["route_id"] == "cloud-glm-build"
     assert by_key["mode3a"]["planner"] == "glm-5.2"
     assert by_key["mode3a"]["worker"] == "opencode-glm-build"
     assert by_key["mode3a"]["requires_scope"] is True
@@ -923,6 +925,44 @@ def test_managed_api_defaults_execution_profile_to_qwen_primary() -> None:
 
     assert task["status"] == "starting"
     assert bridge.starts[0]["execution_profile"] == "qwen-primary"
+
+
+def test_managed_api_forwards_canonical_route_and_requested_glm_supervision() -> None:
+    bridge = ReadyCaptureBridge()
+
+    task = gui_api.start_task(
+        bridge,  # type: ignore[arg-type]
+        {
+            "route": "mode1",
+            "route_id": "local-build",
+            "supervision": "glm-5.2",
+            "effort": "standard",
+            "objective": "Implement the bounded local task and verify the requested behavior",
+        },
+    )
+
+    assert task["status"] == "starting"
+    assert bridge.starts[0]["route_id"] == "local-build"
+    assert bridge.starts[0]["supervision"] == "glm-5.2"
+    assert task["metadata"]["route_id"] == "local-build"
+    assert task["metadata"]["supervision"] == "glm-5.2"
+
+
+def test_managed_api_rejects_stale_route_identity_before_dispatch() -> None:
+    bridge = ReadyCaptureBridge()
+
+    task = gui_api.start_task(
+        bridge,  # type: ignore[arg-type]
+        {
+            "route": "mode1",
+            "route_id": "cloud-glm-build",
+            "objective": "Do not dispatch a stale or mismatched execution route",
+        },
+    )
+
+    assert task["status"] == "blocked"
+    assert task["advanced_details"]["error"] == "route_identity_mismatch"
+    assert bridge.starts == []
 
 
 def test_mode3a_requires_explicit_managed_scope_before_dispatch() -> None:
