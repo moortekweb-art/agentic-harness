@@ -1468,6 +1468,17 @@ def enrich_managed_task_snapshot(
         bridge,
         {"active_goal": {"run_dir": str(run_dir)}},
     )
+    guide = enriched.get("guide")
+    if not isinstance(guide, dict) or not guide.get("title"):
+        changed_files = enriched.get("changed_files")
+        verification = enriched.get("verification")
+        artifacts = enriched.get("artifacts")
+        enriched["guide"] = _review_guide(
+            str(enriched.get("summary") or "The work is ready for your review."),
+            changed_files=len(changed_files) if isinstance(changed_files, list) else 0,
+            checks=len(verification) if isinstance(verification, list) else 0,
+            artifacts=len(artifacts) if isinstance(artifacts, list) else 0,
+        )
     return enriched
 
 
@@ -1650,25 +1661,12 @@ def _guide_for_status(
     """
     if status == "needs_review":
         result_summary = _review_result_summary(details) or summary
-        return {
-            "tone": "review",
-            "eyebrow": "Your decision",
-            "title": "Your result is ready",
-            "body": result_summary,
-            "explanation": (
-                "The assistant finished and stopped safely at a review point; it did not "
-                "crash. The harness has not approved the result for you."
-            ),
-            "next_action": (
-                "Read the result and evidence below. If it matches your request, choose "
-                "Approve and finish. Otherwise choose Ask for changes."
-            ),
-            "counts": {
-                "changed_files": len(changed_files),
-                "checks": len(verification),
-                "artifacts": len(artifacts),
-            },
-        }
+        return _review_guide(
+            result_summary,
+            changed_files=len(changed_files),
+            checks=len(verification),
+            artifacts=len(artifacts),
+        )
     if status in {"starting", "working", "checking"}:
         current = runtime_context.get("current")
         current = current if isinstance(current, dict) else {}
@@ -1701,6 +1699,35 @@ def _guide_for_status(
             "counts": {},
         }
     return {}
+
+
+def _review_guide(
+    summary: str,
+    *,
+    changed_files: int,
+    checks: int,
+    artifacts: int,
+) -> dict[str, Any]:
+    """Build the same clear review handoff for current and historical tasks."""
+    return {
+        "tone": "review",
+        "eyebrow": "Your decision",
+        "title": "Your result is ready",
+        "body": summary,
+        "explanation": (
+            "The assistant finished and stopped safely at a review point; it did not "
+            "crash. The harness has not approved the result for you."
+        ),
+        "next_action": (
+            "Read the result and evidence below. If it matches your request, choose "
+            "Approve and finish. Otherwise choose Ask for changes."
+        ),
+        "counts": {
+            "changed_files": changed_files,
+            "checks": checks,
+            "artifacts": artifacts,
+        },
+    }
 
 
 def _review_result_summary(details: dict[str, Any]) -> str:
@@ -1920,7 +1947,10 @@ def _runtime_context(status: str, details: dict[str, Any]) -> dict[str, Any]:
     run_dir = str(active_goal.get("run_dir") or "").rstrip("/")
     task_id = str(active_goal.get("id") or "").strip()
     if not task_id and run_dir:
-        task_id = run_dir.rsplit("/", 1)[-1]
+        # Supervisor payloads can originate on a different operating system
+        # than the GUI process.  Treat both separators as path boundaries so
+        # durable task identity does not become an absolute Windows path.
+        task_id = run_dir.replace("\\", "/").rsplit("/", 1)[-1]
 
     subgoal = active_goal.get("current_subgoal")
     if isinstance(subgoal, dict):
@@ -2351,6 +2381,9 @@ def _preview_managed_workspace_file(root: Path, relative: str) -> dict[str, Any]
         content = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("Binary files cannot be previewed.") from exc
+    # Keep the JSON contract stable across platforms.  Windows checkouts may
+    # store text with CRLF even when the authored content used LF.
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
     return {"path": requested.as_posix(), "content": content, "truncated": False}
 
 

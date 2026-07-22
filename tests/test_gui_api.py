@@ -599,6 +599,21 @@ def test_managed_review_history_retains_evidence_after_lane_returns_ready(
     assert audit["changed_files"] == ["SYSTEM_AUDIT_2026-07-22.md"]
     assert audit["artifacts"][0]["path"] == "SYSTEM_AUDIT_2026-07-22.md"
     assert len(audit["verification"]) == 3
+    assert audit["guide"]["title"] == "Your result is ready"
+    assert audit["guide"]["counts"] == {
+        "changed_files": 1,
+        "checks": 3,
+        "artifacts": 1,
+    }
+
+
+def test_gui_frontend_presents_review_as_a_user_decision() -> None:
+    app = Path("agentic_harness/gui/static/app.js").read_text(encoding="utf-8")
+
+    assert 'const reviewPending = status === "needs_review"' in app
+    assert 'els.progressValue.textContent = "Waiting for your review"' in app
+    assert '? "Review the result and decide"' in app
+    assert '? "Review"' in app
 
 
 def test_task_from_command_result_does_not_treat_accepted_false_as_done() -> None:

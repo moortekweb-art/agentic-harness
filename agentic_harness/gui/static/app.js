@@ -1497,11 +1497,18 @@ function renderTask(task) {
 
   const progress = normalizeProgress(task);
   const percent = Number(progress.percent);
+  const reviewPending = status === "needs_review";
   const indeterminate = progress.determinate === false
-    && ["starting", "working", "checking", "needs_review", "needs_attention"].includes(status);
+    && ["starting", "working", "checking", "needs_attention"].includes(status);
   const determinate = progress.determinate === true && Number.isFinite(percent);
-  els.progressGroup.hidden = !(determinate || indeterminate);
-  if (determinate) {
+  els.progressGroup.hidden = !(reviewPending || determinate || indeterminate);
+  if (reviewPending) {
+    els.progressValue.textContent = "Waiting for your review";
+    els.progressBar.style.width = "100%";
+    els.progressTrack.className = "progress-track";
+    els.progressTrack.removeAttribute("aria-valuenow");
+    els.progressTrack.setAttribute("aria-valuetext", "Waiting for your review");
+  } else if (determinate) {
     const bounded = Math.max(0, Math.min(100, percent));
     els.progressValue.textContent = `${bounded}%`;
     els.progressBar.style.width = `${bounded}%`;
@@ -1521,10 +1528,14 @@ function renderTask(task) {
   }
 
   const current = task.current && typeof task.current === "object" ? task.current : {};
-  els.currentSubgoal.textContent = task.current && task.current.current_subgoal
+  els.currentSubgoal.textContent = reviewPending
+    ? "Review the result and decide"
+    : task.current && task.current.current_subgoal
     ? task.current.current_subgoal
     : "Waiting for the next step";
-  els.checkpoint.textContent = task.current && task.current.checkpoint
+  els.checkpoint.textContent = reviewPending
+    ? "Review"
+    : task.current && task.current.checkpoint
     ? task.current.checkpoint.replaceAll("_", " ")
     : "Not started";
   els.attemptsValue.textContent = String(
