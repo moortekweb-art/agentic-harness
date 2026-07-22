@@ -2353,6 +2353,69 @@ def _first_route_text(*values: object) -> str:
     return ""
 
 
+def _managed_lineage_run_dirs(run_dir: Path, run_meta: dict[str, Any]) -> list[Path]:
+    """Return the current run plus its frozen-verifier source run, when safe."""
+
+    lineage = [run_dir]
+    source_id = _first_route_text(run_meta.get("verification_contract_run_id"))
+    if not source_id or source_id == run_dir.name or Path(source_id).name != source_id:
+        return lineage
+    candidate = run_dir.parent / source_id
+    try:
+        if candidate.is_symlink() or not candidate.is_dir():
+            return lineage
+        resolved = candidate.resolve()
+        resolved.relative_to(run_dir.parent.resolve())
+    except (OSError, ValueError):
+        return lineage
+    lineage.append(resolved)
+    return lineage
+
+
+def _managed_external_reviews(run_dirs: list[Path]) -> list[dict[str, Any]]:
+    """Read bounded external-review evidence across a managed continuation."""
+
+    reviews: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for run_dir in run_dirs:
+        paths: list[Path] = [run_dir / "external-review-latest.json"]
+        history_dir = run_dir / "external-reviews"
+        try:
+            if not history_dir.is_symlink() and history_dir.is_dir():
+                paths.extend(sorted(history_dir.glob("*.json"), key=lambda path: path.name)[:128])
+        except OSError:
+            pass
+        for path in paths:
+            review = _read_small_json(path)
+            if review.get("contract") != "local_node1_goal_external_review.v1":
+                continue
+            identity = (
+                _first_route_text(review.get("generated_at")),
+                _first_route_text(review.get("reviewer"), review.get("provider")),
+                _first_route_text(review.get("model")),
+                _first_route_text(review.get("status")),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            reviews.append(review)
+    reviews.sort(key=lambda review: _first_route_text(review.get("generated_at")))
+    return reviews
+
+
+def _external_review_succeeded(review: dict[str, Any]) -> bool:
+    if review.get("ok") is True:
+        return True
+    return _first_route_text(review.get("status")).lower() in {
+        "accepted",
+        "complete",
+        "completed",
+        "ok",
+        "passed",
+        "success",
+    }
+
+
 def _managed_route_receipt(
     run_dir: Path,
     payload: dict[str, Any] | None,
@@ -2362,7 +2425,18 @@ def _managed_route_receipt(
     run_meta = _read_small_json(run_dir / "run-meta.json")
     file_loop_state = _read_small_json(run_dir / "loop-state.json")
     review = _read_small_json(run_dir / "review.json")
-    external_review = _read_small_json(run_dir / "external-review-latest.json")
+    acceptance = _read_small_json(run_dir / "acceptance.json")
+    external_reviews = _managed_external_reviews(
+        _managed_lineage_run_dirs(run_dir, run_meta)
+    )
+    successful_external_reviews = [
+        item for item in external_reviews if _external_review_succeeded(item)
+    ]
+    external_review = (
+        successful_external_reviews[-1]
+        if successful_external_reviews
+        else (external_reviews[-1] if external_reviews else {})
+    )
     active = payload.get("active_goal") if isinstance(payload, dict) else None
     runtime = payload.get("runtime") if isinstance(payload, dict) else None
     runtime_loop_state = runtime.get("loop_state") if isinstance(runtime, dict) else None
@@ -2452,6 +2526,37 @@ def _managed_route_receipt(
             if fallback_used is False
             else "Worker evidence recorded a fallback without a reason.",
         )
+    elif external_review and _external_review_succeeded(external_review):
+        selected_reviewer = _first_route_text(
+            external_review.get("reviewer"), external_review.get("provider")
+        )
+        selected_index = external_reviews.index(external_review)
+        prior_failed_review = next(
+            (
+                item
+                for item in reversed(external_reviews[:selected_index])
+                if not _external_review_succeeded(item)
+                and _first_route_text(item.get("reviewer"), item.get("provider"))
+                not in {"", selected_reviewer}
+            ),
+            None,
+        )
+        if prior_failed_review is not None:
+            prior_reviewer = _first_route_text(
+                prior_failed_review.get("reviewer"), prior_failed_review.get("provider")
+            )
+            prior_status = _first_route_text(prior_failed_review.get("status"), "failed")
+            fallback_used = True
+            fallback_reason = (
+                f"{prior_reviewer} -> {selected_reviewer}: "
+                f"prior reviewer {prior_status}."
+            )
+
+    accepted_status = (
+        "accepted"
+        if _first_route_text(acceptance.get("status")).lower() == "accepted"
+        else ""
+    )
 
     receipt: dict[str, Any] = {
         "contract": "agentic_harness.managed_route_receipt.v1",
@@ -2465,7 +2570,11 @@ def _managed_route_receipt(
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
         "status": _first_route_text(
-            run_meta.get("status"), loop_state.get("status"), active.get("status")
+            accepted_status,
+            run_meta.get("status"),
+            loop_state.get("status"),
+            review.get("status"),
+            active.get("status"),
         ),
         "observed_at": _first_route_text(
             run_meta.get("updated_at"),

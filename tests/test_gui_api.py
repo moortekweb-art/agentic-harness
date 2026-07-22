@@ -23,6 +23,7 @@ import pytest
 from agentic_harness.core.local_goal_bridge import CommandResult, LocalGoalBridge
 from agentic_harness.gui import server as gui_server_module
 from agentic_harness.gui.api import (
+    _managed_route_receipt,
     health_payload,
     modes_payload,
     start_task,
@@ -558,6 +559,83 @@ def test_managed_review_exposes_current_run_result_and_reason(tmp_path: Path) ->
         "status": "manual_acceptance_required",
         "observed_at": "2026-07-22T05:37:58Z",
     }
+
+
+def test_managed_route_receipt_reports_external_reviewer_fallback_across_continuation(
+    tmp_path: Path,
+) -> None:
+    runs_root = tmp_path / "reports" / "local-node1-goal-harness" / "runs"
+    source = runs_root / "source-run"
+    continuation = runs_root / "continuation-run"
+    external_reviews = source / "external-reviews"
+    external_reviews.mkdir(parents=True)
+    continuation.mkdir()
+    (source / "run-meta.json").write_text("{}", encoding="utf-8")
+    (continuation / "run-meta.json").write_text(
+        json.dumps(
+            {
+                "executor": "opencode",
+                "status": "running",
+                "updated_at": "2026-07-22T07:30:06Z",
+                "verification_contract_run_id": source.name,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (continuation / "loop-state.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "executor": "opencode",
+                "opencode_model": "litellm-gateway/local-node1-vllm",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (continuation / "review.json").write_text(
+        json.dumps({"status": "accepted"}), encoding="utf-8"
+    )
+    (continuation / "acceptance.json").write_text(
+        json.dumps({"status": "accepted"}), encoding="utf-8"
+    )
+    glm_review = {
+        "contract": "local_node1_goal_external_review.v1",
+        "generated_at": "2026-07-22T07:26:02Z",
+        "reviewer": "glm-5.2",
+        "model": "zai/glm-5.2",
+        "status": "unavailable",
+        "ok": False,
+    }
+    kimi_review = {
+        "contract": "local_node1_goal_external_review.v1",
+        "generated_at": "2026-07-22T07:26:34Z",
+        "reviewer": "kimi-coding",
+        "model": "kimi-coding/kimi-for-coding",
+        "status": "ok",
+        "ok": True,
+    }
+    (external_reviews / "20260722T072602Z-glm-5.2.json").write_text(
+        json.dumps(glm_review), encoding="utf-8"
+    )
+    (external_reviews / "20260722T072634Z-kimi-coding.json").write_text(
+        json.dumps(kimi_review), encoding="utf-8"
+    )
+    (source / "external-review-latest.json").write_text(
+        json.dumps(kimi_review), encoding="utf-8"
+    )
+
+    receipt = _managed_route_receipt(
+        continuation,
+        {"classification": "accepted", "active_goal": {"executor": "opencode"}},
+    )
+
+    assert receipt["status"] == "accepted"
+    assert receipt["reviewer"] == "kimi-coding"
+    assert receipt["reviewer_model"] == "kimi-coding/kimi-for-coding"
+    assert receipt["fallback_used"] is True
+    assert receipt["fallback_reason"] == (
+        "glm-5.2 -> kimi-coding: prior reviewer unavailable."
+    )
 
 
 def test_managed_review_artifact_can_be_previewed_but_other_files_cannot(
