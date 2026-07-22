@@ -538,6 +538,12 @@ def test_managed_review_exposes_current_run_result_and_reason(tmp_path: Path) ->
         "source": "managed-review",
     }
     assert task["readiness_gate"]["summary"] == task["summary"]
+    assert task["guide"]["body"] == task["summary"]
+    assert task["guide"]["counts"] == {
+        "changed_files": 1,
+        "checks": 3,
+        "artifacts": 1,
+    }
 
 
 def test_managed_review_artifact_can_be_previewed_but_other_files_cannot(

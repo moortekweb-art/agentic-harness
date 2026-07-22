@@ -1418,11 +1418,14 @@ def preview_managed_task_path(
     artifact: bool = False,
 ) -> dict[str, Any]:
     """Preview evidence that the current managed task explicitly exposes."""
+    doc_root = bridge.doc_root
+    if doc_root is None:
+        raise ValueError("The managed workspace is not configured.")
+    root = Path(doc_root).resolve()
     if goal_id:
         run_dir = _managed_run_dir_for_id(bridge, goal_id)
         if run_dir is None:
             raise ValueError("Only evidence from a recorded managed task can be previewed.")
-        root = Path(bridge.doc_root).resolve()
         allowed = set(_managed_owned_files(root, run_dir))
     else:
         task = status_task(bridge)
@@ -1443,7 +1446,7 @@ def preview_managed_task_path(
     if path not in allowed:
         kind = "artifact" if artifact else "changed file"
         raise ValueError(f"Only a recorded {kind} from the current task can be previewed.")
-    return _preview_managed_workspace_file(Path(bridge.doc_root), path)
+    return _preview_managed_workspace_file(root, path)
 
 
 def enrich_managed_task_snapshot(
@@ -2143,7 +2146,10 @@ def _attach_managed_review_evidence(
     run_dir = _managed_active_run_dir(bridge, payload)
     if run_dir is None:
         return
-    root = Path(bridge.doc_root).resolve()
+    doc_root = bridge.doc_root
+    if doc_root is None:
+        return
+    root = Path(doc_root).resolve()
     review = _read_small_json(run_dir / "review.json")
     independent = _read_small_json(run_dir / "independent-verification.json")
     owned_files = _managed_owned_files(root, run_dir)
@@ -2173,6 +2179,14 @@ def _attach_managed_review_evidence(
         for path in owned_files
     ]
     task["readiness_gate"]["summary"] = task["summary"]
+    guide = task.get("guide")
+    if isinstance(guide, dict):
+        guide["body"] = task["summary"]
+        guide["counts"] = {
+            "changed_files": len(task["changed_files"]),
+            "checks": len(task["verification"]),
+            "artifacts": len(task["artifacts"]),
+        }
 
 
 def _managed_active_run_dir(
