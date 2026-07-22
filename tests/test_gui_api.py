@@ -23,6 +23,7 @@ import pytest
 from agentic_harness.core.local_goal_bridge import CommandResult, LocalGoalBridge
 from agentic_harness.gui import server as gui_server_module
 from agentic_harness.gui.api import (
+    _managed_route_receipt,
     health_payload,
     modes_payload,
     start_task,
@@ -544,6 +545,97 @@ def test_managed_review_exposes_current_run_result_and_reason(tmp_path: Path) ->
         "checks": 3,
         "artifacts": 1,
     }
+    assert task["metadata"]["route_receipt"] == {
+        "contract": "agentic_harness.managed_route_receipt.v1",
+        "evidence": "observed",
+        "actual": True,
+        "planner": "none",
+        "builder": "opencode",
+        "reviewer": "managed deterministic review",
+        "model": "litellm-gateway/local-node1-vllm",
+        "provider": "",
+        "fallback_used": None,
+        "fallback_reason": "No fallback event was recorded in the managed run evidence.",
+        "status": "manual_acceptance_required",
+        "observed_at": "2026-07-22T05:37:58Z",
+    }
+
+
+def test_managed_route_receipt_reports_external_reviewer_fallback_across_continuation(
+    tmp_path: Path,
+) -> None:
+    runs_root = tmp_path / "reports" / "local-node1-goal-harness" / "runs"
+    source = runs_root / "source-run"
+    continuation = runs_root / "continuation-run"
+    external_reviews = source / "external-reviews"
+    external_reviews.mkdir(parents=True)
+    continuation.mkdir()
+    (source / "run-meta.json").write_text("{}", encoding="utf-8")
+    (continuation / "run-meta.json").write_text(
+        json.dumps(
+            {
+                "executor": "opencode",
+                "status": "running",
+                "updated_at": "2026-07-22T07:30:06Z",
+                "verification_contract_run_id": source.name,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (continuation / "loop-state.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "executor": "opencode",
+                "opencode_model": "litellm-gateway/local-node1-vllm",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (continuation / "review.json").write_text(
+        json.dumps({"status": "accepted"}), encoding="utf-8"
+    )
+    (continuation / "acceptance.json").write_text(
+        json.dumps({"status": "accepted"}), encoding="utf-8"
+    )
+    glm_review = {
+        "contract": "local_node1_goal_external_review.v1",
+        "generated_at": "2026-07-22T07:26:02Z",
+        "reviewer": "glm-5.2",
+        "model": "zai/glm-5.2",
+        "status": "unavailable",
+        "ok": False,
+    }
+    kimi_review = {
+        "contract": "local_node1_goal_external_review.v1",
+        "generated_at": "2026-07-22T07:26:34Z",
+        "reviewer": "kimi-coding",
+        "model": "kimi-coding/kimi-for-coding",
+        "status": "ok",
+        "ok": True,
+    }
+    (external_reviews / "20260722T072602Z-glm-5.2.json").write_text(
+        json.dumps(glm_review), encoding="utf-8"
+    )
+    (external_reviews / "20260722T072634Z-kimi-coding.json").write_text(
+        json.dumps(kimi_review), encoding="utf-8"
+    )
+    (source / "external-review-latest.json").write_text(
+        json.dumps(kimi_review), encoding="utf-8"
+    )
+
+    receipt = _managed_route_receipt(
+        continuation,
+        {"classification": "accepted", "active_goal": {"executor": "opencode"}},
+    )
+
+    assert receipt["status"] == "accepted"
+    assert receipt["reviewer"] == "kimi-coding"
+    assert receipt["reviewer_model"] == "kimi-coding/kimi-for-coding"
+    assert receipt["fallback_used"] is True
+    assert receipt["fallback_reason"] == (
+        "glm-5.2 -> kimi-coding: prior reviewer unavailable."
+    )
 
 
 def test_managed_review_artifact_can_be_previewed_but_other_files_cannot(
@@ -605,6 +697,38 @@ def test_managed_review_history_retains_evidence_after_lane_returns_ready(
         "checks": 3,
         "artifacts": 1,
     }
+
+
+def test_managed_current_endpoint_keeps_requested_result_in_foreground(
+    tmp_path: Path,
+) -> None:
+    bridge, run_id = _managed_review_bridge(tmp_path)
+
+    with gui_server(bridge) as base_url:  # type: ignore[arg-type]
+        current = get_json(base_url, "/api/tasks/current")
+        assert current["id"] == run_id
+        bridge.status_payload = {  # type: ignore[attr-defined]
+            "classification": "working",
+            "active_goal": {
+                "id": "background-canary",
+                "objective": "Internal maintenance canary",
+                "run_dir": "/tmp/background-canary",
+                "tmux_running": True,
+            },
+        }
+        observed = get_json(base_url, "/api/tasks/current")
+        foreground = get_json(base_url, f"/api/tasks/current?goal_id={quote(run_id)}")
+
+    assert observed["id"] == "background-canary"
+    assert foreground["id"] == run_id
+    assert "System audit completed with 8/10 rating." in foreground["summary"]
+    assert foreground["metadata"]["foreground_task"] is True
+    assert foreground["metadata"]["background_activity"] == {
+        "id": "background-canary",
+        "objective": "Internal maintenance canary",
+        "status": "working",
+    }
+    assert foreground["allowed_actions"] == []
 
 
 def test_gui_frontend_presents_review_as_a_user_decision() -> None:
@@ -767,6 +891,28 @@ def test_task_from_command_result_treats_retryable_failure_as_recoverable() -> N
         "percent": None,
         "label": "In progress",
     }
+
+
+def test_pre_execution_ticket_rejection_is_a_permanent_actionable_block() -> None:
+    result = CommandResult(
+        args=("local-goal", "quick-start"),
+        returncode=1,
+        stdout=(
+            "ticket_error: goal requires at least one concrete allowed path\n"
+            "failed pre-execution validation; not starting worker\n"
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="working")
+
+    assert task["status"] == "blocked"
+    assert task["needs_human"] is True
+    assert task["advanced_details"]["permanent_error"] is True
+    assert task["summary"] == (
+        "Your task did not start because its work area was not available to the worker. "
+        "Your request is still saved; choose the entire project or a specific folder and try again."
+    )
 
 
 def test_managed_working_task_exposes_live_iteration_without_fake_percent() -> None:
@@ -2078,6 +2224,75 @@ def test_gui_server_websocket_status_upgrade_sends_json_frame() -> None:
     assert b'"status": "working"' in response
 
 
+def test_managed_status_and_stream_keep_the_users_started_task_in_foreground() -> None:
+    class StreamOwnershipBridge(FakeBridge):
+        def start_human_goal(self, **kwargs: object) -> CommandResult:
+            result = super().start_human_goal(**kwargs)  # type: ignore[arg-type]
+            return CommandResult(
+                result.args,
+                0,
+                "queued\nrun_dir=/tmp/runs/user-request-1\n",
+                "",
+            )
+
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(
+                ("local-goal", "status", "--json"),
+                0,
+                json.dumps(
+                    {
+                        "classification": "working",
+                        "active_goal": {
+                            "id": "background-maintenance",
+                            "objective": "Internal maintenance",
+                            "run_dir": "/tmp/runs/background-maintenance",
+                            "tmux_running": True,
+                        },
+                    }
+                ),
+                "",
+            )
+
+    with gui_server(StreamOwnershipBridge()) as base_url:
+        started = post_json(
+            base_url,
+            "/api/tasks",
+            {
+                "mode": "local",
+                "objective": "Prepare Michael's requested result",
+                "safe_areas": ["reports/requested-result.md"],
+            },
+        )
+        current = get_json(base_url, "/api/tasks/current")
+        host, port = base_url.removeprefix("http://").split(":")
+        with socket.create_connection((host, int(port)), timeout=3) as client:
+            client.sendall(
+                (
+                    "GET /api/tasks/stream HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            response = client.recv(8192)
+            response += client.recv(8192)
+
+    assert started["metadata"]["start_accepted"] is True
+    assert current["id"] != "background-maintenance"
+    assert current["objective"] == "Prepare Michael's requested result"
+    assert current["metadata"]["foreground_task"] is True
+    assert current["metadata"]["background_activity"]["id"] == (
+        "background-maintenance"
+    )
+    assert current["allowed_actions"] == []
+    assert b"101 Switching Protocols" in response
+    assert b"Prepare Michael's requested result" in response
+    assert b'"id": "background-maintenance"' in response
+
+
 def test_gui_server_websocket_status_redacts_secret_shaped_task_fields() -> None:
     secret = "opaque-websocket-secret-Z7Q4M9"
 
@@ -2167,6 +2382,31 @@ def _managed_review_bridge(tmp_path: Path) -> tuple[object, str]:
                         "detail": "System audit completed with 8/10 rating.",
                     }
                 ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "run-meta.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "planner": "none",
+                "executor": "opencode",
+                "executor_worker": "none",
+                "status": "manual_acceptance_required",
+                "updated_at": "2026-07-22T05:37:58Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "loop-state.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "executor": "opencode",
+                "model": "local-node1-vllm",
+                "opencode_model": "litellm-gateway/local-node1-vllm",
+                "updated_at": "2026-07-22T05:37:54Z",
             }
         ),
         encoding="utf-8",

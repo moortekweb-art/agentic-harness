@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 import threading
 import time
@@ -272,11 +273,98 @@ def test_local_build_can_start_and_verify_glm_advisory_supervision(tmp_path) -> 
         ["glm-supervisor", "status"],
     ]
     start = next(call for call in calls if len(call) > 1 and call[1] == "quick-start")
+    assert calls.index(start) < next(
+        index
+        for index, call in enumerate(calls)
+        if len(call) > 2 and call[1:3] == ["glm-supervisor", "start"]
+    )
     assert start[start.index("--route-id") + 1] == "local-build"
     receipt = result.metadata["glm_supervision"]
     assert isinstance(receipt, dict)
     assert receipt["running"] is True
     assert receipt["started_here"] is True
+
+
+def test_failed_post_start_glm_supervision_rolls_back_only_the_started_run(
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+    run_dir = "/tmp/run-supervision-failure"
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        command = list(args[0])
+        calls.append(command)
+        if command[-2:] == ["capabilities", "--json"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                '{"lanes":{"local":{"executor":"opencode"}}}',
+                "",
+            )
+        if len(command) > 2 and command[1:3] == ["glm-supervisor", "status"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "contract": "local_goal_glm_supervisor.v1",
+                        "status": "stopped",
+                        "running": False,
+                        "reviewer": "glm-5.2",
+                    }
+                ),
+                "",
+            )
+        if len(command) > 2 and command[1:3] == ["glm-supervisor", "start"]:
+            return subprocess.CompletedProcess(command, 1, "{}", "provider unavailable")
+        if len(command) > 2 and command[1:3] == ["glm-supervisor", "stop"]:
+            return subprocess.CompletedProcess(command, 0, "{}", "")
+        if command[1:] == ["status", "--json"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps({"active_goal": {"run_dir": run_dir}}),
+                "",
+            )
+        if command[1:] == ["stop"]:
+            return subprocess.CompletedProcess(command, 0, "stopped\n", "")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            f"run_dir={run_dir}\nstarted local-node1-goal\n",
+            "",
+        )
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+    result = bridge.start_human_goal(
+        mode_key="mode1",
+        route_id="local-build",
+        supervision="glm-5.2",
+        objective="Start one bounded local goal only when GLM supervision stays active",
+    )
+
+    assert result.returncode == 2
+    assert "after the local goal became active" in result.stderr
+    receipt = result.metadata["glm_supervision"]
+    assert isinstance(receipt, dict)
+    assert receipt["running"] is False
+    assert receipt["start_rollback"] == {
+        "attempted": True,
+        "expected_run_dir": run_dir,
+        "observed_run_dir": run_dir,
+        "returncode": 0,
+        "stopped": True,
+    }
+    quick_start = next(index for index, call in enumerate(calls) if call[1] == "quick-start")
+    glm_start = next(
+        index for index, call in enumerate(calls) if call[1:3] == ["glm-supervisor", "start"]
+    )
+    local_stop = next(index for index, call in enumerate(calls) if call[1:] == ["stop"])
+    assert quick_start < glm_start < local_stop
 
 
 def test_route_identity_mismatch_fails_before_external_calls(tmp_path) -> None:
@@ -414,6 +502,67 @@ def test_mode1_forwards_every_preregistered_verification_command(tmp_path) -> No
         if value == "--verification-command"
     ]
     assert observed == list(checks)
+
+
+def test_mode1_forwards_selected_work_areas_to_quick_start(tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        command = list(args[0])
+        calls.append(command)
+        stdout = (
+            '{"lanes":{"local":{"executor":"opencode"}}}'
+            if command[-2:] == ["capabilities", "--json"]
+            else "run_dir=/tmp/run\nstarted\n"
+        )
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+
+    bridge.start_human_goal(
+        mode_key="local",
+        objective="bounded work",
+        safe_areas=("src", "tests"),
+    )
+
+    start = next(call for call in calls if "quick-start" in call)
+    observed = [
+        start[index + 1]
+        for index, value in enumerate(start)
+        if value == "--allowed-path"
+    ]
+    assert observed == ["src", "tests"]
+    assert "--project-scope" not in start
+
+
+def test_mode1_marks_an_empty_work_area_as_the_entire_project(tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        command = list(args[0])
+        calls.append(command)
+        stdout = (
+            '{"lanes":{"local":{"executor":"opencode"}}}'
+            if command[-2:] == ["capabilities", "--json"]
+            else "run_dir=/tmp/run\nstarted\n"
+        )
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+
+    bridge.start_human_goal(mode_key="local", objective="project-wide audit")
+
+    start = next(call for call in calls if "quick-start" in call)
+    assert start[start.index("--project-scope") + 1] == "entire-project"
+    assert "--allowed-path" not in start
 
 
 def test_local_goal_bridge_monitor_never_requests_auto_accept(tmp_path) -> None:

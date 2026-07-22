@@ -492,6 +492,29 @@
               <div><dt>Evidence</dt><dd id="taskGuideArtifacts">0</dd></div>
             </dl>
           </section>
+          <section id="resultOutput" class="result-output" aria-labelledby="resultOutputTitle" hidden>
+            <div class="result-output-heading">
+              <div>
+                <p class="eyebrow">Your result</p>
+                <h3 id="resultOutputTitle">Completed result</h3>
+              </div>
+              <button id="resultOutputOpen" type="button">Open larger</button>
+            </div>
+            <p id="resultOutputSummary" class="result-output-summary"></p>
+            <pre id="resultOutputContent" class="result-output-content" tabindex="0">Loading the full result…</pre>
+          </section>
+          <section id="routeReceipt" class="route-receipt" aria-labelledby="routeReceiptLabel" hidden>
+            <p class="eyebrow" id="routeReceiptLabel">Observed execution route</p>
+            <div class="route-receipt-grid">
+              <div><span>Planner</span><strong id="routeReceiptPlanner">Not recorded</strong></div>
+              <div><span>Builder</span><strong id="routeReceiptBuilder">Not recorded</strong></div>
+              <div><span>Model</span><strong id="routeReceiptModel">Not recorded</strong></div>
+              <div><span>Supervisor</span><strong id="routeReceiptSupervisor">None</strong></div>
+              <div><span>Reviewer</span><strong id="routeReceiptReviewer">Pending</strong></div>
+              <div><span>Fallback</span><strong id="routeReceiptFallback">None recorded</strong></div>
+            </div>
+            <p id="routeReceiptFallbackReason" class="route-receipt-note"></p>
+          </section>
           <div id="progressGroup" class="progress-group" hidden>
             <div class="progress-meta">
               <span>Progress</span>

@@ -919,6 +919,38 @@ def _annotate_requested_execution(
         else "not_applicable",
         "supervision": supervision if route == "mode1" else "not_applicable",
     }
+    route_spec = next(
+        (row for row in _MANAGED_ROUTE_SPECS if str(row.get("key") or "") == route),
+        {},
+    )
+    supervision_receipt = "none"
+    if supervision == "glm-5.2":
+        supervision_receipt = "GLM-5.2 advisory supervision requested"
+        details = task.get("advanced_details")
+        command_metadata = (
+            details.get("command_metadata") if isinstance(details, dict) else None
+        )
+        glm_receipt = (
+            command_metadata.get("glm_supervision")
+            if isinstance(command_metadata, dict)
+            else None
+        )
+        if isinstance(glm_receipt, dict) and glm_receipt.get("running") is True:
+            supervision_receipt = "GLM-5.2 advisory supervision verified active"
+    metadata["route_receipt"] = {
+        "contract": "agentic_harness.managed_route_receipt.v1",
+        "evidence": "requested",
+        "actual": False,
+        "route_key": route,
+        "route_id": route_id,
+        "planner": str(route_spec.get("planner") or "pending observation"),
+        "builder": str(route_spec.get("executor") or "pending observation"),
+        "reviewer": "pending managed review",
+        "model": "pending worker evidence",
+        "supervisor": supervision_receipt,
+        "fallback_used": None,
+        "fallback_reason": "No fallback decision has been observed yet.",
+    }
     return task
 
 
@@ -1247,7 +1279,7 @@ def start_task(
                 "observed_run_dir": _started_run_dir(result),
             },
         )
-    return _annotate_requested_execution(
+    task = _annotate_requested_execution(
         task,
         objective=objective,
         route=route,
@@ -1258,6 +1290,14 @@ def start_task(
         route_id=expected_route_id,
         supervision=supervision,
     )
+    started_run_dir = _started_run_dir(result)
+    if started_run_dir:
+        _attach_managed_route_receipt(
+            task,
+            bridge,
+            {"active_goal": {"run_dir": started_run_dir}},
+        )
+    return task
 
 
 def _started_run_dir(result: CommandResult) -> str:
@@ -1338,7 +1378,7 @@ def status_task(bridge: LocalGoalBridge) -> TaskPayload:
                 {"name": "Run evidence", "path": str(last_run.get("run_dir") or "")},
                 {"name": "Goal prompt", "path": str(last_run.get("prompt_path") or "")},
             ]
-            return _task(
+            task = _task(
                 status="done",
                 summary=str(
                     last_run.get("summary") or "The managed reviewer accepted this result."
@@ -1354,16 +1394,22 @@ def status_task(bridge: LocalGoalBridge) -> TaskPayload:
                     "last_run": last_run,
                 },
             )
+            _attach_managed_route_receipt(task, bridge, payload)
+            return task
     task = task_from_command_result(result, fallback_status="ready")
     if task["status"] == "needs_review":
         _attach_managed_review_evidence(task, bridge, payload)
+    _attach_managed_route_receipt(task, bridge, payload)
     return task
 
 
 def watch_task(bridge: LocalGoalBridge) -> TaskPayload:
     if not bridge.available():
         return status_task(bridge)
-    return task_from_command_result(bridge.monitor(json_output=True), fallback_status="checking")
+    result = bridge.monitor(json_output=True)
+    task = task_from_command_result(result, fallback_status="checking")
+    _attach_managed_route_receipt(task, bridge, _json_from_output(result.stdout))
+    return task
 
 
 def command_task(
@@ -1399,7 +1445,9 @@ def command_task(
             needs_human=True,
             advanced_details={"command": command},
         )
-    return task_from_command_result(result, fallback_status="checking")
+    task = task_from_command_result(result, fallback_status="checking")
+    _attach_managed_route_receipt(task, bridge, _json_from_output(result.stdout))
+    return task
 
 
 def details_payload(bridge: LocalGoalBridge) -> dict[str, Any]:
@@ -1455,18 +1503,20 @@ def enrich_managed_task_snapshot(
 ) -> dict[str, Any]:
     """Restore review evidence for a durable managed task in GUI history."""
     enriched = dict(task)
-    if str(enriched.get("status") or "") != "needs_review":
-        return enriched
     run_id = str(enriched.get("id") or "").strip()
     run_dir = _managed_run_dir_for_id(bridge, run_id)
     if run_dir is None:
+        return enriched
+    payload = {"active_goal": {"run_dir": str(run_dir)}}
+    _attach_managed_route_receipt(enriched, bridge, payload)
+    if str(enriched.get("status") or "") != "needs_review":
         return enriched
     gate = enriched.get("readiness_gate")
     enriched["readiness_gate"] = dict(gate) if isinstance(gate, dict) else {}
     _attach_managed_review_evidence(
         enriched,
         bridge,
-        {"active_goal": {"run_dir": str(run_dir)}},
+        payload,
     )
     guide = enriched.get("guide")
     if not isinstance(guide, dict) or not guide.get("title"):
@@ -1519,11 +1569,16 @@ def task_from_command_result(result: CommandResult, *, fallback_status: str) -> 
             advanced_details=advanced_details,
         )
     if result.returncode != 0:
-        permanent = result.returncode in _PERMANENT_COMMAND_FAILURES
+        ticket_rejected = _ticket_was_rejected_before_start(result)
+        permanent = result.returncode in _PERMANENT_COMMAND_FAILURES or ticket_rejected
         return _task(
             status="blocked" if permanent else "checking",
-            summary=_clean_summary(
-                result.stderr or result.stdout or "The task could not move forward."
+            summary=(
+                _ticket_rejection_summary(result)
+                if ticket_rejected
+                else _clean_summary(
+                    result.stderr or result.stdout or "The task could not move forward."
+                )
             ),
             needs_human=permanent,
             advanced_details={
@@ -1541,6 +1596,30 @@ def task_from_command_result(result: CommandResult, *, fallback_status: str) -> 
         changed_files=_changed_files_from_payload(parsed),
         verification=_verification_from_payload(parsed),
         advanced_details=advanced_details,
+    )
+
+
+def _ticket_was_rejected_before_start(result: CommandResult) -> bool:
+    output = f"{result.stdout}\n{result.stderr}".lower()
+    return "failed pre-execution validation; not starting worker" in output
+
+
+def _ticket_rejection_summary(result: CommandResult) -> str:
+    errors = []
+    for line in f"{result.stdout}\n{result.stderr}".splitlines():
+        prefix, separator, detail = line.partition(":")
+        if separator and prefix.strip() in {"ticket_error", "verification_contract_error"}:
+            errors.append(detail.strip())
+    if any("concrete allowed path" in error for error in errors):
+        return (
+            "Your task did not start because its work area was not available to the worker. "
+            "Your request is still saved; choose the entire project or a specific folder and try again."
+        )
+    if errors:
+        return "Your task did not start. Your request is still saved. " + " ".join(errors)
+    return (
+        "Your task did not start because its safety check could not approve the request. "
+        "Your request is still saved; review the details and try again."
     )
 
 
@@ -2264,6 +2343,269 @@ def _read_small_json(path: Path) -> dict[str, Any]:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _first_route_text(*values: object) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text and text.lower() not in {"null", "unknown"}:
+            return text
+    return ""
+
+
+def _managed_lineage_run_dirs(run_dir: Path, run_meta: dict[str, Any]) -> list[Path]:
+    """Return the current run plus its frozen-verifier source run, when safe."""
+
+    lineage = [run_dir]
+    source_id = _first_route_text(run_meta.get("verification_contract_run_id"))
+    if not source_id or source_id == run_dir.name or Path(source_id).name != source_id:
+        return lineage
+    candidate = run_dir.parent / source_id
+    try:
+        if candidate.is_symlink() or not candidate.is_dir():
+            return lineage
+        resolved = candidate.resolve()
+        resolved.relative_to(run_dir.parent.resolve())
+    except (OSError, ValueError):
+        return lineage
+    lineage.append(resolved)
+    return lineage
+
+
+def _managed_external_reviews(run_dirs: list[Path]) -> list[dict[str, Any]]:
+    """Read bounded external-review evidence across a managed continuation."""
+
+    reviews: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for run_dir in run_dirs:
+        paths: list[Path] = [run_dir / "external-review-latest.json"]
+        history_dir = run_dir / "external-reviews"
+        try:
+            if not history_dir.is_symlink() and history_dir.is_dir():
+                paths.extend(sorted(history_dir.glob("*.json"), key=lambda path: path.name)[:128])
+        except OSError:
+            pass
+        for path in paths:
+            review = _read_small_json(path)
+            if review.get("contract") != "local_node1_goal_external_review.v1":
+                continue
+            identity = (
+                _first_route_text(review.get("generated_at")),
+                _first_route_text(review.get("reviewer"), review.get("provider")),
+                _first_route_text(review.get("model")),
+                _first_route_text(review.get("status")),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            reviews.append(review)
+    reviews.sort(key=lambda review: _first_route_text(review.get("generated_at")))
+    return reviews
+
+
+def _external_review_succeeded(review: dict[str, Any]) -> bool:
+    if review.get("ok") is True:
+        return True
+    return _first_route_text(review.get("status")).lower() in {
+        "accepted",
+        "complete",
+        "completed",
+        "ok",
+        "passed",
+        "success",
+    }
+
+
+def _managed_route_receipt(
+    run_dir: Path,
+    payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build a small, evidence-only receipt from a validated managed run directory."""
+
+    run_meta = _read_small_json(run_dir / "run-meta.json")
+    file_loop_state = _read_small_json(run_dir / "loop-state.json")
+    review = _read_small_json(run_dir / "review.json")
+    acceptance = _read_small_json(run_dir / "acceptance.json")
+    external_reviews = _managed_external_reviews(
+        _managed_lineage_run_dirs(run_dir, run_meta)
+    )
+    successful_external_reviews = [
+        item for item in external_reviews if _external_review_succeeded(item)
+    ]
+    external_review = (
+        successful_external_reviews[-1]
+        if successful_external_reviews
+        else (external_reviews[-1] if external_reviews else {})
+    )
+    active = payload.get("active_goal") if isinstance(payload, dict) else None
+    runtime = payload.get("runtime") if isinstance(payload, dict) else None
+    runtime_loop_state = runtime.get("loop_state") if isinstance(runtime, dict) else None
+    active = active if isinstance(active, dict) else {}
+    runtime_loop_state = runtime_loop_state if isinstance(runtime_loop_state, dict) else {}
+    loop_state = {**runtime_loop_state, **file_loop_state}
+
+    cloud_result = run_meta.get("cloud_loop_result")
+    cloud_result = cloud_result if isinstance(cloud_result, dict) else {}
+    last_worker = cloud_result.get("last_worker_run")
+    last_worker = last_worker if isinstance(last_worker, dict) else {}
+
+    planner = _first_route_text(
+        run_meta.get("planner"),
+        active.get("planner"),
+        loop_state.get("planner"),
+    )
+    executor_worker = _first_route_text(
+        last_worker.get("worker"),
+        run_meta.get("executor_worker"),
+        active.get("executor_worker"),
+        loop_state.get("executor_worker"),
+    )
+    if executor_worker.lower() == "none":
+        executor_worker = ""
+    builder = executor_worker or _first_route_text(
+        run_meta.get("executor"),
+        active.get("executor"),
+        loop_state.get("executor"),
+    )
+    model = _first_route_text(
+        last_worker.get("model"),
+        loop_state.get("opencode_model"),
+        loop_state.get("model"),
+        run_meta.get("model"),
+    )
+    provider = _first_route_text(
+        last_worker.get("provider"),
+        loop_state.get("provider"),
+        run_meta.get("provider"),
+    )
+
+    reviewer = ""
+    reviewer_model = ""
+    if external_review.get("contract") == "local_node1_goal_external_review.v1":
+        reviewer = _first_route_text(
+            external_review.get("reviewer"), external_review.get("provider")
+        )
+        reviewer_model = _first_route_text(external_review.get("model"))
+    elif review:
+        reviewer = "managed deterministic review"
+
+    fallback = next(
+        (
+            value
+            for value in (
+                run_meta.get("planner_fallback"),
+                active.get("planner_fallback"),
+                cloud_result.get("planner_fallback"),
+                last_worker.get("fallback"),
+            )
+            if isinstance(value, dict) and value
+        ),
+        {},
+    )
+    fallback_used: bool | None = None
+    fallback_reason = "No fallback event was recorded in the managed run evidence."
+    if fallback:
+        fallback_used = True
+        transition = " -> ".join(
+            value
+            for value in (
+                _first_route_text(fallback.get("from")),
+                _first_route_text(fallback.get("to")),
+            )
+            if value
+        )
+        reason = _first_route_text(
+            fallback.get("reason"), fallback.get("fallback_reason")
+        )
+        fallback_reason = ": ".join(value for value in (transition, reason) if value)
+    elif isinstance(last_worker.get("fallback_used"), bool):
+        fallback_used = bool(last_worker["fallback_used"])
+        fallback_reason = _first_route_text(
+            last_worker.get("fallback_reason"),
+            "Worker evidence explicitly recorded no fallback."
+            if fallback_used is False
+            else "Worker evidence recorded a fallback without a reason.",
+        )
+    elif external_review and _external_review_succeeded(external_review):
+        selected_reviewer = _first_route_text(
+            external_review.get("reviewer"), external_review.get("provider")
+        )
+        selected_index = external_reviews.index(external_review)
+        prior_failed_review = next(
+            (
+                item
+                for item in reversed(external_reviews[:selected_index])
+                if not _external_review_succeeded(item)
+                and _first_route_text(item.get("reviewer"), item.get("provider"))
+                not in {"", selected_reviewer}
+            ),
+            None,
+        )
+        if prior_failed_review is not None:
+            prior_reviewer = _first_route_text(
+                prior_failed_review.get("reviewer"), prior_failed_review.get("provider")
+            )
+            prior_status = _first_route_text(prior_failed_review.get("status"), "failed")
+            fallback_used = True
+            fallback_reason = (
+                f"{prior_reviewer} -> {selected_reviewer}: "
+                f"prior reviewer {prior_status}."
+            )
+
+    accepted_status = (
+        "accepted"
+        if _first_route_text(acceptance.get("status")).lower() == "accepted"
+        else ""
+    )
+
+    receipt: dict[str, Any] = {
+        "contract": "agentic_harness.managed_route_receipt.v1",
+        "evidence": "observed",
+        "actual": True,
+        "planner": planner or "not recorded",
+        "builder": builder or "not recorded",
+        "reviewer": reviewer or "pending managed review",
+        "model": model or "not recorded",
+        "provider": provider,
+        "fallback_used": fallback_used,
+        "fallback_reason": fallback_reason,
+        "status": _first_route_text(
+            accepted_status,
+            run_meta.get("status"),
+            loop_state.get("status"),
+            review.get("status"),
+            active.get("status"),
+        ),
+        "observed_at": _first_route_text(
+            run_meta.get("updated_at"),
+            loop_state.get("updated_at"),
+            run_meta.get("started_at"),
+        ),
+    }
+    route_id = _first_route_text(run_meta.get("route_id"), active.get("route_id"))
+    if route_id:
+        receipt["route_id"] = route_id
+    if reviewer_model:
+        receipt["reviewer_model"] = reviewer_model
+    return receipt
+
+
+def _attach_managed_route_receipt(
+    task: TaskPayload,
+    bridge: LocalGoalBridge,
+    payload: dict[str, Any] | None,
+) -> None:
+    run_dir = _managed_active_run_dir(bridge, payload)
+    if run_dir is None:
+        return
+    observed = _managed_route_receipt(run_dir, payload)
+    metadata = task.get("metadata")
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    requested = metadata.get("route_receipt")
+    merged = dict(requested) if isinstance(requested, dict) else {}
+    merged.update(observed)
+    metadata["route_receipt"] = merged
+    task["metadata"] = metadata
 
 
 def _managed_owned_files(root: Path, run_dir: Path) -> list[str]:

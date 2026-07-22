@@ -59,6 +59,9 @@ def test_gui_exposes_predictable_views_setup_progress_and_result_without_machine
         'id="continueFeedback"',
         'id="previewDialog"',
         'id="previewContent"',
+        'id="resultOutput"',
+        'id="resultOutputContent"',
+        'id="resultOutputOpen"',
     ):
         assert required in html
     assert 'id="setupDialog"' not in html
@@ -145,6 +148,22 @@ def test_gui_keeps_durable_history_in_sync_with_live_status() -> None:
     assert "function taskMatchesPendingStart(task)" in javascript
     assert "adoptLiveTask(task);" in javascript
     assert "refreshHistory().catch(() => {});\n      refreshHealth().catch" in javascript
+
+
+def test_gui_keeps_the_users_task_pinned_and_loads_its_readable_result() -> None:
+    javascript = (STATIC / "app.js").read_text(encoding="utf-8")
+    server = Path("agentic_harness/gui/server.py").read_text(encoding="utf-8")
+
+    assert "FOREGROUND_TASK_KEY" in javascript
+    assert "rememberForegroundTask(task)" in javascript
+    assert "goal_id=${encodeURIComponent(pinned)}" in javascript
+    assert "async function renderPrimaryResult(task)" in javascript
+    assert 'els.resultOutputContent.textContent = "Loading the full result…"' in javascript
+    assert 'foreground_metadata["foreground_task"] = True' in server
+    assert "session.latest_foreground_task()" in server
+    assert 'foreground_metadata["background_activity"]' in server
+    assert 'foreground["allowed_actions"] = []' in server
+    assert "task = public_managed_task(session.record(task))" in server
 
 
 def test_gui_recovers_from_slow_requests_and_failed_status_streams() -> None:

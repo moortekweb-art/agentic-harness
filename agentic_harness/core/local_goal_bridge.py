@@ -457,39 +457,12 @@ class LocalGoalBridge:
             "model": "glm-5.2",
             "route_id": route_id,
         }
-        if supervision == "glm-5.2":
-            supervisor_status = self.glm_supervisor_status()
-            supervisor_payload = _json_object(supervisor_status)
-            if not _glm_supervisor_running(supervisor_status):
-                started = self.glm_supervisor_start()
-                if not _glm_supervisor_running(started):
-                    return _blocked_command_result(
-                        started,
-                        "GLM advisory supervision was requested but could not be started and verified.",
-                    )
-                supervisor_receipt["started_here"] = True
-                supervisor_payload = _json_object(started)
-                verified = self.glm_supervisor_status()
-                if not _glm_supervisor_running(verified):
-                    self.glm_supervisor_stop()
-                    return _blocked_command_result(
-                        verified,
-                        "GLM advisory supervision started but its running state could not be verified.",
-                    )
-                supervisor_payload = _json_object(verified)
-            supervisor_receipt.update(
-                {
-                    "running": True,
-                    "status": str(supervisor_payload.get("status") or "running"),
-                    "session": str(supervisor_payload.get("session") or ""),
-                    "reviewer": str(supervisor_payload.get("reviewer") or "glm-5.2"),
-                }
-            )
         if route == "mode1":
             result = self.start_local_goal(
                 objective,
                 executor=routing["executor"],
                 verification=checks,
+                safe_areas=safe_areas,
                 route_id=route_id,
             )
         elif route == "legacy-guided":
@@ -570,11 +543,64 @@ class LocalGoalBridge:
         else:
             raise ValueError(f"unsupported managed route {route}")
 
+        if supervision == "glm-5.2" and result.returncode == 0:
+            # Start supervision only after the local run exists.  The supervisor
+            # intentionally exits when no goal is active, so starting it before
+            # quick-start creates a false-positive receipt during the startup gap.
+            supervisor_status = self.glm_supervisor_status()
+            supervisor_payload = _json_object(supervisor_status)
+            supervision_failure = ""
+            start_attempted = False
+            if not _glm_supervisor_running(supervisor_status):
+                start_attempted = True
+                started = self.glm_supervisor_start()
+                if not _glm_supervisor_running(started):
+                    supervision_failure = (
+                        "GLM advisory supervision was requested but could not be "
+                        "started after the local goal became active."
+                    )
+                else:
+                    supervisor_receipt["started_here"] = True
+                    supervisor_payload = _json_object(started)
+                    verified = self.glm_supervisor_status()
+                    if not _glm_supervisor_running(verified):
+                        supervision_failure = (
+                            "GLM advisory supervision started after the local goal, but "
+                            "its running state could not be verified."
+                        )
+                    else:
+                        supervisor_payload = _json_object(verified)
+            if supervision_failure:
+                if start_attempted:
+                    stopped = self.glm_supervisor_stop()
+                    supervisor_receipt["supervisor_cleanup_returncode"] = stopped.returncode
+                rollback = self._rollback_started_goal(result)
+                supervisor_receipt.update(
+                    {
+                        "running": False,
+                        "status": "failed",
+                        "start_rollback": rollback,
+                    }
+                )
+                result = CommandResult(
+                    args=result.args,
+                    returncode=2,
+                    stdout=result.stdout,
+                    stderr=supervision_failure,
+                    metadata=result.metadata,
+                )
+            else:
+                supervisor_receipt.update(
+                    {
+                        "running": True,
+                        "status": str(supervisor_payload.get("status") or "running"),
+                        "session": str(supervisor_payload.get("session") or ""),
+                        "reviewer": str(
+                            supervisor_payload.get("reviewer") or "glm-5.2"
+                        ),
+                    }
+                )
         if supervision == "glm-5.2":
-            if result.returncode != 0 and supervisor_receipt["started_here"] is True:
-                stopped = self.glm_supervisor_stop()
-                supervisor_receipt["running"] = False
-                supervisor_receipt["rollback_returncode"] = stopped.returncode
             result = _with_metadata(result, glm_supervision=supervisor_receipt)
 
         if result.returncode == 0 and execution_profile == "ornith-text":
@@ -653,6 +679,38 @@ class LocalGoalBridge:
         self.invalidate_status_caches()
         return result
 
+    def _rollback_started_goal(self, result: CommandResult) -> dict[str, object]:
+        """Stop only the exact run created by a failed supervised-start transaction."""
+
+        expected = _started_run_dir(result).strip().rstrip("/")
+        rollback: dict[str, object] = {
+            "attempted": False,
+            "expected_run_dir": expected,
+            "stopped": False,
+        }
+        if not expected:
+            rollback["reason"] = "start result did not report a run directory"
+            return rollback
+        self.invalidate_status_caches()
+        status = self.status(json_output=True)
+        payload = _json_object(status)
+        active = payload.get("active_goal")
+        observed = (
+            str(active.get("run_dir") or "").strip().rstrip("/")
+            if isinstance(active, dict)
+            else ""
+        )
+        rollback["observed_run_dir"] = observed
+        if status.returncode != 0 or observed != expected:
+            rollback["reason"] = "active run identity did not match the supervised start"
+            return rollback
+        rollback["attempted"] = True
+        stopped = self.run(["stop"])
+        rollback["returncode"] = stopped.returncode
+        rollback["stopped"] = stopped.returncode == 0
+        self.invalidate_status_caches()
+        return rollback
+
     def invalidate_status_caches(self) -> None:
         with self._status_lock:
             self._status_cache = None
@@ -669,6 +727,7 @@ class LocalGoalBridge:
         *,
         executor: str = "opencode",
         verification: tuple[str, ...] = (),
+        safe_areas: tuple[str, ...] = (),
         route_id: str = LOCAL_BUILD_ROUTE_ID,
     ) -> CommandResult:
         args = [
@@ -682,6 +741,14 @@ class LocalGoalBridge:
             "--goal",
             goal,
         ]
+        if safe_areas:
+            for area in safe_areas:
+                args.extend(["--allowed-path", area])
+        else:
+            # The GUI labels an empty advanced work-area field as "Entire project".
+            # Carry that explicit choice into the ticket instead of silently
+            # sending an unscoped request that the managed worker rejects.
+            args.extend(["--project-scope", "entire-project"])
         for command in verification:
             args.extend(["--verification-command", command])
         return self.run(args)
