@@ -1168,6 +1168,90 @@ button[aria-busy="true"]:disabled {
   color: var(--muted);
 }
 
+.task-guide {
+  margin: 1rem 0 1.15rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%);
+  box-shadow: 0 12px 28px rgba(28, 35, 48, 0.08);
+}
+
+.task-guide[hidden] {
+  display: none;
+}
+
+.task-guide.review {
+  border-color: color-mix(in srgb, var(--warning, #c8871b) 52%, var(--line));
+  background: color-mix(in srgb, var(--surface) 89%, #f1b84b 11%);
+}
+
+.task-guide.attention {
+  border-color: color-mix(in srgb, var(--danger, #b94747) 52%, var(--line));
+}
+
+.task-guide h3 {
+  margin: 0.2rem 0 0.55rem;
+  font-size: clamp(1.18rem, 2vw, 1.45rem);
+}
+
+.task-guide p {
+  max-width: 74ch;
+}
+
+.task-guide-body {
+  margin: 0 0 0.65rem;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.task-guide-explanation {
+  margin: 0 0 0.65rem;
+  color: var(--muted);
+}
+
+.task-guide-next {
+  margin: 0;
+  color: var(--text);
+}
+
+.task-guide-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin: 0.9rem 0 0;
+}
+
+.task-guide-counts[hidden] {
+  display: none;
+}
+
+.task-guide-counts div {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+}
+
+.task-guide-counts dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.task-guide-counts dd {
+  margin: 0.2rem 0 0;
+  font-size: 1.2rem;
+  font-weight: 750;
+}
+
+@media (max-width: 620px) {
+  .task-guide-counts {
+    grid-template-columns: 1fr;
+  }
+}
+
 .current-card {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(64px, 0.35fr);

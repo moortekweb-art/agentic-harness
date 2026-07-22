@@ -50,6 +50,10 @@ def test_gui_exposes_predictable_views_setup_progress_and_result_without_machine
         'id="requirementsList"',
         'id="eventTimeline"',
         'id="finalResult"',
+        'id="taskGuide"',
+        'id="taskGuideTitle"',
+        'id="taskGuideExplanation"',
+        'id="taskGuideNext"',
         'id="completedDetails"',
         'id="continueDialog"',
         'id="continueFeedback"',
@@ -124,6 +128,10 @@ def test_gui_renders_backend_supplied_actions_and_measured_progress() -> None:
     assert "task.final_result" in javascript
     assert "window.confirm" in javascript
     assert "continueFeedback" in javascript
+    assert "function renderTaskGuide(task)" in javascript
+    assert 'guide.title || "Your result is ready"' in javascript
+    assert '"Ask for changes"' in javascript
+    assert '"Approve and finish"' in javascript
     assert "/api/tasks/current/file?path=" in javascript
     assert "/api/tasks/current/artifact?path=" in javascript
 
@@ -189,6 +197,30 @@ def test_gui_primary_form_uses_plain_language_and_progressive_disclosure() -> No
     assert "Optional scope" not in html
     assert 'id="starterCreate"' not in html
     assert 'id="startHelp" role="status"' in html
+    assert "You will review the result" in javascript
+    assert "Automatic checks when possible" in javascript
+
+
+def test_gui_explains_safe_review_pause_without_harness_jargon() -> None:
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    javascript = (STATIC / "app.js").read_text(encoding="utf-8")
+    api = Path("agentic_harness/gui/api.py").read_text(encoding="utf-8")
+
+    for phrase in (
+        "Work with the assistant",
+        "Message the assistant",
+    ):
+        assert phrase in html
+    for phrase in (
+        "Your result is ready",
+        "Review result",
+        "Ask for changes",
+        "Approve and finish",
+        "Stop without approving",
+    ):
+        assert phrase in javascript
+    assert "A quiet screen does not mean" in api
+    assert "stopped safely at a review point" in api
 
 
 def test_gui_explains_why_start_is_disabled() -> None:

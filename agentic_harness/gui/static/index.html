@@ -467,6 +467,18 @@
           </div>
 
           <p class="summary" id="summary">No task is running.</p>
+          <section class="task-guide" id="taskGuide" aria-labelledby="taskGuideTitle" hidden>
+            <p class="eyebrow" id="taskGuideEyebrow">What is happening</p>
+            <h3 id="taskGuideTitle">Your task is running</h3>
+            <p class="task-guide-body" id="taskGuideBody"></p>
+            <p class="task-guide-explanation" id="taskGuideExplanation"></p>
+            <p class="task-guide-next" id="taskGuideNext"></p>
+            <dl class="task-guide-counts" id="taskGuideCounts" hidden>
+              <div><dt>Files</dt><dd id="taskGuideFiles">0</dd></div>
+              <div><dt>Checks</dt><dd id="taskGuideChecks">0</dd></div>
+              <div><dt>Evidence</dt><dd id="taskGuideArtifacts">0</dd></div>
+            </dl>
+          </section>
           <div id="progressGroup" class="progress-group" hidden>
             <div class="progress-meta">
               <span>Progress</span>
@@ -491,15 +503,15 @@
             </button>
             <button id="continueButton" hidden>
               <svg class="icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg>
-              <span>Continue with a note</span>
+              <span id="continueButtonLabel">Continue with a note</span>
             </button>
             <button id="acceptButton" hidden>
               <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
-              <span>Accept result</span>
+              <span id="acceptButtonLabel">Accept result</span>
             </button>
             <button class="danger" id="stopButton" hidden>
               <svg class="icon" aria-hidden="true"><use href="#icon-square"></use></svg>
-              <span>Stop safely</span>
+              <span id="stopButtonLabel">Stop safely</span>
             </button>
           </div>
 
@@ -507,7 +519,7 @@
             <div class="conversation-heading">
               <div>
                 <p class="eyebrow">Supervised interactive mode</p>
-                <h3>Work with OpenCode</h3>
+                <h3>Work with the assistant</h3>
               </div>
               <span class="assurance-chip">Checks still decide done</span>
             </div>
@@ -517,7 +529,7 @@
             </p>
             <ol id="conversationList" class="conversation-list" aria-live="polite"></ol>
             <form id="messageForm" class="message-composer">
-              <label for="messageInput">Message OpenCode</label>
+              <label for="messageInput">Message the assistant</label>
               <textarea id="messageInput" maxlength="8000" rows="3" placeholder="Add context, redirect the approach, or answer a question"></textarea>
               <div class="message-actions">
                 <span id="messageHint">Your latest guidance controls if messages conflict.</span>

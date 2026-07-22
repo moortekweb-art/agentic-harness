@@ -406,6 +406,9 @@ def test_task_from_command_result_maps_review_state() -> None:
     task = task_from_command_result(result, fallback_status="working")
 
     assert task["status"] == "needs_review"
+    assert task["guide"]["title"] == "Your result is ready"
+    assert "did not crash" in task["guide"]["explanation"]
+    assert task["guide"]["next_action"].endswith("choose Ask for changes.")
     assert task["needs_human"] is True
     assert task["summary"] == "ship it"
     assert task["progress"] == {

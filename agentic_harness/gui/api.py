@@ -1405,6 +1405,7 @@ def _task(
     runtime_context = _runtime_context(status, details)
     changed = changed_files or []
     checks = verification or []
+    artifacts_list = artifacts if artifacts is not None else _artifacts_from_details(details)
     result_category = {
         "done": "verified_done",
         "blocked": "blocked",
@@ -1454,10 +1455,19 @@ def _task(
         "status_label": _label_for_status(status),
         "progress": _progress_for_status(status),
         "summary": summary,
+        "guide": _guide_for_status(
+            status,
+            summary,
+            details,
+            runtime_context,
+            changed,
+            checks,
+            artifacts_list,
+        ),
         "needs_human": needs_human,
         "changed_files": changed,
         "verification": checks,
-        "artifacts": artifacts if artifacts is not None else _artifacts_from_details(details),
+        "artifacts": artifacts_list,
         "result_category": result_category,
         "final_result": final_result,
         "allowed_actions": _allowed_actions(status),
@@ -1475,6 +1485,90 @@ def _task(
         },
         "advanced_details": details,
     }
+
+
+def _guide_for_status(
+    status: str,
+    summary: str,
+    details: dict[str, Any],
+    runtime_context: dict[str, Any],
+    changed_files: list[str],
+    verification: list[str],
+    artifacts: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Translate harness state into a novice-facing next step.
+
+    This guide is deliberately deterministic.  It may explain a worker result,
+    but it never upgrades that result to accepted or weakens the verifier.
+    """
+    if status == "needs_review":
+        result_summary = _review_result_summary(details) or summary
+        return {
+            "tone": "review",
+            "eyebrow": "Your decision",
+            "title": "Your result is ready",
+            "body": result_summary,
+            "explanation": (
+                "The assistant finished and stopped safely at a review point; it did not "
+                "crash. The harness has not approved the result for you."
+            ),
+            "next_action": (
+                "Read the result and evidence below. If it matches your request, choose "
+                "Approve and finish. Otherwise choose Ask for changes."
+            ),
+            "counts": {
+                "changed_files": len(changed_files),
+                "checks": len(verification),
+                "artifacts": len(artifacts),
+            },
+        }
+    if status in {"starting", "working", "checking"}:
+        current = runtime_context.get("current")
+        current = current if isinstance(current, dict) else {}
+        action = str(current.get("current_subgoal") or summary).strip()
+        title = {
+            "starting": "Your request was received",
+            "working": "Your task is still running",
+            "checking": "The result is being checked",
+        }[status]
+        return {
+            "tone": "active",
+            "eyebrow": "What is happening",
+            "title": title,
+            "body": action,
+            "explanation": (
+                "The assistant is working in the background. A quiet screen does not mean "
+                "the task stopped."
+            ),
+            "next_action": "No action is needed. This page updates when the task changes state.",
+            "counts": {},
+        }
+    if status in {"needs_attention", "blocked"}:
+        return {
+            "tone": "attention",
+            "eyebrow": "Your help is needed",
+            "title": "The task cannot continue on its own",
+            "body": summary,
+            "explanation": "The assistant stopped safely before making an unsupported decision.",
+            "next_action": "Read the explanation below, then continue with guidance or stop the task.",
+            "counts": {},
+        }
+    return {}
+
+
+def _review_result_summary(details: dict[str, Any]) -> str:
+    payload = details.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    candidates = (
+        _nested_string(payload, ("last_run", "summary")),
+        _nested_string(payload, ("goal_state", "summary")),
+        _nested_string(payload, ("active_goal", "summary")),
+    )
+    for candidate in candidates:
+        if candidate:
+            return _clean_summary(candidate)[:1200]
+    return ""
 
 
 def _managed_execution_context(details: dict[str, Any]) -> dict[str, str]:
@@ -1586,22 +1680,22 @@ def _allowed_actions(status: str) -> list[dict[str, Any]]:
         return [
             {
                 "action": "message",
-                "label": "Send guidance and continue",
+                "label": "Ask for changes and continue",
                 "enabled": True,
             },
             {
                 "action": "continue",
-                "label": "Continue with a note",
+                "label": "Ask for changes",
                 "enabled": True,
             },
             {
                 "action": "accept",
-                "label": "Accept result",
+                "label": "Approve and finish",
                 "enabled": True,
             },
             {
                 "action": "stop",
-                "label": "Stop safely",
+                "label": "Stop without approving",
                 "enabled": True,
             },
         ]

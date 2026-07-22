@@ -149,6 +149,16 @@ const els = {
   statusIndicator: byId("statusIndicator"),
   statusIcon: byId("statusIcon"),
   summary: byId("summary"),
+  taskGuide: byId("taskGuide"),
+  taskGuideEyebrow: byId("taskGuideEyebrow"),
+  taskGuideTitle: byId("taskGuideTitle"),
+  taskGuideBody: byId("taskGuideBody"),
+  taskGuideExplanation: byId("taskGuideExplanation"),
+  taskGuideNext: byId("taskGuideNext"),
+  taskGuideCounts: byId("taskGuideCounts"),
+  taskGuideFiles: byId("taskGuideFiles"),
+  taskGuideChecks: byId("taskGuideChecks"),
+  taskGuideArtifacts: byId("taskGuideArtifacts"),
   progressGroup: byId("progressGroup"),
   progressTrack: byId("progressTrack"),
   progressValue: byId("progressValue"),
@@ -161,10 +171,13 @@ const els = {
   returnToCurrentButton: byId("returnToCurrentButton"),
   currentCard: byId("currentCard"),
   continueButton: byId("continueButton"),
+  continueButtonLabel: byId("continueButtonLabel"),
   approveSpecButton: byId("approveSpecButton"),
   approveSpecButtonLabel: byId("approveSpecButtonLabel"),
   acceptButton: byId("acceptButton"),
+  acceptButtonLabel: byId("acceptButtonLabel"),
   stopButton: byId("stopButton"),
+  stopButtonLabel: byId("stopButtonLabel"),
   conversationSection: byId("conversationSection"),
   conversationList: byId("conversationList"),
   messageForm: byId("messageForm"),
@@ -721,7 +734,14 @@ function renderExpectationSummary() {
       : !managed && (effort?.requires_scope === true || effort?.requires_enforced_scope === true)
         ? "Limited to selected files"
         : route ? executionMutation(route) : "Can change project files";
-  els.expectationVerification.textContent = humanizeFact(route?.verification || state.setup?.verification?.label, "Independent checks");
+  const judgmentTask = /\b(audit|assess|assessment|review|rate|rating|recommend|report|explain)\b/i
+    .test(els.objective.value.trim());
+  els.expectationVerification.textContent = judgmentTask
+    ? "You will review the result"
+    : "Automatic checks when possible";
+  els.expectationVerification.title = judgmentTask
+    ? "Judgment tasks stop safely so you can approve the result or ask for changes."
+    : "The harness will use independent checks when it can establish a reliable verifier; otherwise it will ask for your review.";
   els.expectationMaturity.textContent = humanizeFact(route?.maturity, managed ? "Supported" : "Production");
 }
 
@@ -1120,14 +1140,26 @@ function renderRecovery() {
     return;
   }
 
+  const guide = task.guide && typeof task.guide === "object" ? task.guide : {};
   els.recoveryTitle.textContent = readinessState === "needs_review"
-    ? "Current task needs your decision"
+    ? guide.title || "Your result is ready"
     : readinessState === "configuration_error"
       ? "Configuration needs repair"
       : "Current task needs attention";
-  els.recoverySummary.textContent = state.readiness?.summary
+  els.recoverySummary.textContent = readinessState === "needs_review"
+    ? guide.explanation || "The assistant finished and stopped safely for your review."
+    : state.readiness?.summary
     || state.readiness?.next_action
     || "Choose what should happen before starting another task.";
+  els.recoveryContinueButton.textContent = readinessState === "needs_review"
+    ? "Ask for changes"
+    : "Continue task";
+  els.recoveryStopButton.textContent = readinessState === "needs_review"
+    ? "Stop without approving"
+    : "Stop task";
+  els.recoveryOpenTaskButton.textContent = readinessState === "needs_review"
+    ? "Review result"
+    : "Open current task";
   els.recoveryContinueButton.hidden = !hasTask || !canContinue;
   els.recoveryStopButton.hidden = !hasTask || !canStop;
   els.recoveryOpenTaskButton.hidden = !hasTask;
@@ -1355,6 +1387,33 @@ function renderFinalReceipt(task, receipt) {
     : "Nothing remains open.";
 }
 
+function renderTaskGuide(task) {
+  const guide = task.guide && typeof task.guide === "object" ? task.guide : {};
+  const show = Boolean(guide.title);
+  els.taskGuide.hidden = !show;
+  if (!show) {
+    els.taskGuide.className = "task-guide";
+    els.taskGuideCounts.hidden = true;
+    return;
+  }
+  els.taskGuide.className = `task-guide ${guide.tone || "active"}`;
+  els.taskGuideEyebrow.textContent = guide.eyebrow || "What is happening";
+  els.taskGuideTitle.textContent = guide.title;
+  els.taskGuideBody.textContent = guide.body || "";
+  els.taskGuideBody.hidden = !guide.body;
+  els.taskGuideExplanation.textContent = guide.explanation || "";
+  els.taskGuideExplanation.hidden = !guide.explanation;
+  els.taskGuideNext.textContent = guide.next_action || "";
+  els.taskGuideNext.hidden = !guide.next_action;
+  const counts = guide.counts && typeof guide.counts === "object" ? guide.counts : {};
+  const showCounts = ["changed_files", "checks", "artifacts"]
+    .some((key) => Number(counts[key] || 0) > 0);
+  els.taskGuideCounts.hidden = !showCounts;
+  els.taskGuideFiles.textContent = String(Number(counts.changed_files || 0));
+  els.taskGuideChecks.textContent = String(Number(counts.checks || 0));
+  els.taskGuideArtifacts.textContent = String(Number(counts.artifacts || 0));
+}
+
 function renderTask(task) {
   state.currentTask = task;
   els.taskContext.hidden = !state.viewingHistoryId;
@@ -1394,7 +1453,10 @@ function renderTask(task) {
   const taskId = String(task.id || "");
   if (receipt.terminal && taskId !== state.lastRenderedTaskId) els.completedDetails.open = false;
   state.lastRenderedTaskId = taskId;
-  els.statusLabel.textContent = receipt.terminal && receipt.final.label
+  const guide = task.guide && typeof task.guide === "object" ? task.guide : {};
+  els.statusLabel.textContent = status === "needs_review" && guide.title
+    ? guide.title
+    : receipt.terminal && receipt.final.label
     ? receipt.final.label
     : rawDoneUnverified
       ? "Checking evidence"
@@ -1404,6 +1466,7 @@ function renderTask(task) {
     : rawDoneUnverified
       ? "Completion is not verified yet."
       : task.summary || "No task is running.";
+  renderTaskGuide(task);
   els.statusIndicator.className = `status-indicator ${visualStatus}`;
   els.statusIcon.setAttribute("href", iconHref(STATUS_ICONS[visualStatus] || "loader-circle"));
   els.statusIndicator.setAttribute("aria-label", els.statusLabel.textContent);
@@ -1520,12 +1583,21 @@ function renderTask(task) {
   els.artifactsEvidence.hidden = receipt.terminal;
 
   els.continueButton.hidden = viewingHistory || !hasAction(task, "continue");
+  els.continueButtonLabel.textContent = status === "needs_review"
+    ? "Ask for changes"
+    : "Continue with a note";
   els.approveSpecButton.hidden = viewingHistory || !hasAction(task, "approve_spec");
   els.approveSpecButtonLabel.textContent = task.metadata?.specification_review?.kind === "amendment"
     ? "Review changed conditions"
     : "Approve completion conditions";
   els.acceptButton.hidden = viewingHistory || !hasAction(task, "accept");
+  els.acceptButtonLabel.textContent = status === "needs_review"
+    ? "Approve and finish"
+    : "Accept result";
   els.stopButton.hidden = viewingHistory || !hasAction(task, "stop");
+  els.stopButtonLabel.textContent = status === "needs_review"
+    ? "Stop without approving"
+    : "Stop safely";
   els.advancedDetails.textContent = JSON.stringify({
     id: task.id || "",
     contract: task.contract || "",
@@ -1589,7 +1661,7 @@ function renderConversation(task) {
   }
   const status = String(task.status || "");
   els.messageHint.textContent = status === "needs_review"
-    ? "Sending will reopen the run with this recorded guidance."
+    ? "Describe what should change. Sending this will reopen the task."
     : "Your latest guidance controls if messages conflict.";
 }
 
