@@ -2057,6 +2057,8 @@ class FakeBridge:
         objective: str,
         safe_areas: tuple[str, ...] = (),
         checks: tuple[str, ...] = (),
+        route_id: str = "",
+        supervision: str = "none",
     ) -> CommandResult:
         result = LocalGoalBridge(
             doc_root=Path("/tmp/docs"),
@@ -2076,6 +2078,8 @@ class FakeBridge:
             objective=objective,
             safe_areas=safe_areas,
             checks=checks,
+            route_id=route_id,
+            supervision=supervision,
         )
         command = list(result.args[1:])
         if command and command[-1].startswith("External long-horizon goal"):

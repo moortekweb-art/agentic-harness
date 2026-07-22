@@ -48,6 +48,7 @@ const state = {
   executionProfiles: [],
   executionProfile: AUTOMATIC_PROFILE_KEY,
   executionProfileDefault: "",
+  supervision: "none",
   busy: false,
   setupBusy: false,
   authToken: "",
@@ -126,6 +127,9 @@ const els = {
   modelProfileSection: byId("modelProfileSection"),
   modelProfileSelect: byId("modelProfileSelect"),
   modelProfiles: byId("modelProfiles"),
+  advisorySupervisionSection: byId("advisorySupervisionSection"),
+  advisorySupervision: byId("advisorySupervision"),
+  advisorySupervisionText: byId("advisorySupervisionText"),
   approachSection: byId("approachSection"),
   candidateCount: byId("candidateCount"),
   safeAreas: byId("safeAreas"),
@@ -456,6 +460,10 @@ function routeUsesExecutionProfiles(route = selectedRoute()) {
   return supportsProfiles && isLocalRoute;
 }
 
+function routeSupportsGlmSupervision(route = selectedRoute()) {
+  return Boolean(route) && (route.route_id === "local-build" || route.key === "mode1");
+}
+
 function selectedExecutionOption() {
   return usesHumanModes() ? selectedRoute() : selectedEffort();
 }
@@ -694,7 +702,7 @@ function renderExpectationSummary() {
               : !readiness.ready
                 ? readiness.summary || "Finish the current setup or task before starting another one."
                 : managed
-                  ? `${routeLabel} will use ${effortLabel.toLowerCase()} effort. ${plainManagedRouteSummary(route)}`
+                  ? `${routeLabel} will use ${effortLabel.toLowerCase()} effort. ${plainManagedRouteSummary(route)}${state.supervision === "glm-5.2" ? " GLM-5.2 advisory supervision will be started and verified." : ""}`
                   : `${effortLabel} uses ${embeddedAssistantSummary(setupWorker)} and independent verification.`;
   els.expectationLocation.textContent = executionChoicesPending
     ? "Checking…"
@@ -866,6 +874,11 @@ function renderModeControls() {
   }
   const profilesApply = state.executionProfiles.length > 0 && routeUsesExecutionProfiles();
   els.modelProfileSection.hidden = !profilesApply;
+  const supervisionApplies = routeSupportsGlmSupervision();
+  if (!supervisionApplies) state.supervision = "none";
+  els.advisorySupervision.checked = state.supervision === "glm-5.2";
+  els.advisorySupervisionText.textContent = "Start and verify GLM-5.2 advisory supervision for this task.";
+  els.advisorySupervisionSection.hidden = !supervisionApplies;
   els.expectationDetails.hidden = usesHumanModes()
     && regularRoutes.length === 0
     && !profilesApply
@@ -918,8 +931,9 @@ function formSnapshot() {
     route: state.route,
     effort: state.effort,
     executionProfile: state.executionProfile,
+    supervision: state.supervision,
     candidateCount: els.candidateCount.value || "1",
-    draftVersion: 5,
+    draftVersion: 6,
   };
 }
 
@@ -948,6 +962,7 @@ function applyFormSnapshot(snapshot) {
   }[snapshot.mode];
   state.effort = snapshot.effort || (legacyManagedMode ? migratedEffort : snapshot.mode) || state.effort;
   state.executionProfile = snapshot.executionProfile || AUTOMATIC_PROFILE_KEY;
+  state.supervision = snapshot.supervision === "glm-5.2" ? "glm-5.2" : "none";
   els.candidateCount.value = snapshot.candidateCount === "3" ? "3" : "1";
   renderModeControls();
   updateAccessSummary();
@@ -963,12 +978,13 @@ function resetNewGoalForm() {
     : state.routeDefault;
   state.effort = state.effortDefault;
   state.executionProfile = AUTOMATIC_PROFILE_KEY;
+  state.supervision = "none";
   els.candidateCount.value = "1";
   state.mode = usesHumanModes() ? state.route : state.effort;
   renderModeControls();
   updateAccessSummary();
   sessionStorage.removeItem(STORAGE_KEY);
-  state.restoredDraftVersion = 5;
+  state.restoredDraftVersion = 6;
   state.undoStack = [];
   state.redoStack = [];
   pushUndo();
@@ -2247,10 +2263,12 @@ async function startWork() {
       metadata: {
         updated_at: submittedAt,
         route_key: usesHumanModes() ? state.route : undefined,
+        route_id: usesHumanModes() ? selectedRoute()?.route_id : undefined,
         effort: state.effort,
         execution_profile: routeUsesExecutionProfiles()
           ? state.executionProfile
           : undefined,
+        supervision: routeSupportsGlmSupervision() ? state.supervision : undefined,
       },
     };
     state.liveTask = pendingTask;
@@ -2262,11 +2280,15 @@ async function startWork() {
         method: "POST",
         body: JSON.stringify({
           route: usesHumanModes() ? state.route : undefined,
+          route_id: usesHumanModes() ? selectedRoute()?.route_id : undefined,
           effort: usesHumanModes() ? state.effort : undefined,
           execution_profile: usesHumanModes()
             && routeUsesExecutionProfiles()
             && state.executionProfile !== AUTOMATIC_PROFILE_KEY
             ? state.executionProfile
+            : undefined,
+          supervision: usesHumanModes() && routeSupportsGlmSupervision()
+            ? state.supervision
             : undefined,
           strategy: usesHumanModes() ? undefined : state.effort,
           objective,
@@ -2623,6 +2645,13 @@ els.modelProfileSelect.addEventListener("change", () => {
   renderModeControls();
   pushUndo();
   persistForm();
+});
+els.advisorySupervision.addEventListener("change", () => {
+  state.supervision = els.advisorySupervision.checked ? "glm-5.2" : "none";
+  renderModeControls();
+  pushUndo();
+  persistForm();
+  updateStartButton();
 });
 els.candidateCount.addEventListener("change", () => {
   pushUndo();

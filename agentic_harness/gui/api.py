@@ -11,13 +11,19 @@ from pathlib import Path
 from typing import Any, cast
 
 from agentic_harness.core.local_goal_bridge import (
+    CLOUD_GLM_BUILD_ROUTE_ID,
     CommandResult,
+    EXTERNAL_AUDIT_CONTRACT,
     EXTERNAL_CANDIDATE_CONTRACT,
+    GLM_READONLY_AUDIT_ROUTE_ID,
+    LOCAL_BUILD_ROUTE_ID,
     LocalGoalBridge,
     MODE3A_PLANNER,
     MODE3A_WORKER,
     MODE4_WORKER,
     MODE4B_WORKER,
+    TURNSTONE_GLM_LOCAL_BUILD_ROUTE_ID,
+    canonical_route_id,
     managed_mode_record_dispatchable,
     managed_route_key,
 )
@@ -43,16 +49,14 @@ _MAX_START_TICKET_BYTES = 128 * 1024
 _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
     {
         "key": "mode1",
+        "route_id": LOCAL_BUILD_ROUTE_ID,
         "technical_mode": "Mode 1 local start",
         "backend_id": "opencode_executes_glm52_supervises",
         "mode_number": "1",
         "label": "Local build",
         "summary": "Run the implementation through OpenCode on the local Node1 model lane.",
         "best_for": "Normal implementation work when the managed local lane is free.",
-        "caution": (
-            "The start route is local quick-start. GLM supervision is advisory and is not "
-            "automatically started or proven by this GUI route."
-        ),
+        "caution": "GLM supervision is optional, advisory, and independently verified when selected.",
         "recommended": True,
         "maturity": "local_start_compatibility",
         "mutation": "implementation",
@@ -74,6 +78,7 @@ _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "mode2",
+        "route_id": "local-build-codex-spotcheck-policy",
         "technical_mode": "Mode 2",
         "backend_id": "opencode_executes_glm52_supervises_codex_spotchecks",
         "mode_number": "2",
@@ -102,10 +107,11 @@ _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "mode3a",
-        "technical_mode": "Mode 3A",
+        "route_id": CLOUD_GLM_BUILD_ROUTE_ID,
+        "technical_mode": "Cloud GLM build",
         "backend_id": "mode3a_cloud_long_horizon_goal",
         "mode_number": "3A",
-        "label": "Cloud long run",
+        "label": "Cloud GLM build",
         "summary": "Run a bounded long-horizon goal while leaving the local Node1 lane available.",
         "best_for": "A separate, explicitly scoped cloud task when the local lane is busy.",
         "caution": "Source context is sent to the configured cloud planner and worker.",
@@ -130,6 +136,7 @@ _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "mode4",
+        "route_id": GLM_READONLY_AUDIT_ROUTE_ID,
         "technical_mode": "Mode 4",
         "backend_id": "glm52_fully_local_long_horizon_executor",
         "mode_number": "4",
@@ -158,6 +165,7 @@ _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "mode4b",
+        "route_id": "glm-direct-implementation-canary",
         "technical_mode": "Mode 4B",
         "backend_id": "glm52_direct_implementation_canary",
         "mode_number": "4B",
@@ -308,7 +316,14 @@ def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]
         or _document_supports_contract(capabilities_document, EXTERNAL_CANDIDATE_CONTRACT)
     )
     candidate_contract_ok = _document_supports_contract(
-        capabilities_document, EXTERNAL_CANDIDATE_CONTRACT
+        capabilities_document,
+        EXTERNAL_CANDIDATE_CONTRACT,
+        field_name="external_candidate_contracts",
+    )
+    audit_contract_ok = _document_supports_contract(
+        capabilities_document,
+        EXTERNAL_AUDIT_CONTRACT,
+        field_name="external_audit_contracts",
     )
     adapter_document: dict[str, Any] | None = None
     turnstone_executable = _is_turnstone_bridge(bridge)
@@ -372,8 +387,9 @@ def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]
             elif turnstone_adapter:
                 route.update(
                     {
-                        "technical_mode": "Mode 3A via Turnstone",
-                        "label": "Turnstone long run",
+                        "route_id": TURNSTONE_GLM_LOCAL_BUILD_ROUTE_ID,
+                        "technical_mode": "Turnstone GLM local build",
+                        "label": "Turnstone GLM + local build",
                         "summary": (
                             "Use Turnstone's cloud GLM coordinator to plan and its local "
                             "Node1 model child to perform bounded implementation."
@@ -427,6 +443,7 @@ def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]
                         or "The Turnstone adapter is not ready for another task."
                     )
             else:
+                route["route_id"] = CLOUD_GLM_BUILD_ROUTE_ID
                 worker = workers.get(MODE3A_WORKER, {})
                 route["available"] = bool(
                     contract_ok
@@ -439,11 +456,31 @@ def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]
                     else _cloud_disabled_reason(contract_ok, cloud_lane, worker, MODE3A_WORKER)
                 )
         elif key == "mode4":
-            route["available"] = False
-            route["disabled_reason"] = (
-                "Mode 4 audit dispatch is disabled until the managed wrapper advertises a "
-                "distinct audit-only routing contract."
+            worker = workers.get(MODE4_WORKER, {})
+            route["available"] = bool(
+                current_contract_ok
+                and managed_mode_record_dispatchable(backend)
+                and audit_contract_ok
+                and _lane_available(cloud_lane)
+                and _worker_available(worker, mutation="audit")
             )
+            if route["available"]:
+                route["disabled_reason"] = ""
+            elif not audit_contract_ok:
+                route["disabled_reason"] = (
+                    "The managed backend does not advertise the distinct audit-only dispatch contract."
+                )
+            elif not current_contract_ok or not managed_mode_record_dispatchable(backend):
+                route["disabled_reason"] = _managed_mode_disabled_reason(
+                    backend,
+                    contract_ok=current_contract_ok,
+                )
+            elif not _lane_available(cloud_lane):
+                route["disabled_reason"] = _lane_disabled_reason(cloud_lane)
+            else:
+                route["disabled_reason"] = (
+                    f"The audit-only worker {MODE4_WORKER} has not passed its dispatch contract."
+                )
         elif key == "mode4b":
             route["available"] = False
             route["hidden"] = True
@@ -563,15 +600,20 @@ def _worker_registry(payload: dict[str, Any] | None) -> dict[str, dict[str, Any]
     }
 
 
-def _document_supports_contract(payload: dict[str, Any] | None, contract: str) -> bool:
+def _document_supports_contract(
+    payload: dict[str, Any] | None,
+    contract: str,
+    *,
+    field_name: str = "external_candidate_contracts",
+) -> bool:
     document = _dictionary(payload)
     containers = [document]
     nested = document.get("capabilities")
     if isinstance(nested, dict):
         containers.append(nested)
     return any(
-        isinstance(container.get("external_candidate_contracts"), list)
-        and contract in container["external_candidate_contracts"]
+        isinstance(container.get(field_name), list)
+        and contract in container[field_name]
         for container in containers
     )
 
@@ -596,7 +638,13 @@ def _worker_available(worker: dict[str, Any], *, mutation: str) -> bool:
         and worker.get("enabled") is True
         and worker.get("binary_resolved") is not False
         and readiness not in {"blocked", "disabled", "retired"}
-        and worker.get("mutation_default") == mutation
+        and (
+            worker.get("mutation_default") == mutation
+            or (
+                mutation == "audit"
+                and worker.get("mutation_default") in {"audit_only", "proposal"}
+            )
+        )
     )
 
 
@@ -843,6 +891,8 @@ def _annotate_requested_execution(
     execution_profile: str,
     safe_areas: tuple[str, ...],
     checks: tuple[str, ...],
+    route_id: str = "",
+    supervision: str = "none",
 ) -> TaskPayload:
     task["objective"] = objective
     metadata = task.get("metadata")
@@ -852,18 +902,22 @@ def _annotate_requested_execution(
     metadata.update(
         {
             "route_key": route,
+            "route_id": route_id,
             "effort": effort,
             "execution_profile": execution_profile,
+            "supervision": supervision,
             "safe_areas": list(safe_areas),
             "checks": list(checks),
         }
     )
     metadata["execution_expectation"] = {
         "route_key": route,
+        "route_id": route_id,
         "effort": effort,
         "execution_profile": execution_profile
         if route in {"mode1", "legacy-guided"}
         else "not_applicable",
+        "supervision": supervision if route == "mode1" else "not_applicable",
     }
     return task
 
@@ -949,9 +1003,11 @@ def start_task(
 ) -> TaskPayload:
     objective = str(body.get("objective", "")).strip()
     requested_route = str(body.get("route") or body.get("mode") or "mode1").strip() or "mode1"
+    requested_route_id = str(body.get("route_id") or "").strip()
     effort = str(body.get("effort", "standard")).strip().lower() or "standard"
     requested_profile = str(body.get("execution_profile", "")).strip()
     execution_profile = requested_profile or "automatic"
+    supervision = str(body.get("supervision") or "none").strip().lower() or "none"
     safe_areas = tuple(_string_list(body.get("safe_areas")))
     checks = tuple(_string_list(body.get("checks")))
     if not objective:
@@ -969,6 +1025,38 @@ def start_task(
             summary=str(exc),
             needs_human=True,
             advanced_details={"error": str(exc)},
+        )
+    expected_route_id = canonical_route_id(
+        route,
+        turnstone=_is_turnstone_bridge(bridge),
+    )
+    if requested_route_id and requested_route_id != expected_route_id:
+        return _task(
+            status="blocked",
+            summary=(
+                "The selected execution route changed before dispatch. Refresh the route list "
+                "and choose it again."
+            ),
+            needs_human=True,
+            advanced_details={
+                "error": "route_identity_mismatch",
+                "requested_route_id": requested_route_id,
+                "expected_route_id": expected_route_id,
+            },
+        )
+    if supervision not in {"none", "glm-5.2"}:
+        return _task(
+            status="blocked",
+            summary="Choose no advisory supervisor or GLM-5.2 advisory supervision.",
+            needs_human=True,
+            advanced_details={"error": "unsupported_supervision"},
+        )
+    if supervision != "none" and route != "mode1":
+        return _task(
+            status="blocked",
+            summary="GLM advisory supervision applies only to the local build route.",
+            needs_human=True,
+            advanced_details={"error": "supervision_not_applicable"},
         )
     if effort not in {row["key"] for row in _EXECUTION_EFFORTS}:
         return _task(
@@ -1020,24 +1108,6 @@ def start_task(
                 ),
                 needs_human=True,
                 advanced_details={"error": "legacy_experimental_route_retired"},
-            ),
-            objective=objective,
-            route=route,
-            effort=effort,
-            execution_profile=execution_profile,
-            safe_areas=safe_areas,
-            checks=checks,
-        )
-    if route == "mode4":
-        return _annotate_requested_execution(
-            _task(
-                status="blocked",
-                summary=(
-                    "Mode 4 audit dispatch is not available because this backend does not "
-                    "yet provide a distinct audit-only routing contract."
-                ),
-                needs_human=True,
-                advanced_details={"error": "mode4_audit_route_not_distinct"},
             ),
             objective=objective,
             route=route,
@@ -1136,6 +1206,10 @@ def start_task(
             bridge.start_human_goal, "execution_profile"
         ):
             start_kwargs["execution_profile"] = execution_profile
+        if _accepts_keyword(bridge.start_human_goal, "route_id"):
+            start_kwargs["route_id"] = expected_route_id
+        if _accepts_keyword(bridge.start_human_goal, "supervision"):
+            start_kwargs["supervision"] = supervision
         result = bridge.start_human_goal(**start_kwargs)
     except ValueError as exc:
         return _task(
@@ -1151,6 +1225,13 @@ def start_task(
         and isinstance(bridge, LocalGoalBridge)
         and not _start_receipt_matches_objective(result, objective)
     ):
+        glm_receipt = result.metadata.get("glm_supervision")
+        if (
+            isinstance(glm_receipt, dict)
+            and glm_receipt.get("started_here") is True
+            and hasattr(bridge, "glm_supervisor_stop")
+        ):
+            bridge.glm_supervisor_stop()
         task = _task(
             status="blocked",
             summary=(
@@ -1174,6 +1255,8 @@ def start_task(
         execution_profile=execution_profile,
         safe_areas=safe_areas,
         checks=checks,
+        route_id=expected_route_id,
+        supervision=supervision,
     )
 
 

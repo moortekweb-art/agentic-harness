@@ -142,6 +142,7 @@ function okPayloadFor(url, setupPayload = null, taskPayload = null, healthPayloa
         routes: [
           {
             key: "mode1", label: "Local build", technical_mode: "Mode 1 local start",
+            route_id: "local-build",
             best_for: "normal local work", available: true, recommended: true,
             data_location: "local_node1", network_scope: "local_execution",
             supports_execution_profiles: true,
@@ -153,6 +154,7 @@ function okPayloadFor(url, setupPayload = null, taskPayload = null, healthPayloa
           },
           {
             key: "mode3a", label: "Cloud long run", technical_mode: "Mode 3A",
+            route_id: "cloud-glm-build",
             best_for: "bounded separate work", available: true, requires_scope: true,
             data_location: "cloud_provider", network_scope: "cloud",
           },
@@ -644,8 +646,9 @@ async function testRunRequiresObjectiveAndEffectiveVerificationAndUsesSessionDra
       route: "",
       effort: "plan",
       executionProfile: "automatic",
+      supervision: "none",
       candidateCount: "1",
-      draftVersion: 5,
+      draftVersion: 6,
     },
   );
 }
@@ -1056,6 +1059,10 @@ async function testLegacyHumanCanChooseEveryModeWithoutWritingACommand() {
   assert.equal(start.disabled, false);
   assert.match(app.elements.get("startHelp").textContent, /assistant will choose checks/i);
 
+  const advisorySupervision = app.elements.get("advisorySupervision");
+  advisorySupervision.checked = true;
+  advisorySupervision.listeners.change();
+
   for (const card of modes.children) {
     objective.value = "Please audit my system and give me a simple report.";
     objective.listeners.input();
@@ -1074,6 +1081,14 @@ async function testLegacyHumanCanChooseEveryModeWithoutWritingACommand() {
   assert.deepEqual(
     submissions.map((call) => JSON.parse(call.options.body).route),
     ["mode1", "mode1", "mode1", "mode3a"],
+  );
+  assert.deepEqual(
+    submissions.map((call) => JSON.parse(call.options.body).route_id),
+    ["local-build", "local-build", "local-build", "cloud-glm-build"],
+  );
+  assert.deepEqual(
+    submissions.map((call) => JSON.parse(call.options.body).supervision),
+    ["glm-5.2", "none", "none", undefined],
   );
   assert.deepEqual(
     submissions.map((call) => JSON.parse(call.options.body).effort),
@@ -1133,8 +1148,9 @@ async function testPredictableViewsConciseModesAndAccessSummaryKeepDraftState() 
       route: "mode3a",
       effort: "standard",
       executionProfile: "automatic",
+      supervision: "none",
       candidateCount: "1",
-      draftVersion: 5,
+      draftVersion: 6,
     },
   );
 }

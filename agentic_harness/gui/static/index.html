@@ -384,6 +384,19 @@
                   <div id="modelProfiles" class="profile-grid" role="group" aria-label="Model profile"></div>
                 </section>
 
+                <section id="advisorySupervisionSection" class="expectation-choice-section" hidden>
+                  <div class="choice-heading">
+                    <div>
+                      <span class="field-label">Advisory supervision</span>
+                      <p class="help-text">Optionally start and verify the configured reviewer for this local build. It does not replace deterministic checks or acceptance gates.</p>
+                    </div>
+                  </div>
+                  <label class="confirm-row">
+                    <input id="advisorySupervision" type="checkbox" />
+                    <span id="advisorySupervisionText">Start and verify advisory supervision for this task.</span>
+                  </label>
+                </section>
+
                 <section id="approachSection" class="expectation-choice-section">
                   <div class="choice-heading">
                     <div>

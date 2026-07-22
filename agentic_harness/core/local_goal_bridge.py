@@ -19,7 +19,12 @@ import time
 DOC_ROOT_ENV = "AGENTIC_HARNESS_DOC_ROOT"
 LOCAL_GOAL_ENV = "AGENTIC_HARNESS_LOCAL_GOAL"
 EXTERNAL_CANDIDATE_CONTRACT = "agentic_harness.external_candidate.v1"
+EXTERNAL_AUDIT_CONTRACT = "agentic_harness.external_audit.v1"
 TURNSTONE_MODE3A_CONTRACT = "agentic_harness_turnstone_mode3.v1"
+LOCAL_BUILD_ROUTE_ID = "local-build"
+TURNSTONE_GLM_LOCAL_BUILD_ROUTE_ID = "turnstone-glm-local-build"
+CLOUD_GLM_BUILD_ROUTE_ID = "cloud-glm-build"
+GLM_READONLY_AUDIT_ROUTE_ID = "glm-readonly-audit"
 MODE3A_PLANNER = "glm-5.2"
 MODE3A_WORKER = "opencode-glm-build"
 MODE3A_BACKEND_ID = "mode3a_cloud_long_horizon_goal"
@@ -225,6 +230,7 @@ class LocalGoalBridge:
                 planner="glm-coordinator",
                 executor="turnstone",
                 contract=EXTERNAL_CANDIDATE_CONTRACT,
+                route_id=TURNSTONE_GLM_LOCAL_BUILD_ROUTE_ID,
             )
         if not managed_registry and not legacy_contract:
             return CommandResult(
@@ -254,6 +260,7 @@ class LocalGoalBridge:
             planner=MODE3A_PLANNER,
             executor="opencode",
             contract=EXTERNAL_CANDIDATE_CONTRACT if legacy_contract else "",
+            route_id=CLOUD_GLM_BUILD_ROUTE_ID,
         )
 
     def enqueue_mode4_audit(
@@ -264,19 +271,43 @@ class LocalGoalBridge:
         adapter_matrix: CommandResult | None = None,
         harness_modes: CommandResult | None = None,
     ) -> CommandResult:
-        """Fail closed until the wrapper has a distinct audit dispatch contract.
-
-        The deployed Turnstone wrapper classifies the external-candidate
-        contract as Mode 3A before inspecting the requested worker. Sending the
-        Mode 4 worker through that path would therefore violate its audit-only
-        expectation and launch the wrong coordinator.
-        """
-        del options, capabilities, adapter_matrix
+        """Dispatch the direct GLM audit worker through its audit-only contract."""
+        capabilities = capabilities or self.capabilities()
         harness_modes = harness_modes or self.harness_modes()
-        return _blocked_command_result(
-            harness_modes,
-            "Mode 4 audit dispatch is disabled because the managed wrapper does not yet "
-            "advertise a distinct audit-only routing contract.",
+        if not _supports_external_contract(
+            capabilities,
+            "external_audit_contracts",
+            EXTERNAL_AUDIT_CONTRACT,
+        ):
+            return _blocked_command_result(
+                capabilities,
+                "The managed backend does not advertise the required audit-only contract: "
+                f"{EXTERNAL_AUDIT_CONTRACT}",
+            )
+        if not _supports_managed_mode(harness_modes, MODE4_BACKEND_ID):
+            return _blocked_command_result(
+                harness_modes,
+                "The managed mode registry does not advertise the direct GLM audit route "
+                "as dispatchable.",
+            )
+        if not _cloud_lane_available(capabilities):
+            return _blocked_command_result(
+                capabilities,
+                "The direct GLM audit lane is not currently available.",
+            )
+        adapter_matrix = adapter_matrix or self.adapter_matrix()
+        if not _worker_dispatchable(adapter_matrix, MODE4_WORKER, mutation="audit"):
+            return _blocked_command_result(
+                adapter_matrix,
+                f"The audit-only worker is not dispatchable: {MODE4_WORKER}",
+            )
+        return self.enqueue_cloud_goal(
+            build_mode4_audit_goal(options),
+            worker=MODE4_WORKER,
+            planner="none",
+            executor="direct-glm",
+            contract=EXTERNAL_AUDIT_CONTRACT,
+            route_id=GLM_READONLY_AUDIT_ROUTE_ID,
         )
 
     def start_human_goal(
@@ -287,6 +318,8 @@ class LocalGoalBridge:
         safe_areas: tuple[str, ...] = (),
         checks: tuple[str, ...] = (),
         execution_profile: str = "automatic",
+        route_id: str = "",
+        supervision: str = "none",
     ) -> CommandResult:
         with self._start_lock:
             return self._start_human_goal_locked(
@@ -295,6 +328,8 @@ class LocalGoalBridge:
                 safe_areas=safe_areas,
                 checks=checks,
                 execution_profile=execution_profile,
+                route_id=route_id,
+                supervision=supervision,
             )
 
     def _start_human_goal_locked(
@@ -305,8 +340,21 @@ class LocalGoalBridge:
         safe_areas: tuple[str, ...] = (),
         checks: tuple[str, ...] = (),
         execution_profile: str = "automatic",
+        route_id: str = "",
+        supervision: str = "none",
     ) -> CommandResult:
         route = managed_route_key(mode_key)
+        expected_route_id = canonical_route_id(route, turnstone=_is_turnstone_executable(self))
+        if route_id and route_id != expected_route_id:
+            raise ValueError(
+                f"route identity mismatch: {route_id!r} cannot dispatch managed route {route!r}; "
+                f"expected {expected_route_id!r}"
+            )
+        route_id = expected_route_id
+        if supervision not in {"none", "glm-5.2"}:
+            raise ValueError("supervision must be none or glm-5.2")
+        if supervision != "none" and route != "mode1":
+            raise ValueError("GLM advisory supervision is available only for local Mode 1 goals")
         if execution_profile not in EXECUTION_PROFILES:
             raise ValueError(f"unsupported execution profile {execution_profile}")
         if route != "mode1" and execution_profile not in {
@@ -321,12 +369,6 @@ class LocalGoalBridge:
                 self.harness_modes(),
                 "Mode 2 supervises an already-running local goal; this backend does not "
                 "advertise an independent safe Mode 2 start operation.",
-            )
-        if route == "mode4":
-            return _blocked_command_result(
-                self.harness_modes(),
-                "Mode 4 audit dispatch is disabled because the managed wrapper does not yet "
-                "advertise a distinct audit-only routing contract.",
             )
         if route == "mode4b":
             return _blocked_command_result(
@@ -404,11 +446,48 @@ class LocalGoalBridge:
 
         capabilities = self.capabilities()
         routing = _routing_defaults(capabilities)
+        supervisor_receipt: dict[str, object] = {
+            "requested": supervision,
+            "running": False,
+            "started_here": False,
+            "contract": "local_goal_glm_supervisor.v1",
+            "model": "glm-5.2",
+            "route_id": route_id,
+        }
+        if supervision == "glm-5.2":
+            supervisor_status = self.glm_supervisor_status()
+            supervisor_payload = _json_object(supervisor_status)
+            if not _glm_supervisor_running(supervisor_status):
+                started = self.glm_supervisor_start()
+                if not _glm_supervisor_running(started):
+                    return _blocked_command_result(
+                        started,
+                        "GLM advisory supervision was requested but could not be started and verified.",
+                    )
+                supervisor_receipt["started_here"] = True
+                supervisor_payload = _json_object(started)
+                verified = self.glm_supervisor_status()
+                if not _glm_supervisor_running(verified):
+                    self.glm_supervisor_stop()
+                    return _blocked_command_result(
+                        verified,
+                        "GLM advisory supervision started but its running state could not be verified.",
+                    )
+                supervisor_payload = _json_object(verified)
+            supervisor_receipt.update(
+                {
+                    "running": True,
+                    "status": str(supervisor_payload.get("status") or "running"),
+                    "session": str(supervisor_payload.get("session") or ""),
+                    "reviewer": str(supervisor_payload.get("reviewer") or "glm-5.2"),
+                }
+            )
         if route == "mode1":
             result = self.start_local_goal(
                 objective,
                 executor=routing["executor"],
                 verification=checks,
+                route_id=route_id,
             )
         elif route == "legacy-guided":
             result = self.start_guided_goal(
@@ -472,8 +551,28 @@ class LocalGoalBridge:
                 adapter_matrix=adapter_matrix,
                 harness_modes=harness_modes,
             )
+        elif route == "mode4":
+            adapter_matrix = self.adapter_matrix()
+            harness_modes = self.harness_modes()
+            result = self.enqueue_mode4_audit(
+                Mode3AGoalOptions(
+                    objective=objective,
+                    allowed_paths=safe_areas,
+                    verification=checks,
+                ),
+                capabilities=capabilities,
+                adapter_matrix=adapter_matrix,
+                harness_modes=harness_modes,
+            )
         else:
             raise ValueError(f"unsupported managed route {route}")
+
+        if supervision == "glm-5.2":
+            if result.returncode != 0 and supervisor_receipt["started_here"] is True:
+                stopped = self.glm_supervisor_stop()
+                supervisor_receipt["running"] = False
+                supervisor_receipt["rollback_returncode"] = stopped.returncode
+            result = _with_metadata(result, glm_supervision=supervisor_receipt)
 
         if result.returncode == 0 and execution_profile == "ornith-text":
             attachment_args = ["model-profile-attach"]
@@ -567,9 +666,12 @@ class LocalGoalBridge:
         *,
         executor: str = "opencode",
         verification: tuple[str, ...] = (),
+        route_id: str = LOCAL_BUILD_ROUTE_ID,
     ) -> CommandResult:
         args = [
             "quick-start",
+            "--route-id",
+            route_id,
             "--title",
             goal,
             "--executor",
@@ -616,6 +718,15 @@ class LocalGoalBridge:
         """Probe an optional managed Mode 3A adapter without starting work."""
         return self.run(["turnstone-monitor", "--json"])
 
+    def glm_supervisor_status(self) -> CommandResult:
+        return self.run(["glm-supervisor", "status", "--reviewer", "glm-5.2", "--json"])
+
+    def glm_supervisor_start(self) -> CommandResult:
+        return self.run(["glm-supervisor", "start", "--reviewer", "glm-5.2", "--json"])
+
+    def glm_supervisor_stop(self) -> CommandResult:
+        return self.run(["glm-supervisor", "stop", "--reviewer", "glm-5.2", "--json"])
+
     def enqueue_cloud_goal(
         self,
         goal: str,
@@ -624,8 +735,11 @@ class LocalGoalBridge:
         planner: str = "planner",
         executor: str = "opencode",
         contract: str = "",
+        route_id: str = "",
     ) -> CommandResult:
         args = ["enqueue"]
+        if route_id:
+            args.extend(["--route-id", route_id])
         if contract:
             args.extend(["--harness-contract", contract])
         args.extend(
@@ -888,6 +1002,7 @@ def managed_route_key(value: str) -> str:
     normalized = value.strip().lower().replace("_", "-")
     aliases = {
         "mode1": "mode1",
+        LOCAL_BUILD_ROUTE_ID: "mode1",
         "mode-1": "mode1",
         "1": "mode1",
         "local": "mode1",
@@ -896,6 +1011,8 @@ def managed_route_key(value: str) -> str:
         "mode-2": "mode2",
         "2": "mode2",
         "mode3a": "mode3a",
+        TURNSTONE_GLM_LOCAL_BUILD_ROUTE_ID: "mode3a",
+        CLOUD_GLM_BUILD_ROUTE_ID: "mode3a",
         "mode-3a": "mode3a",
         "3a": "mode3a",
         "3": "legacy-cloud",
@@ -903,6 +1020,7 @@ def managed_route_key(value: str) -> str:
         "persistent": "legacy-cloud",
         "thorough": "legacy-cloud",
         "mode4": "mode4",
+        GLM_READONLY_AUDIT_ROUTE_ID: "mode4",
         "mode-4": "mode4",
         "4": "mode4",
         "audit": "mode4",
@@ -923,6 +1041,26 @@ def managed_route_key(value: str) -> str:
         raise ValueError(
             f"unknown managed route {value!r}; choose mode1, mode2, mode3a, mode4, or mode4b"
         ) from exc
+
+
+def canonical_route_id(route: str, *, turnstone: bool = False) -> str:
+    """Return the dispatch identity for a managed route, independent of UI aliases."""
+    normalized = managed_route_key(route)
+    if normalized == "mode1":
+        return LOCAL_BUILD_ROUTE_ID
+    if normalized == "mode2":
+        return "local-build-codex-spotcheck-policy"
+    if normalized == "mode3a":
+        return (
+            TURNSTONE_GLM_LOCAL_BUILD_ROUTE_ID
+            if turnstone
+            else CLOUD_GLM_BUILD_ROUTE_ID
+        )
+    if normalized == "mode4":
+        return GLM_READONLY_AUDIT_ROUTE_ID
+    if normalized == "mode4b":
+        return "glm-direct-implementation-canary"
+    return ""
 
 
 def format_human_modes() -> str:
@@ -1092,7 +1230,13 @@ def _worker_dispatchable(
             row.get("enabled") is True
             and row.get("binary_resolved") is not False
             and readiness not in {"blocked", "disabled", "retired"}
-            and row.get("mutation_default") == mutation
+            and (
+                row.get("mutation_default") == mutation
+                or (
+                    mutation == "audit"
+                    and row.get("mutation_default") in {"audit_only", "proposal"}
+                )
+            )
         )
     return False
 
@@ -1161,6 +1305,18 @@ def _string_values(value: object) -> list[str]:
 
 
 def _supports_candidate_contract(result: CommandResult, contract: str) -> bool:
+    return _supports_external_contract(
+        result,
+        "external_candidate_contracts",
+        contract,
+    )
+
+
+def _supports_external_contract(
+    result: CommandResult,
+    field_name: str,
+    contract: str,
+) -> bool:
     if result.returncode != 0:
         return False
     try:
@@ -1174,9 +1330,31 @@ def _supports_candidate_contract(result: CommandResult, contract: str) -> bool:
     if isinstance(capabilities, dict):
         containers.append(capabilities)
     return any(
-        isinstance(container.get("external_candidate_contracts"), list)
-        and contract in container["external_candidate_contracts"]
+        isinstance(container.get(field_name), list)
+        and contract in container[field_name]
         for container in containers
+    )
+
+
+def _glm_supervisor_running(result: CommandResult) -> bool:
+    payload = _json_object(result)
+    return (
+        result.returncode == 0
+        and payload.get("contract") == "local_goal_glm_supervisor.v1"
+        and payload.get("running") is True
+        and str(payload.get("reviewer") or "glm-5.2") == "glm-5.2"
+    )
+
+
+def _with_metadata(result: CommandResult, **metadata: object) -> CommandResult:
+    merged = dict(result.metadata)
+    merged.update(metadata)
+    return CommandResult(
+        args=result.args,
+        returncode=result.returncode,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        metadata=merged,
     )
 
 

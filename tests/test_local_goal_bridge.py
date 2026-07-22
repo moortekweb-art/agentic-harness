@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import threading
 import time
@@ -151,9 +152,11 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
     assert result.returncode == 0
     assert calls
     command = calls[-1]
-    assert command[:10] == [
+    assert command[:12] == [
         str(local_goal),
         "enqueue",
+        "--route-id",
+        "cloud-glm-build",
         "--harness-contract",
         "agentic_harness.external_candidate.v1",
         "--planner",
@@ -165,6 +168,135 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
     ]
     assert "--goal" in command
     assert "fix one thing" in command[-1]
+
+
+def test_mode4_audit_uses_distinct_contract_and_pinned_worker(tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        command = list(args[0])
+        calls.append(command)
+        if command[-2:] == ["capabilities", "--json"]:
+            stdout = (
+                '{"external_audit_contracts":["agentic_harness.external_audit.v1"],'
+                '"lanes":{"cloud_executor":{"installed":true,"available_now":true}}}'
+            )
+        elif command[-2:] == ["harness-modes", "--json"]:
+            stdout = (
+                '{"contract":"local_goal_harness_modes.v1","status":"available",'
+                '"modes":[{"id":"glm52_fully_local_long_horizon_executor",'
+                '"readiness":"audit_proposal_only","dispatchable":true}]}'
+            )
+        elif command[-2:] == ["adapter-matrix", "--json"]:
+            stdout = (
+                '{"matrix":[{"worker":"glm52-direct","enabled":true,'
+                '"binary_resolved":true,"readiness":"audit_proposal_only",'
+                '"mutation_default":"audit"}]}'
+            )
+        else:
+            stdout = "queued_id=audit-1\n"
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+    result = bridge.enqueue_mode4_audit(
+        Mode3AGoalOptions(objective="Audit this bounded component without editing source")
+    )
+
+    assert result.returncode == 0
+    command = calls[-1]
+    assert command[command.index("--route-id") + 1] == "glm-readonly-audit"
+    assert command[command.index("--harness-contract") + 1] == (
+        "agentic_harness.external_audit.v1"
+    )
+    assert command[command.index("--executor-worker") + 1] == "glm52-direct"
+    assert command[command.index("--planner") + 1] == "none"
+
+
+def test_local_build_can_start_and_verify_glm_advisory_supervision(tmp_path) -> None:
+    calls: list[list[str]] = []
+    status_count = 0
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        nonlocal status_count
+        command = list(args[0])
+        calls.append(command)
+        if command[-2:] == ["capabilities", "--json"]:
+            stdout = '{"lanes":{"local":{"executor":"opencode"}}}'
+        elif "glm-supervisor" in command and "status" in command:
+            status_count += 1
+            running = status_count > 1
+            stdout = json.dumps(
+                {
+                    "contract": "local_goal_glm_supervisor.v1",
+                    "status": "running" if running else "stopped",
+                    "running": running,
+                    "reviewer": "glm-5.2",
+                    "session": "glm52-harness-supervisor",
+                }
+            )
+        elif "glm-supervisor" in command and "start" in command:
+            stdout = json.dumps(
+                {
+                    "contract": "local_goal_glm_supervisor.v1",
+                    "status": "started",
+                    "running": True,
+                    "reviewer": "glm-5.2",
+                    "session": "glm52-harness-supervisor",
+                }
+            )
+        else:
+            stdout = "run_dir=/tmp/run-supervised\nstarted local-node1-goal\n"
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+    result = bridge.start_human_goal(
+        mode_key="mode1",
+        route_id="local-build",
+        supervision="glm-5.2",
+        objective="Implement one bounded local change and verify its focused behavior",
+    )
+
+    assert result.returncode == 0
+    assert [call[1:3] for call in calls if len(call) > 2 and call[1] == "glm-supervisor"] == [
+        ["glm-supervisor", "status"],
+        ["glm-supervisor", "start"],
+        ["glm-supervisor", "status"],
+    ]
+    start = next(call for call in calls if len(call) > 1 and call[1] == "quick-start")
+    assert start[start.index("--route-id") + 1] == "local-build"
+    receipt = result.metadata["glm_supervision"]
+    assert isinstance(receipt, dict)
+    assert receipt["running"] is True
+    assert receipt["started_here"] is True
+
+
+def test_route_identity_mismatch_fails_before_external_calls(tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        calls.append(list(args[0]))
+        return subprocess.CompletedProcess(args[0], 0, "", "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+    with pytest.raises(ValueError, match="route identity mismatch"):
+        bridge.start_human_goal(
+            mode_key="mode1",
+            route_id="cloud-glm-build",
+            objective="Do not dispatch this mismatched route identity",
+        )
+    assert calls == []
 
 
 def test_human_modes_use_routes_advertised_by_external_backend(tmp_path) -> None:
