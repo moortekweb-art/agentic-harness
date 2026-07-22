@@ -301,8 +301,37 @@ def make_handler(
                 if active is not None:
                     self._json(active.status())
                 else:
-                    task = session.record(status_task(bridge))
-                    self._json(task)
+                    observed = session.record(status_task(bridge))
+                    requested_goal_id = parse_qs(parsed.query).get("goal_id", [""])[0]
+                    foreground = session.task(requested_goal_id) if requested_goal_id else None
+                    if foreground is None:
+                        self._json(observed)
+                    else:
+                        foreground = enrich_managed_task_snapshot(bridge, foreground)
+                        foreground_metadata = dict(foreground.get("metadata", {}))
+                        foreground_metadata["foreground_task"] = True
+                        if not _identities_match(
+                            _task_identity(foreground), _task_identity(observed)
+                        ):
+                            foreground_metadata["background_activity"] = {
+                                "id": str(observed.get("id") or ""),
+                                "objective": str(observed.get("objective") or ""),
+                                "status": str(observed.get("status") or "ready"),
+                            }
+                            # Actions target the backend's active run. Never offer them for a
+                            # pinned result while unrelated maintenance owns that backend.
+                            foreground["allowed_actions"] = []
+                            guide = dict(foreground.get("guide", {}))
+                            if foreground.get("status") == "needs_review":
+                                guide["eyebrow"] = "Your result"
+                                guide["title"] = guide.get("title") or "Your result is ready"
+                                guide["next_action"] = (
+                                    "Read the result below. Separate background maintenance "
+                                    "will not replace this task."
+                                )
+                                foreground["guide"] = guide
+                        foreground["metadata"] = foreground_metadata
+                        self._json(foreground)
             elif route == "/api/tasks/history":
                 query = parse_qs(parsed.query).get("q", [""])[0]
                 self._json(
@@ -1253,6 +1282,18 @@ class GuiSession:
         if needle:
             tasks = [task for task in tasks if needle in json.dumps(task, sort_keys=True).lower()]
         return tasks
+
+    def task(self, task_id: str) -> dict[str, Any] | None:
+        """Return one exact GUI-visible task without rebinding it to backend activity."""
+
+        requested = str(task_id or "").strip()
+        if not requested:
+            return None
+        with self._lock:
+            for task in self._history:
+                if str(task.get("id") or "").strip() == requested:
+                    return dict(task)
+        return None
 
     def export(self) -> dict[str, Any]:
         return {

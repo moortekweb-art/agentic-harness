@@ -1808,6 +1808,41 @@ def test_same_summary_distinct_runs_remain_in_durable_history(tmp_path: Path) ->
     assert [task["id"] for task in restarted.history()] == ["run-b", "run-a"]
 
 
+def test_session_can_recover_one_exact_foreground_task_after_unrelated_activity(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    session = GuiSession(state_path)
+    session.record(
+        {
+            "id": "human-audit",
+            "status": "needs_review",
+            "objective": "Audit this system and score it",
+            "summary": "Audit complete: 7.5/10",
+            "artifacts": [{"name": "Full audit", "path": "reports/audit.md"}],
+            "metadata": {"start_accepted": True, "route_key": "mode1"},
+        }
+    )
+    session.record(
+        {
+            "id": "background-canary",
+            "status": "working",
+            "objective": "Internal maintenance canary",
+            "summary": "working",
+            "metadata": {},
+        }
+    )
+
+    restarted = GuiSession(state_path)
+    foreground = restarted.task("human-audit")
+
+    assert foreground is not None
+    assert foreground["objective"] == "Audit this system and score it"
+    assert foreground["summary"] == "Audit complete: 7.5/10"
+    assert foreground["artifacts"][0]["path"] == "reports/audit.md"
+    assert restarted.task("missing-task") is None
+
+
 def test_session_symlink_and_write_failures_are_nonfatal(tmp_path: Path) -> None:
     target = tmp_path / "sentinel.json"
     target.write_text("sentinel", encoding="utf-8")

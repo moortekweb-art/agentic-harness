@@ -1,6 +1,7 @@
 const STORAGE_KEY = "agentic-harness-gui-form";
 const THEME_KEY = "agentic-harness-theme";
 const TOKEN_KEY = "agentic-harness-gui-session-token";
+const FOREGROUND_TASK_KEY = "agentic-harness-foreground-task-id";
 const ICON_PREFIX = "#icon-";
 const API_TIMEOUT_MS = 20000;
 // Managed local-model profile changes can include a guarded model swap and startup probe.
@@ -74,6 +75,8 @@ const state = {
   providerTemplates: [],
   localModelDetection: null,
   specificationReviewBinding: null,
+  resultPreviewKey: "",
+  resultPreviewCache: new Map(),
 };
 
 const byId = (id) => document.getElementById(id);
@@ -163,6 +166,11 @@ const els = {
   taskGuideFiles: byId("taskGuideFiles"),
   taskGuideChecks: byId("taskGuideChecks"),
   taskGuideArtifacts: byId("taskGuideArtifacts"),
+  resultOutput: byId("resultOutput"),
+  resultOutputTitle: byId("resultOutputTitle"),
+  resultOutputSummary: byId("resultOutputSummary"),
+  resultOutputContent: byId("resultOutputContent"),
+  resultOutputOpen: byId("resultOutputOpen"),
   routeReceipt: byId("routeReceipt"),
   routeReceiptLabel: byId("routeReceiptLabel"),
   routeReceiptPlanner: byId("routeReceiptPlanner"),
@@ -1150,10 +1158,13 @@ function updateStartButton() {
 function renderRecovery() {
   const readinessState = String(state.readiness?.state || "");
   const task = state.currentTask || state.liveTask || {};
+  const foregroundReview = task.status === "needs_review"
+    && task.metadata?.foreground_task === true;
+  const visibleState = foregroundReview ? "needs_review" : readinessState;
   const canContinue = hasAction(task, "continue");
   const canStop = hasAction(task, "stop");
   const hasTask = Boolean(task?.id);
-  const show = state.readiness?.can_start === false
+  const show = foregroundReview || state.readiness?.can_start === false
     && ["needs_review", "needs_attention", "blocked", "configuration_error"].includes(readinessState);
 
   els.recoveryCard.hidden = !show;
@@ -1166,23 +1177,23 @@ function renderRecovery() {
   }
 
   const guide = task.guide && typeof task.guide === "object" ? task.guide : {};
-  els.recoveryTitle.textContent = readinessState === "needs_review"
+  els.recoveryTitle.textContent = visibleState === "needs_review"
     ? guide.title || "Your result is ready"
-    : readinessState === "configuration_error"
+    : visibleState === "configuration_error"
       ? "Configuration needs repair"
       : "Current task needs attention";
-  els.recoverySummary.textContent = readinessState === "needs_review"
+  els.recoverySummary.textContent = visibleState === "needs_review"
     ? guide.explanation || "The assistant finished and stopped safely for your review."
     : state.readiness?.summary
     || state.readiness?.next_action
     || "Choose what should happen before starting another task.";
-  els.recoveryContinueButton.textContent = readinessState === "needs_review"
+  els.recoveryContinueButton.textContent = visibleState === "needs_review"
     ? "Ask for changes"
     : "Continue task";
-  els.recoveryStopButton.textContent = readinessState === "needs_review"
+  els.recoveryStopButton.textContent = visibleState === "needs_review"
     ? "Stop without approving"
     : "Stop task";
-  els.recoveryOpenTaskButton.textContent = readinessState === "needs_review"
+  els.recoveryOpenTaskButton.textContent = visibleState === "needs_review"
     ? "Review result"
     : "Open current task";
   els.recoveryContinueButton.hidden = !hasTask || !canContinue;
@@ -1300,6 +1311,62 @@ async function openPreview(kind, path, goalId = "") {
     els.previewDialog.showModal();
   } catch (error) {
     window.alert(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function primaryResultRow(task) {
+  const artifacts = Array.isArray(task.artifacts) ? task.artifacts : [];
+  const changedFiles = Array.isArray(task.changed_files) ? task.changed_files : [];
+  const rows = [...artifacts, ...changedFiles];
+  return rows.find((row) => {
+    const path = typeof row === "string" ? row : row?.path || "";
+    return /\.(md|txt|json|html?)$/i.test(path);
+  }) || rows[0] || null;
+}
+
+async function renderPrimaryResult(task) {
+  const receipt = receiptContext(task);
+  const resultReady = task.status === "needs_review"
+    || task.status === "done"
+    || receipt.terminal;
+  const row = resultReady ? primaryResultRow(task) : null;
+  const path = typeof row === "string" ? row : row?.path || "";
+  const isArtifact = Array.isArray(task.artifacts) && task.artifacts.includes(row);
+  if (!resultReady || !path) {
+    state.resultPreviewKey = "";
+    els.resultOutput.hidden = true;
+    return;
+  }
+
+  const goalId = String(task.id || "");
+  const key = `${goalId}:${path}`;
+  state.resultPreviewKey = key;
+  els.resultOutput.hidden = false;
+  els.resultOutputTitle.textContent = typeof row === "object" && row?.name
+    ? row.name
+    : path.split("/").pop() || "Completed result";
+  els.resultOutputSummary.textContent = task.summary || "The result is ready to read.";
+  els.resultOutputOpen.onclick = () => openPreview(isArtifact ? "artifact" : "file", path, goalId);
+
+  if (state.resultPreviewCache.has(key)) {
+    els.resultOutputContent.textContent = state.resultPreviewCache.get(key);
+    return;
+  }
+  els.resultOutputContent.textContent = "Loading the full result…";
+  const baseRoute = isArtifact
+    ? `/api/tasks/current/artifact?path=${encodeURIComponent(path)}`
+    : `/api/tasks/current/file?path=${encodeURIComponent(path)}`;
+  try {
+    const preview = await api(`${baseRoute}&goal_id=${encodeURIComponent(goalId)}`);
+    const content = preview.content || "The task completed without a separate text result.";
+    state.resultPreviewCache.set(key, content);
+    if (state.resultPreviewKey === key) els.resultOutputContent.textContent = content;
+  } catch (error) {
+    if (state.resultPreviewKey === key) {
+      els.resultOutputContent.textContent = error instanceof Error
+        ? `The result exists, but could not be loaded here: ${error.message}`
+        : "The result exists, but could not be loaded here.";
+    }
   }
 }
 
@@ -1639,6 +1706,7 @@ function renderTask(task) {
     "No artifacts reported yet.",
     task.id || "",
   );
+  void renderPrimaryResult(task);
 
   renderFinalReceipt(task, receipt);
   const viewingHistory = Boolean(state.viewingHistoryId);
@@ -2321,6 +2389,17 @@ function taskMatchesPendingStart(task) {
   return String(task?.objective || "").trim() === state.pendingStartObjective;
 }
 
+function foregroundTaskId() {
+  return localStorage.getItem(FOREGROUND_TASK_KEY) || "";
+}
+
+function rememberForegroundTask(task) {
+  const id = String(task?.id || "").trim();
+  if (!id || id.startsWith("pending-") || id.startsWith("task-")) return;
+  if (task.metadata?.start_accepted === false) return;
+  localStorage.setItem(FOREGROUND_TASK_KEY, id);
+}
+
 function adoptLiveTask(task, { force = false } = {}) {
   if (!taskMatchesPendingStart(task)) return false;
   state.liveTask = task;
@@ -2329,12 +2408,24 @@ function adoptLiveTask(task, { force = false } = {}) {
     state.viewingHistoryId = "";
     renderTask(task);
   }
+  if (
+    task.status === "needs_review"
+    && task.metadata?.foreground_task === true
+    && state.activeView === "home"
+  ) {
+    showView("tasks", { focus: true });
+  }
   return true;
 }
 
 async function refreshTask(force = false) {
   return singleFlight("task", async () => {
-    const task = await api("/api/tasks/current");
+    const pinned = state.pendingStartObjective ? "" : foregroundTaskId();
+    const task = await api(
+      pinned
+        ? `/api/tasks/current?goal_id=${encodeURIComponent(pinned)}`
+        : "/api/tasks/current",
+    );
     adoptLiveTask(task, { force });
   });
 }
@@ -2455,6 +2546,7 @@ async function startWork() {
       state.pendingStartObjective = "";
       throw new Error("The new task was not confirmed. Your draft is still here; review the current task and try again.");
     }
+    rememberForegroundTask(task);
     adoptLiveTask(task, { force: true });
     resetNewGoalForm();
     await refreshHistory();
@@ -2464,6 +2556,7 @@ async function startWork() {
 async function postAction(path, body = {}) {
   await runAction(async () => {
     const task = await api(path, { method: "POST", body: JSON.stringify(body) });
+    rememberForegroundTask(task);
     state.viewingHistoryId = "";
     state.liveTask = task;
     renderTask(task);
@@ -2611,7 +2704,11 @@ function connectStatusStream() {
   socket.addEventListener("message", (event) => {
     try {
       const task = JSON.parse(event.data);
-      adoptLiveTask(task);
+      if (foregroundTaskId() && !state.pendingStartObjective) {
+        refreshTask().catch(() => {});
+      } else {
+        adoptLiveTask(task);
+      }
       refreshHistory().catch(() => {});
       refreshHealth().catch(() => {});
     } catch {

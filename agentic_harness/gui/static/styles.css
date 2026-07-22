@@ -1252,6 +1252,62 @@ button[aria-busy="true"]:disabled {
   }
 }
 
+.result-output {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(39, 105, 93, 0.38);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 96%, var(--accent) 4%);
+}
+
+.result-output[hidden] {
+  display: none;
+}
+
+.result-output-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.result-output-heading h3,
+.result-output-heading .eyebrow,
+.result-output-summary {
+  margin: 0;
+}
+
+.result-output-summary {
+  color: var(--muted);
+}
+
+.result-output-content {
+  max-height: 34rem;
+  margin: 0;
+  padding: 1rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: 0.85rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 620px) {
+  .result-output-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .result-output-heading button {
+    width: 100%;
+  }
+}
+
 .current-card {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(64px, 0.35fr);

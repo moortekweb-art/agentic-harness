@@ -699,6 +699,38 @@ def test_managed_review_history_retains_evidence_after_lane_returns_ready(
     }
 
 
+def test_managed_current_endpoint_keeps_requested_result_in_foreground(
+    tmp_path: Path,
+) -> None:
+    bridge, run_id = _managed_review_bridge(tmp_path)
+
+    with gui_server(bridge) as base_url:  # type: ignore[arg-type]
+        current = get_json(base_url, "/api/tasks/current")
+        assert current["id"] == run_id
+        bridge.status_payload = {  # type: ignore[attr-defined]
+            "classification": "working",
+            "active_goal": {
+                "id": "background-canary",
+                "objective": "Internal maintenance canary",
+                "run_dir": "/tmp/background-canary",
+                "tmux_running": True,
+            },
+        }
+        observed = get_json(base_url, "/api/tasks/current")
+        foreground = get_json(base_url, f"/api/tasks/current?goal_id={quote(run_id)}")
+
+    assert observed["id"] == "background-canary"
+    assert foreground["id"] == run_id
+    assert "System audit completed with 8/10 rating." in foreground["summary"]
+    assert foreground["metadata"]["foreground_task"] is True
+    assert foreground["metadata"]["background_activity"] == {
+        "id": "background-canary",
+        "objective": "Internal maintenance canary",
+        "status": "working",
+    }
+    assert foreground["allowed_actions"] == []
+
+
 def test_gui_frontend_presents_review_as_a_user_decision() -> None:
     app = Path("agentic_harness/gui/static/app.js").read_text(encoding="utf-8")
 
