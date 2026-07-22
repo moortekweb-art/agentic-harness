@@ -11,13 +11,19 @@ from pathlib import Path
 from typing import Any, cast
 
 from agentic_harness.core.local_goal_bridge import (
+    CLOUD_GLM_BUILD_ROUTE_ID,
     CommandResult,
+    EXTERNAL_AUDIT_CONTRACT,
     EXTERNAL_CANDIDATE_CONTRACT,
+    GLM_READONLY_AUDIT_ROUTE_ID,
+    LOCAL_BUILD_ROUTE_ID,
     LocalGoalBridge,
     MODE3A_PLANNER,
     MODE3A_WORKER,
     MODE4_WORKER,
     MODE4B_WORKER,
+    TURNSTONE_GLM_LOCAL_BUILD_ROUTE_ID,
+    canonical_route_id,
     managed_mode_record_dispatchable,
     managed_route_key,
 )
@@ -43,16 +49,14 @@ _MAX_START_TICKET_BYTES = 128 * 1024
 _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
     {
         "key": "mode1",
+        "route_id": LOCAL_BUILD_ROUTE_ID,
         "technical_mode": "Mode 1 local start",
         "backend_id": "opencode_executes_glm52_supervises",
         "mode_number": "1",
         "label": "Local build",
         "summary": "Run the implementation through OpenCode on the local Node1 model lane.",
         "best_for": "Normal implementation work when the managed local lane is free.",
-        "caution": (
-            "The start route is local quick-start. GLM supervision is advisory and is not "
-            "automatically started or proven by this GUI route."
-        ),
+        "caution": "GLM supervision is optional, advisory, and independently verified when selected.",
         "recommended": True,
         "maturity": "local_start_compatibility",
         "mutation": "implementation",
@@ -74,6 +78,7 @@ _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "mode2",
+        "route_id": "local-build-codex-spotcheck-policy",
         "technical_mode": "Mode 2",
         "backend_id": "opencode_executes_glm52_supervises_codex_spotchecks",
         "mode_number": "2",
@@ -102,10 +107,11 @@ _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "mode3a",
-        "technical_mode": "Mode 3A",
+        "route_id": CLOUD_GLM_BUILD_ROUTE_ID,
+        "technical_mode": "Cloud GLM build",
         "backend_id": "mode3a_cloud_long_horizon_goal",
         "mode_number": "3A",
-        "label": "Cloud long run",
+        "label": "Cloud GLM build",
         "summary": "Run a bounded long-horizon goal while leaving the local Node1 lane available.",
         "best_for": "A separate, explicitly scoped cloud task when the local lane is busy.",
         "caution": "Source context is sent to the configured cloud planner and worker.",
@@ -130,6 +136,7 @@ _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "mode4",
+        "route_id": GLM_READONLY_AUDIT_ROUTE_ID,
         "technical_mode": "Mode 4",
         "backend_id": "glm52_fully_local_long_horizon_executor",
         "mode_number": "4",
@@ -158,6 +165,7 @@ _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "mode4b",
+        "route_id": "glm-direct-implementation-canary",
         "technical_mode": "Mode 4B",
         "backend_id": "glm52_direct_implementation_canary",
         "mode_number": "4B",
@@ -308,7 +316,14 @@ def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]
         or _document_supports_contract(capabilities_document, EXTERNAL_CANDIDATE_CONTRACT)
     )
     candidate_contract_ok = _document_supports_contract(
-        capabilities_document, EXTERNAL_CANDIDATE_CONTRACT
+        capabilities_document,
+        EXTERNAL_CANDIDATE_CONTRACT,
+        field_name="external_candidate_contracts",
+    )
+    audit_contract_ok = _document_supports_contract(
+        capabilities_document,
+        EXTERNAL_AUDIT_CONTRACT,
+        field_name="external_audit_contracts",
     )
     adapter_document: dict[str, Any] | None = None
     turnstone_executable = _is_turnstone_bridge(bridge)
@@ -372,8 +387,9 @@ def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]
             elif turnstone_adapter:
                 route.update(
                     {
-                        "technical_mode": "Mode 3A via Turnstone",
-                        "label": "Turnstone long run",
+                        "route_id": TURNSTONE_GLM_LOCAL_BUILD_ROUTE_ID,
+                        "technical_mode": "Turnstone GLM local build",
+                        "label": "Turnstone GLM + local build",
                         "summary": (
                             "Use Turnstone's cloud GLM coordinator to plan and its local "
                             "Node1 model child to perform bounded implementation."
@@ -427,6 +443,7 @@ def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]
                         or "The Turnstone adapter is not ready for another task."
                     )
             else:
+                route["route_id"] = CLOUD_GLM_BUILD_ROUTE_ID
                 worker = workers.get(MODE3A_WORKER, {})
                 route["available"] = bool(
                     contract_ok
@@ -439,11 +456,31 @@ def modes_payload(bridge: LocalGoalBridge | None = None) -> list[dict[str, Any]]
                     else _cloud_disabled_reason(contract_ok, cloud_lane, worker, MODE3A_WORKER)
                 )
         elif key == "mode4":
-            route["available"] = False
-            route["disabled_reason"] = (
-                "Mode 4 audit dispatch is disabled until the managed wrapper advertises a "
-                "distinct audit-only routing contract."
+            worker = workers.get(MODE4_WORKER, {})
+            route["available"] = bool(
+                current_contract_ok
+                and managed_mode_record_dispatchable(backend)
+                and audit_contract_ok
+                and _lane_available(cloud_lane)
+                and _worker_available(worker, mutation="audit")
             )
+            if route["available"]:
+                route["disabled_reason"] = ""
+            elif not audit_contract_ok:
+                route["disabled_reason"] = (
+                    "The managed backend does not advertise the distinct audit-only dispatch contract."
+                )
+            elif not current_contract_ok or not managed_mode_record_dispatchable(backend):
+                route["disabled_reason"] = _managed_mode_disabled_reason(
+                    backend,
+                    contract_ok=current_contract_ok,
+                )
+            elif not _lane_available(cloud_lane):
+                route["disabled_reason"] = _lane_disabled_reason(cloud_lane)
+            else:
+                route["disabled_reason"] = (
+                    f"The audit-only worker {MODE4_WORKER} has not passed its dispatch contract."
+                )
         elif key == "mode4b":
             route["available"] = False
             route["hidden"] = True
@@ -563,15 +600,20 @@ def _worker_registry(payload: dict[str, Any] | None) -> dict[str, dict[str, Any]
     }
 
 
-def _document_supports_contract(payload: dict[str, Any] | None, contract: str) -> bool:
+def _document_supports_contract(
+    payload: dict[str, Any] | None,
+    contract: str,
+    *,
+    field_name: str = "external_candidate_contracts",
+) -> bool:
     document = _dictionary(payload)
     containers = [document]
     nested = document.get("capabilities")
     if isinstance(nested, dict):
         containers.append(nested)
     return any(
-        isinstance(container.get("external_candidate_contracts"), list)
-        and contract in container["external_candidate_contracts"]
+        isinstance(container.get(field_name), list)
+        and contract in container[field_name]
         for container in containers
     )
 
@@ -596,7 +638,13 @@ def _worker_available(worker: dict[str, Any], *, mutation: str) -> bool:
         and worker.get("enabled") is True
         and worker.get("binary_resolved") is not False
         and readiness not in {"blocked", "disabled", "retired"}
-        and worker.get("mutation_default") == mutation
+        and (
+            worker.get("mutation_default") == mutation
+            or (
+                mutation == "audit"
+                and worker.get("mutation_default") in {"audit_only", "proposal"}
+            )
+        )
     )
 
 
@@ -843,6 +891,8 @@ def _annotate_requested_execution(
     execution_profile: str,
     safe_areas: tuple[str, ...],
     checks: tuple[str, ...],
+    route_id: str = "",
+    supervision: str = "none",
 ) -> TaskPayload:
     task["objective"] = objective
     metadata = task.get("metadata")
@@ -852,18 +902,22 @@ def _annotate_requested_execution(
     metadata.update(
         {
             "route_key": route,
+            "route_id": route_id,
             "effort": effort,
             "execution_profile": execution_profile,
+            "supervision": supervision,
             "safe_areas": list(safe_areas),
             "checks": list(checks),
         }
     )
     metadata["execution_expectation"] = {
         "route_key": route,
+        "route_id": route_id,
         "effort": effort,
         "execution_profile": execution_profile
         if route in {"mode1", "legacy-guided"}
         else "not_applicable",
+        "supervision": supervision if route == "mode1" else "not_applicable",
     }
     return task
 
@@ -949,9 +1003,11 @@ def start_task(
 ) -> TaskPayload:
     objective = str(body.get("objective", "")).strip()
     requested_route = str(body.get("route") or body.get("mode") or "mode1").strip() or "mode1"
+    requested_route_id = str(body.get("route_id") or "").strip()
     effort = str(body.get("effort", "standard")).strip().lower() or "standard"
     requested_profile = str(body.get("execution_profile", "")).strip()
     execution_profile = requested_profile or "automatic"
+    supervision = str(body.get("supervision") or "none").strip().lower() or "none"
     safe_areas = tuple(_string_list(body.get("safe_areas")))
     checks = tuple(_string_list(body.get("checks")))
     if not objective:
@@ -969,6 +1025,38 @@ def start_task(
             summary=str(exc),
             needs_human=True,
             advanced_details={"error": str(exc)},
+        )
+    expected_route_id = canonical_route_id(
+        route,
+        turnstone=_is_turnstone_bridge(bridge),
+    )
+    if requested_route_id and requested_route_id != expected_route_id:
+        return _task(
+            status="blocked",
+            summary=(
+                "The selected execution route changed before dispatch. Refresh the route list "
+                "and choose it again."
+            ),
+            needs_human=True,
+            advanced_details={
+                "error": "route_identity_mismatch",
+                "requested_route_id": requested_route_id,
+                "expected_route_id": expected_route_id,
+            },
+        )
+    if supervision not in {"none", "glm-5.2"}:
+        return _task(
+            status="blocked",
+            summary="Choose no advisory supervisor or GLM-5.2 advisory supervision.",
+            needs_human=True,
+            advanced_details={"error": "unsupported_supervision"},
+        )
+    if supervision != "none" and route != "mode1":
+        return _task(
+            status="blocked",
+            summary="GLM advisory supervision applies only to the local build route.",
+            needs_human=True,
+            advanced_details={"error": "supervision_not_applicable"},
         )
     if effort not in {row["key"] for row in _EXECUTION_EFFORTS}:
         return _task(
@@ -1020,24 +1108,6 @@ def start_task(
                 ),
                 needs_human=True,
                 advanced_details={"error": "legacy_experimental_route_retired"},
-            ),
-            objective=objective,
-            route=route,
-            effort=effort,
-            execution_profile=execution_profile,
-            safe_areas=safe_areas,
-            checks=checks,
-        )
-    if route == "mode4":
-        return _annotate_requested_execution(
-            _task(
-                status="blocked",
-                summary=(
-                    "Mode 4 audit dispatch is not available because this backend does not "
-                    "yet provide a distinct audit-only routing contract."
-                ),
-                needs_human=True,
-                advanced_details={"error": "mode4_audit_route_not_distinct"},
             ),
             objective=objective,
             route=route,
@@ -1136,6 +1206,10 @@ def start_task(
             bridge.start_human_goal, "execution_profile"
         ):
             start_kwargs["execution_profile"] = execution_profile
+        if _accepts_keyword(bridge.start_human_goal, "route_id"):
+            start_kwargs["route_id"] = expected_route_id
+        if _accepts_keyword(bridge.start_human_goal, "supervision"):
+            start_kwargs["supervision"] = supervision
         result = bridge.start_human_goal(**start_kwargs)
     except ValueError as exc:
         return _task(
@@ -1151,6 +1225,13 @@ def start_task(
         and isinstance(bridge, LocalGoalBridge)
         and not _start_receipt_matches_objective(result, objective)
     ):
+        glm_receipt = result.metadata.get("glm_supervision")
+        if (
+            isinstance(glm_receipt, dict)
+            and glm_receipt.get("started_here") is True
+            and hasattr(bridge, "glm_supervisor_stop")
+        ):
+            bridge.glm_supervisor_stop()
         task = _task(
             status="blocked",
             summary=(
@@ -1174,6 +1255,8 @@ def start_task(
         execution_profile=execution_profile,
         safe_areas=safe_areas,
         checks=checks,
+        route_id=expected_route_id,
+        supervision=supervision,
     )
 
 
@@ -1271,7 +1354,10 @@ def status_task(bridge: LocalGoalBridge) -> TaskPayload:
                     "last_run": last_run,
                 },
             )
-    return task_from_command_result(result, fallback_status="ready")
+    task = task_from_command_result(result, fallback_status="ready")
+    if task["status"] == "needs_review":
+        _attach_managed_review_evidence(task, bridge, payload)
+    return task
 
 
 def watch_task(bridge: LocalGoalBridge) -> TaskPayload:
@@ -1322,6 +1408,64 @@ def details_payload(bridge: LocalGoalBridge) -> dict[str, Any]:
         "task": status,
         "raw": status.get("advanced_details", {}),
     }
+
+
+def preview_managed_task_path(
+    bridge: LocalGoalBridge,
+    path: str,
+    *,
+    goal_id: str = "",
+    artifact: bool = False,
+) -> dict[str, Any]:
+    """Preview evidence that the current managed task explicitly exposes."""
+    if goal_id:
+        run_dir = _managed_run_dir_for_id(bridge, goal_id)
+        if run_dir is None:
+            raise ValueError("Only evidence from a recorded managed task can be previewed.")
+        root = Path(bridge.doc_root).resolve()
+        allowed = set(_managed_owned_files(root, run_dir))
+    else:
+        task = status_task(bridge)
+        if artifact:
+            rows = task.get("artifacts")
+            allowed = (
+                {
+                    str(row.get("path") or "")
+                    for row in rows
+                    if isinstance(row, dict)
+                }
+                if isinstance(rows, list)
+                else set()
+            )
+        else:
+            rows = task.get("changed_files")
+            allowed = {str(row) for row in rows} if isinstance(rows, list) else set()
+    if path not in allowed:
+        kind = "artifact" if artifact else "changed file"
+        raise ValueError(f"Only a recorded {kind} from the current task can be previewed.")
+    return _preview_managed_workspace_file(Path(bridge.doc_root), path)
+
+
+def enrich_managed_task_snapshot(
+    bridge: LocalGoalBridge,
+    task: dict[str, Any],
+) -> dict[str, Any]:
+    """Restore review evidence for a durable managed task in GUI history."""
+    enriched = dict(task)
+    if str(enriched.get("status") or "") != "needs_review":
+        return enriched
+    run_id = str(enriched.get("id") or "").strip()
+    run_dir = _managed_run_dir_for_id(bridge, run_id)
+    if run_dir is None:
+        return enriched
+    gate = enriched.get("readiness_gate")
+    enriched["readiness_gate"] = dict(gate) if isinstance(gate, dict) else {}
+    _attach_managed_review_evidence(
+        enriched,
+        bridge,
+        {"active_goal": {"run_dir": str(run_dir)}},
+    )
+    return enriched
 
 
 def task_from_command_result(result: CommandResult, *, fallback_status: str) -> TaskPayload:
@@ -1989,6 +2133,238 @@ def _artifacts_from_details(details: dict[str, Any]) -> list[dict[str, str]]:
             value = str(artifact).strip()
             normalized.append({"name": value, "path": value})
     return normalized[:12]
+
+
+def _attach_managed_review_evidence(
+    task: TaskPayload,
+    bridge: LocalGoalBridge,
+    payload: dict[str, Any] | None,
+) -> None:
+    run_dir = _managed_active_run_dir(bridge, payload)
+    if run_dir is None:
+        return
+    root = Path(bridge.doc_root).resolve()
+    review = _read_small_json(run_dir / "review.json")
+    independent = _read_small_json(run_dir / "independent-verification.json")
+    owned_files = _managed_owned_files(root, run_dir)
+    summary = _managed_review_summary(review)
+    manual_reason = _managed_manual_review_reason(independent)
+    if summary:
+        task["summary"] = summary
+    if manual_reason:
+        task["summary"] = (
+            f"{task['summary']} Manual review is required because {manual_reason}."
+        )
+    verification = _managed_completion_verification(run_dir)
+    if manual_reason:
+        verification.append(
+            {
+                "name": "human_review",
+                "passed": False,
+                "message": f"Manual review required: {manual_reason}.",
+                "independent": False,
+                "source": "managed-review",
+            }
+        )
+    task["changed_files"] = owned_files
+    task["verification"] = verification[:12]
+    task["artifacts"] = [
+        {"name": f"Result: {Path(path).name}", "path": path}
+        for path in owned_files
+    ]
+    task["readiness_gate"]["summary"] = task["summary"]
+
+
+def _managed_active_run_dir(
+    bridge: LocalGoalBridge,
+    payload: dict[str, Any] | None,
+) -> Path | None:
+    if not isinstance(payload, dict):
+        return None
+    active = payload.get("active_goal")
+    raw = active.get("run_dir") if isinstance(active, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    doc_root = getattr(bridge, "doc_root", None)
+    if doc_root is None:
+        return None
+    root = Path(doc_root).resolve()
+    runs_root = (root / "reports" / "local-node1-goal-harness" / "runs").resolve()
+    run_dir = Path(raw).resolve()
+    try:
+        run_dir.relative_to(runs_root)
+    except ValueError:
+        return None
+    return run_dir if run_dir.is_dir() else None
+
+
+def _managed_run_dir_for_id(bridge: LocalGoalBridge, run_id: str) -> Path | None:
+    doc_root = getattr(bridge, "doc_root", None)
+    if doc_root is None or not run_id or Path(run_id).name != run_id:
+        return None
+    root = Path(doc_root).resolve()
+    runs_root = (root / "reports" / "local-node1-goal-harness" / "runs").resolve()
+    run_dir = (runs_root / run_id).resolve()
+    try:
+        run_dir.relative_to(runs_root)
+    except ValueError:
+        return None
+    return run_dir if run_dir.is_dir() else None
+
+
+def _read_small_json(path: Path) -> dict[str, Any]:
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 2_000_000:
+            return {}
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _managed_owned_files(root: Path, run_dir: Path) -> list[str]:
+    path = run_dir / "owned-files.txt"
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 128_000:
+            return []
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    owned: list[str] = []
+    for value in lines:
+        relative = value.strip()
+        if not relative or Path(relative).is_absolute():
+            continue
+        target = (root / relative).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            continue
+        if target.is_file() and not _sensitive_managed_preview_path(target, root):
+            owned.append(Path(relative).as_posix())
+    return list(dict.fromkeys(owned))[:12]
+
+
+def _managed_review_summary(review: dict[str, Any]) -> str:
+    checks = review.get("checks")
+    if not isinstance(checks, list):
+        return ""
+    for row in checks:
+        if not isinstance(row, dict) or row.get("name") != "summary_present":
+            continue
+        detail = row.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+    return ""
+
+
+def _managed_manual_review_reason(independent: dict[str, Any]) -> str:
+    criteria = independent.get("criteria")
+    if not isinstance(criteria, list):
+        return ""
+    for row in criteria:
+        if not isinstance(row, dict) or row.get("mode") != "manual_only":
+            continue
+        reason = row.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            return reason.strip().rstrip(".")
+    return ""
+
+
+def _managed_completion_verification(run_dir: Path) -> list[dict[str, Any]]:
+    path = run_dir / "verification-results.md"
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 2_000_000:
+            return []
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    rows: list[dict[str, Any]] = []
+    in_completion = False
+    for line in lines:
+        if line.strip() == "## Completion Verification Entries":
+            in_completion = True
+            continue
+        if in_completion and line.startswith("## "):
+            break
+        if in_completion and line.startswith("- "):
+            message = line.removeprefix("- ").strip()
+            if message:
+                rows.append(
+                    {
+                        "name": f"completion_evidence_{len(rows) + 1}",
+                        "passed": True,
+                        "message": message,
+                        "independent": False,
+                        "source": "worker-reported",
+                    }
+                )
+    return rows[:11]
+
+
+def _preview_managed_workspace_file(root: Path, relative: str) -> dict[str, Any]:
+    requested = Path(relative)
+    if requested.is_absolute():
+        raise ValueError("Preview path must be relative to the workspace.")
+    root = root.resolve()
+    component = root
+    for part in requested.parts:
+        component /= part
+        if component.is_symlink():
+            raise ValueError("Preview file is unavailable.")
+    path = (root / requested).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Preview path is outside the workspace.") from exc
+    if _sensitive_managed_preview_path(path, root):
+        raise ValueError("Preview file is unavailable.")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 1_000_000:
+                raise ValueError("Preview file is unavailable or larger than 1 MB.")
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                raw = handle.read(1_000_001)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise ValueError("Preview file is unavailable.") from exc
+    if len(raw) > 1_000_000:
+        raise ValueError("Preview file is larger than 1 MB.")
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Binary files cannot be previewed.") from exc
+    return {"path": requested.as_posix(), "content": content, "truncated": False}
+
+
+def _sensitive_managed_preview_path(path: Path, root: Path) -> bool:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return True
+    parts = {part.lower() for part in relative.parts}
+    name = path.name.lower()
+    dotenv = name == ".env" or name == ".envrc" or name.startswith((".env.", ".env-"))
+    protected = {
+        ".git-credentials",
+        ".netrc",
+        ".npmrc",
+        ".pypirc",
+        "credentials.json",
+        "id_ed25519",
+        "id_rsa",
+        "token.json",
+        "tokens.json",
+    }
+    return (
+        dotenv
+        or bool(parts & {".aws", ".azure", ".docker", ".git", ".gnupg", ".kube", ".ssh"})
+        or name in protected
+        or path.suffix.lower() in {".jks", ".key", ".keystore", ".p12", ".pem", ".pfx"}
+    )
 
 
 def _json_from_output(output: str) -> dict[str, Any] | None:
