@@ -163,6 +163,15 @@ const els = {
   taskGuideFiles: byId("taskGuideFiles"),
   taskGuideChecks: byId("taskGuideChecks"),
   taskGuideArtifacts: byId("taskGuideArtifacts"),
+  routeReceipt: byId("routeReceipt"),
+  routeReceiptLabel: byId("routeReceiptLabel"),
+  routeReceiptPlanner: byId("routeReceiptPlanner"),
+  routeReceiptBuilder: byId("routeReceiptBuilder"),
+  routeReceiptModel: byId("routeReceiptModel"),
+  routeReceiptSupervisor: byId("routeReceiptSupervisor"),
+  routeReceiptReviewer: byId("routeReceiptReviewer"),
+  routeReceiptFallback: byId("routeReceiptFallback"),
+  routeReceiptFallbackReason: byId("routeReceiptFallbackReason"),
   progressGroup: byId("progressGroup"),
   progressTrack: byId("progressTrack"),
   progressValue: byId("progressValue"),
@@ -1437,6 +1446,32 @@ function renderTaskGuide(task) {
   els.taskGuideArtifacts.textContent = String(Number(counts.artifacts || 0));
 }
 
+function renderRouteReceipt(task) {
+  const receipt = task.metadata?.route_receipt;
+  const available = receipt && typeof receipt === "object";
+  els.routeReceipt.hidden = !available;
+  if (!available) return;
+  const actual = receipt.actual === true && receipt.evidence === "observed";
+  els.routeReceiptLabel.textContent = actual
+    ? "Observed execution route"
+    : "Requested route · awaiting worker evidence";
+  const planner = String(receipt.planner || "not recorded");
+  els.routeReceiptPlanner.textContent = planner.toLowerCase() === "none"
+    ? "Direct build · no planner"
+    : planner;
+  els.routeReceiptBuilder.textContent = receipt.builder || "Not recorded";
+  els.routeReceiptModel.textContent = receipt.model || "Not recorded";
+  els.routeReceiptSupervisor.textContent = receipt.supervisor || "None recorded";
+  const reviewerModel = receipt.reviewer_model ? ` · ${receipt.reviewer_model}` : "";
+  els.routeReceiptReviewer.textContent = `${receipt.reviewer || "Pending"}${reviewerModel}`;
+  els.routeReceiptFallback.textContent = receipt.fallback_used === true
+    ? "Used"
+    : receipt.fallback_used === false
+      ? "Not used"
+      : "None recorded";
+  els.routeReceiptFallbackReason.textContent = receipt.fallback_reason || "";
+}
+
 function renderTask(task) {
   state.currentTask = task;
   els.taskContext.hidden = !state.viewingHistoryId;
@@ -1490,6 +1525,7 @@ function renderTask(task) {
       ? "Completion is not verified yet."
       : task.summary || "No task is running.";
   renderTaskGuide(task);
+  renderRouteReceipt(task);
   els.statusIndicator.className = `status-indicator ${visualStatus}`;
   els.statusIcon.setAttribute("href", iconHref(STATUS_ICONS[visualStatus] || "loader-circle"));
   els.statusIndicator.setAttribute("aria-label", els.statusLabel.textContent);

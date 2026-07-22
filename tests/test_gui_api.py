@@ -544,6 +544,20 @@ def test_managed_review_exposes_current_run_result_and_reason(tmp_path: Path) ->
         "checks": 3,
         "artifacts": 1,
     }
+    assert task["metadata"]["route_receipt"] == {
+        "contract": "agentic_harness.managed_route_receipt.v1",
+        "evidence": "observed",
+        "actual": True,
+        "planner": "none",
+        "builder": "opencode",
+        "reviewer": "managed deterministic review",
+        "model": "litellm-gateway/local-node1-vllm",
+        "provider": "",
+        "fallback_used": None,
+        "fallback_reason": "No fallback event was recorded in the managed run evidence.",
+        "status": "manual_acceptance_required",
+        "observed_at": "2026-07-22T05:37:58Z",
+    }
 
 
 def test_managed_review_artifact_can_be_previewed_but_other_files_cannot(
@@ -2167,6 +2181,31 @@ def _managed_review_bridge(tmp_path: Path) -> tuple[object, str]:
                         "detail": "System audit completed with 8/10 rating.",
                     }
                 ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "run-meta.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "planner": "none",
+                "executor": "opencode",
+                "executor_worker": "none",
+                "status": "manual_acceptance_required",
+                "updated_at": "2026-07-22T05:37:58Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "loop-state.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "executor": "opencode",
+                "model": "local-node1-vllm",
+                "opencode_model": "litellm-gateway/local-node1-vllm",
+                "updated_at": "2026-07-22T05:37:54Z",
             }
         ),
         encoding="utf-8",

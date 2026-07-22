@@ -946,6 +946,11 @@ def test_managed_api_forwards_canonical_route_and_requested_glm_supervision() ->
     assert bridge.starts[0]["supervision"] == "glm-5.2"
     assert task["metadata"]["route_id"] == "local-build"
     assert task["metadata"]["supervision"] == "glm-5.2"
+    assert task["metadata"]["route_receipt"]["route_id"] == "local-build"
+    assert task["metadata"]["route_receipt"]["actual"] is False
+    assert task["metadata"]["route_receipt"]["supervisor"] == (
+        "GLM-5.2 advisory supervision requested"
+    )
 
 
 def test_managed_api_rejects_stale_route_identity_before_dispatch() -> None:
@@ -1074,7 +1079,15 @@ def test_managed_execution_metadata_survives_gui_restart_without_leaking_to_anot
             "id": "",
             "status": "starting",
             "summary": "starting",
-            "metadata": {},
+            "metadata": {
+                "route_receipt": {
+                    "contract": "agentic_harness.managed_route_receipt.v1",
+                    "evidence": "requested",
+                    "actual": False,
+                    "route_id": "local-build",
+                    "supervisor": "GLM-5.2 advisory supervision verified active",
+                }
+            },
             "advanced_details": {"stdout": "run_dir=/tmp/runs/durable-run-1\nstarted\n"},
         },
         source,
@@ -1087,7 +1100,19 @@ def test_managed_execution_metadata_survives_gui_restart_without_leaking_to_anot
             "id": "durable-run-1",
             "status": "working",
             "summary": "working",
-            "metadata": {},
+            "metadata": {
+                "route_receipt": {
+                    "contract": "agentic_harness.managed_route_receipt.v1",
+                    "evidence": "observed",
+                    "actual": True,
+                    "planner": "none",
+                    "builder": "opencode",
+                    "model": "litellm-gateway/local-node1-vllm",
+                    "reviewer": "managed deterministic review",
+                    "fallback_used": None,
+                    "fallback_reason": "No fallback event was recorded.",
+                }
+            },
             "advanced_details": {
                 "payload": {
                     "active_goal": {
@@ -1103,6 +1128,12 @@ def test_managed_execution_metadata_survives_gui_restart_without_leaking_to_anot
     assert refreshed["metadata"]["route_key"] == "mode1"
     assert refreshed["metadata"]["effort"] == "thorough"
     assert refreshed["metadata"]["execution_profile"] == "ornith-text"
+    assert refreshed["metadata"]["route_receipt"]["route_id"] == "local-build"
+    assert refreshed["metadata"]["route_receipt"]["actual"] is True
+    assert refreshed["metadata"]["route_receipt"]["builder"] == "opencode"
+    assert refreshed["metadata"]["route_receipt"]["supervisor"] == (
+        "GLM-5.2 advisory supervision verified active"
+    )
     if os.name == "posix":
         assert state_path.stat().st_mode & 0o777 == 0o600
 

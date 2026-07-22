@@ -915,8 +915,11 @@ _GUI_METADATA_FIELDS = frozenset(
         "mode",
         "priority",
         "route_key",
+        "route_id",
+        "route_receipt",
         "safe_areas",
         "start_accepted",
+        "supervision",
         "updated_at",
     }
 )
@@ -1082,7 +1085,16 @@ class GuiSession:
             return task
         metadata = dict(task.get("metadata", {}))
         for key, value in self._active_metadata.items():
-            metadata.setdefault(key, value)
+            if (
+                key == "route_receipt"
+                and isinstance(value, dict)
+                and isinstance(metadata.get(key), dict)
+            ):
+                merged_receipt = dict(value)
+                merged_receipt.update(metadata[key])
+                metadata[key] = merged_receipt
+            else:
+                metadata.setdefault(key, value)
         task["metadata"] = metadata
         return task
 

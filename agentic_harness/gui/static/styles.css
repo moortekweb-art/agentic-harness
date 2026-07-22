@@ -1416,6 +1416,61 @@ button[aria-busy="true"]:disabled {
   font-style: italic;
 }
 
+.route-receipt {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--accent) 6%);
+}
+
+.route-receipt .eyebrow {
+  margin: 0 0 8px;
+}
+
+.route-receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.route-receipt-grid > div {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+}
+
+.route-receipt-grid span,
+.route-receipt-grid strong {
+  display: block;
+}
+
+.route-receipt-grid span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.route-receipt-grid strong {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  font-size: 0.84rem;
+}
+
+.route-receipt-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 720px) {
+  .route-receipt-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .final-result {
   margin-top: 18px;
   padding: 14px;
