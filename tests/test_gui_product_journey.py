@@ -156,6 +156,8 @@ def test_gui_keeps_the_users_task_pinned_and_loads_its_readable_result() -> None
 
     assert "FOREGROUND_TASK_KEY" in javascript
     assert "rememberForegroundTask(task)" in javascript
+    assert "restoreForegroundTaskFromHash()" in javascript
+    assert "window.location.hash.match(" in javascript
     assert "goal_id=${encodeURIComponent(pinned)}" in javascript
     assert "async function renderPrimaryResult(task)" in javascript
     assert 'els.resultOutputContent.textContent = "Loading the full result…"' in javascript
