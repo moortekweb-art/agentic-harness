@@ -21,11 +21,9 @@ Each approved issue must contain:
 The intake command creates `spec-drafted` issues. It never applies
 `agent-ready`; that label is the human approval boundary.
 
-Verification requirements are reviewer-facing prose by default. To authorize
-one bounded executable check, include exactly one `Command: ...` line or one
-fenced `sh`, `bash`, or `shell` block in that section. Unmarked prose is never
-passed to a shell; without an explicit command, Herdr uses repository-owned
-verification discovery.
+Verification requirements are reviewer-facing prose. Issue content cannot
+authorize shell commands; `Command:` lines and fenced shell blocks fail closed.
+Herdr uses repository-owned verification discovery.
 
 ## Commands
 
@@ -80,8 +78,10 @@ interactive agent process alive. Templates are in `ops/systemd/`.
 - `LINEAR_FACTORY_STATE_ROOT`: durable receipt and lock directory.
 - `LINEAR_FACTORY_BROWSER_VERIFY_CMD`: optional repository-owned browser check.
 - `LINEAR_FACTORY_BROWSER_ENV_ALLOWLIST`: comma-separated environment names
-  exposed to the browser verifier. It defaults to `PATH,HOME,LANG,LC_ALL`;
+  exposed to the browser verifier. It defaults to `PATH,LANG,LC_ALL`;
   factory credentials are not inherited.
+- `LINEAR_FACTORY_PIPELINE_ENV_ALLOWLIST`: non-secret environment names exposed
+  to the Herdr adapter. Credential-shaped names are rejected even if listed.
 
 Only one import pass may hold the team lock. Assigned, blocked,
 dependency-blocked, completed, canceled, malformed, or already-receipted issues
@@ -95,9 +95,11 @@ disabled until that check reports both `human_approver_configured: true` and
 
 ## Verdicts
 
-`loop-approved` means required CI and conflict checks were green at the exact
-reviewed head SHA and every applicable structured verification gate passed. It
-is evidence for the human merge decision, not permission to merge.
+`loop-approved` is recorded as a commit-scoped `factory/review` GitHub status
+only when every exact required ruleset context, conflict check, authorization
+refresh, and applicable exact-head browser gate passes. It is evidence for the
+human merge decision, not permission to merge. Unscoped PR verdict labels are
+removed.
 
 `needs-human-review` means the automated evidence was insufficient. A blocked
 Linear issue is not retried until the human resolves it and removes `blocked`.

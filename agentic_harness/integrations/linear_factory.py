@@ -171,43 +171,106 @@ class LinearClient:
         return {"viewer": data["viewer"], "team": teams[0]}
 
     def eligible_issues(self, team_key: str, ready_label: str) -> list[dict[str, Any]]:
-        query = """query($team: String!, $label: String!) {
-          issues(
-            filter: {
-              team: { key: { eq: $team } }
-              labels: { name: { eq: $label } }
-            }
-            first: 50
-            orderBy: createdAt
-          ) {
-            nodes {
-              id identifier title description url priority
-              state { id name type }
-              assignee { id name }
-              labels { nodes { id name } }
-              history(first: 100) {
-                nodes { actorId addedLabelIds updatedDescription createdAt }
+        issues: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            query = """query($team: String!, $label: String!, $after: String) {
+              issues(
+                filter: {
+                  team: { key: { eq: $team } }
+                  labels: { name: { eq: $label } }
+                }
+                first: 100
+                after: $after
+                orderBy: createdAt
+              ) {
+                nodes {
+                  id identifier title description url priority
+                  state { id name type }
+                  assignee { id name }
+                  labels { nodes { id name } }
+                  relations { nodes { type relatedIssue { identifier state { type } } } }
+                  inverseRelations { nodes { type issue { identifier state { type } } } }
+                }
+                pageInfo { hasNextPage endCursor }
               }
-              comments(first: 100) {
-                nodes { user { id name } body createdAt }
-              }
-              relations { nodes { type relatedIssue { identifier state { type } } } }
-              inverseRelations { nodes { type issue { identifier state { type } } } }
-            }
+            }"""
+            payload = self.query(
+                query,
+                {"team": team_key, "label": ready_label, "after": cursor},
+            ).get("issues", {})
+            nodes = payload.get("nodes")
+            page_info = payload.get("pageInfo")
+            if not isinstance(nodes, list) or not isinstance(page_info, dict):
+                raise FactoryError("Linear issue queue pagination was incomplete")
+            issues.extend(dict(row) for row in nodes if isinstance(row, dict))
+            if page_info.get("hasNextPage") is not True:
+                return issues
+            next_cursor = page_info.get("endCursor")
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
+                raise FactoryError("Linear issue queue pagination cursor was invalid")
+            cursor = next_cursor
+
+    def issue_snapshot(self, issue_id: str) -> dict[str, Any]:
+        query = """query($id: String!) {
+          issue(id: $id) {
+            id identifier title description url priority
+            state { id name type }
+            assignee { id name }
+            labels { nodes { id name } }
+            relations { nodes { type relatedIssue { identifier state { type } } } }
+            inverseRelations { nodes { type issue { identifier state { type } } } }
           }
         }"""
-        return list(
-            self.query(query, {"team": team_key, "label": ready_label})
-            .get("issues", {})
-            .get("nodes", [])
-        )
+        issue = self.query(query, {"id": issue_id}).get("issue")
+        if not isinstance(issue, dict):
+            raise FactoryError(f"Linear issue {issue_id} was not returned")
+        return dict(issue)
 
     def active_builder_issues(self, team_key: str, ready_label: str) -> list[dict[str, Any]]:
+        del ready_label  # active claims must be found even if approval is revoked
+        issues: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            query = """query($team: String!, $after: String) {
+              issues(
+                filter: {
+                  team: { key: { eq: $team } }
+                  state: { type: { eq: "started" } }
+                }
+                first: 100
+                after: $after
+              ) {
+                nodes {
+                  id identifier
+                  state { id name type }
+                  assignee { id name }
+                  labels { nodes { id name } }
+                }
+                pageInfo { hasNextPage endCursor }
+              }
+            }"""
+            payload = self.query(
+                query, {"team": team_key, "after": cursor}
+            ).get("issues", {})
+            nodes = payload.get("nodes")
+            page_info = payload.get("pageInfo")
+            if not isinstance(nodes, list) or not isinstance(page_info, dict):
+                raise FactoryError("Linear active-builder pagination was incomplete")
+            issues.extend(dict(row) for row in nodes if isinstance(row, dict))
+            if page_info.get("hasNextPage") is not True:
+                break
+            next_cursor = page_info.get("endCursor")
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
+                raise FactoryError("Linear active-builder pagination cursor was invalid")
+            cursor = next_cursor
         return [
             issue
-            for issue in self.eligible_issues(team_key, ready_label)
+            for issue in issues
             if issue.get("assignee")
             and (issue.get("state") or {}).get("type") == "started"
+            and str((issue.get("state") or {}).get("name") or "").lower()
+            != "in review"
             and "blocked"
             not in {
                 str(label.get("name") or "")
@@ -251,7 +314,7 @@ class LinearClient:
             "history": {
                 "nodes": collect(
                     "history",
-                    "actorId addedLabelIds updatedDescription createdAt",
+                    "actorId addedLabelIds removedLabelIds updatedDescription createdAt",
                 )
             },
             "comments": {
@@ -268,7 +331,7 @@ class LinearClient:
         *,
         assignee_id: str | None,
         state_id: str,
-        label_ids: list[str],
+        label_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         query = """mutation($id: String!, $input: IssueUpdateInput!) {
           issueUpdate(id: $id, input: $input) {
@@ -276,20 +339,39 @@ class LinearClient:
             issue { id identifier state { name type } assignee { id name } labels { nodes { id name } } }
           }
         }"""
+        issue_input: dict[str, Any] = {
+            "assigneeId": assignee_id,
+            "stateId": state_id,
+        }
+        if label_ids is not None:
+            issue_input["labelIds"] = label_ids
         payload = self.query(
             query,
-            {
-                "id": issue_id,
-                "input": {
-                    "assigneeId": assignee_id,
-                    "stateId": state_id,
-                    "labelIds": label_ids,
-                },
-            },
+            {"id": issue_id, "input": issue_input},
         ).get("issueUpdate", {})
         if payload.get("success") is not True:
             raise FactoryError(f"Linear did not update issue {issue_id}")
         return dict(payload.get("issue") or {})
+
+    def add_label(self, issue_id: str, label_id: str) -> None:
+        query = """mutation($id: String!, $label: String!) {
+          issueAddLabel(id: $id, labelId: $label) { success }
+        }"""
+        payload = self.query(query, {"id": issue_id, "label": label_id}).get(
+            "issueAddLabel", {}
+        )
+        if payload.get("success") is not True:
+            raise FactoryError(f"Linear did not add label to issue {issue_id}")
+
+    def remove_label(self, issue_id: str, label_id: str) -> None:
+        query = """mutation($id: String!, $label: String!) {
+          issueRemoveLabel(id: $id, labelId: $label) { success }
+        }"""
+        payload = self.query(query, {"id": issue_id, "label": label_id}).get(
+            "issueRemoveLabel", {}
+        )
+        if payload.get("success") is not True:
+            raise FactoryError(f"Linear did not remove label from issue {issue_id}")
 
     def comment(self, issue_id: str, body: str) -> None:
         query = """mutation($input: CommentCreateInput!) {
@@ -342,7 +424,7 @@ def _section(description: str, heading: str) -> str:
 
 
 def _verification_command(verification: str) -> str:
-    """Return only an explicitly marked executable verification command."""
+    """Reject issue-controlled shell expressions; repository discovery owns checks."""
     command_lines = re.findall(
         r"^\s*(?:[-*]\s*)?Command:\s*(\S.*?)\s*$",
         verification,
@@ -356,12 +438,12 @@ def _verification_command(verification: str) -> str:
     candidates = [
         value.strip() for value in [*command_lines, *shell_blocks] if value.strip()
     ]
-    if len(candidates) > 1:
+    if candidates:
         raise FactoryError(
-            "verification requirements must contain at most one explicit "
-            "`Command:` line or shell code block"
+            "verification requirements cannot contain executable `Command:` "
+            "lines or shell blocks; use repository-owned verification"
         )
-    return candidates[0] if candidates else ""
+    return ""
 
 
 def validate_contract(issue: dict[str, Any]) -> dict[str, Any]:
@@ -564,15 +646,6 @@ def _issue_label_ids(issue: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def consumed_label_ids(issue_labels: dict[str, str], ready_label: str) -> list[str]:
-    """Keep issue metadata while removing the consumed queue approval label."""
-    return [
-        label_id
-        for name, label_id in issue_labels.items()
-        if name != ready_label
-    ]
-
-
 def _eligible(issue: dict[str, Any], config: FactoryConfig) -> tuple[bool, str]:
     labels = set(_issue_label_ids(issue))
     if config.ready_label not in labels:
@@ -656,6 +729,33 @@ def _pipeline_task(issue: dict[str, Any], contract: dict[str, Any]) -> str:
     )
 
 
+def _minimal_env(allowlist_name: str, defaults: str) -> dict[str, str]:
+    denied_fragments = (
+        "API_KEY",
+        "PASSWORD",
+        "SECRET",
+        "TOKEN",
+        "LINEAR_",
+        "GH_",
+        "GITHUB_",
+    )
+    allowed = {
+        name.strip()
+        for name in os.environ.get(allowlist_name, defaults).split(",")
+        if name.strip()
+    }
+    unsafe = sorted(
+        name
+        for name in allowed
+        if any(fragment in name.upper() for fragment in denied_fragments)
+    )
+    if unsafe:
+        raise FactoryError(
+            f"{allowlist_name} contains denied credential names: {', '.join(unsafe)}"
+        )
+    return {name: value for name, value in os.environ.items() if name in allowed}
+
+
 def run_pipeline(
     *,
     config: FactoryConfig,
@@ -698,7 +798,11 @@ def run_pipeline(
         "--verification",
         str(contract["verification_command"] or "auto-detect repository verification"),
     ]
-    completed = run(command, cwd=repo_path, timeout=7200, env=os.environ.copy())
+    env = _minimal_env(
+        "LINEAR_FACTORY_PIPELINE_ENV_ALLOWLIST",
+        "PATH,HOME,HERMES_HOME,LANG,LC_ALL,XDG_RUNTIME_DIR",
+    )
+    completed = run(command, cwd=repo_path, timeout=7200, env=env)
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
@@ -717,7 +821,73 @@ def run_pipeline(
     return payload
 
 
-def _pr_for_branch(repo_path: Path, branch: str) -> dict[str, Any]:
+def _required_status_contexts(
+    repo_path: Path, name_with_owner: str, default_branch: str
+) -> list[str]:
+    listed = run(
+        ["gh", "api", f"repos/{name_with_owner}/rulesets"],
+        cwd=repo_path,
+        timeout=30,
+    )
+    if listed.returncode != 0:
+        raise FactoryError("GitHub ruleset lookup failed")
+    try:
+        rulesets = json.loads(listed.stdout)
+    except json.JSONDecodeError as exc:
+        raise FactoryError("GitHub ruleset lookup returned invalid JSON") from exc
+    if not isinstance(rulesets, list):
+        raise FactoryError("GitHub ruleset lookup returned a non-list")
+
+    def ref_matches(values: list[Any]) -> bool:
+        accepted = {"~ALL", "~DEFAULT_BRANCH", default_branch, f"refs/heads/{default_branch}"}
+        return any(str(value) in accepted for value in values)
+
+    required: set[str] = set()
+    pull_request_required = False
+    for summary in rulesets:
+        if (
+            not isinstance(summary, dict)
+            or summary.get("target") != "branch"
+            or summary.get("enforcement") != "active"
+            or not summary.get("id")
+        ):
+            continue
+        detail = run(
+            ["gh", "api", f"repos/{name_with_owner}/rulesets/{summary['id']}"],
+            cwd=repo_path,
+            timeout=30,
+        )
+        if detail.returncode != 0:
+            raise FactoryError(f"GitHub ruleset {summary['id']} lookup failed")
+        try:
+            payload = json.loads(detail.stdout)
+        except json.JSONDecodeError as exc:
+            raise FactoryError("GitHub ruleset detail returned invalid JSON") from exc
+        ref_name = ((payload.get("conditions") or {}).get("ref_name") or {})
+        includes = list(ref_name.get("include") or [])
+        excludes = list(ref_name.get("exclude") or [])
+        if not ref_matches(includes) or ref_matches(excludes):
+            continue
+        for rule in payload.get("rules") or []:
+            if not isinstance(rule, dict):
+                continue
+            if rule.get("type") == "pull_request":
+                pull_request_required = True
+            if rule.get("type") == "required_status_checks":
+                parameters = rule.get("parameters") or {}
+                for item in parameters.get("required_status_checks") or []:
+                    if isinstance(item, dict) and str(item.get("context") or "").strip():
+                        required.add(str(item["context"]).strip())
+    if not pull_request_required or not required:
+        raise FactoryError(
+            "default branch lacks applicable pull-request and required-check rules"
+        )
+    return sorted(required)
+
+
+def _pr_for_branch(
+    repo_path: Path, branch: str, required_contexts: list[str]
+) -> dict[str, Any]:
     completed = run(
         [
             "gh",
@@ -735,16 +905,19 @@ def _pr_for_branch(repo_path: Path, branch: str) -> dict[str, Any]:
     payload = json.loads(completed.stdout)
     if not isinstance(payload, dict):
         raise FactoryError("draft PR lookup returned a non-object JSON value")
-    checks = list(payload.get("statusCheckRollup") or [])
-    failed = [
-        item
-        for item in checks
-        if str(item.get("conclusion") or item.get("state") or "").upper()
-        not in {"SUCCESS", "NEUTRAL", "SKIPPED"}
-    ]
-    if not checks or failed:
-        raise FactoryError("required GitHub checks are absent or not green")
-    if payload.get("mergeStateStatus") not in {"CLEAN", "UNSTABLE"}:
+    checks = {
+        str(item.get("name") or item.get("context") or ""): str(
+            item.get("conclusion") or item.get("state") or ""
+        ).upper()
+        for item in payload.get("statusCheckRollup") or []
+        if isinstance(item, dict)
+    }
+    missing = [name for name in required_contexts if checks.get(name) != "SUCCESS"]
+    if missing:
+        raise FactoryError(
+            f"required GitHub checks are absent or not successful: {', '.join(missing)}"
+        )
+    if payload.get("mergeStateStatus") != "CLEAN":
         raise FactoryError(f"PR is not conflict-free: {payload.get('mergeStateStatus')}")
     if payload.get("isDraft") is not True:
         raise FactoryError("factory PR must remain a draft")
@@ -765,56 +938,84 @@ def _browser_gate(repo_path: Path, pr: dict[str, Any], changed: list[str]) -> di
     command = os.environ.get("LINEAR_FACTORY_BROWSER_VERIFY_CMD", "").strip()
     if not command:
         return {"required": True, "passed": False, "reason": "browser_verifier_not_configured"}
-    allowed = {
-        name.strip()
-        for name in os.environ.get(
-            "LINEAR_FACTORY_BROWSER_ENV_ALLOWLIST",
-            "PATH,HOME,LANG,LC_ALL",
-        ).split(",")
-        if name.strip()
-    }
-    env = {name: value for name, value in os.environ.items() if name in allowed}
+    env = _minimal_env(
+        "LINEAR_FACTORY_BROWSER_ENV_ALLOWLIST",
+        "PATH,LANG,LC_ALL",
+    )
     env.update(
         {
             "LINEAR_FACTORY_PR_NUMBER": str(pr["number"]),
             "LINEAR_FACTORY_PR_HEAD_SHA": str(pr["headRefOid"]),
         }
     )
-    completed = run(
-        ["/bin/sh", "-lc", command], cwd=repo_path, timeout=900, env=env
+    worktree = Path(tempfile.mkdtemp(prefix="linear-factory-browser-"))
+    worktree.rmdir()
+    added = run(
+        ["git", "worktree", "add", "--detach", str(worktree), str(pr["headRefOid"])],
+        cwd=repo_path,
+        timeout=60,
     )
-    return {
-        "required": True,
-        "passed": completed.returncode == 0,
-        "returncode": completed.returncode,
-        "stdout_tail": redact_secrets(completed.stdout[-2000:]),
-        "stderr_tail": redact_secrets(completed.stderr[-2000:]),
-    }
+    if added.returncode != 0:
+        raise FactoryError(f"exact-head browser worktree failed: {added.stderr[-800:]}")
+    try:
+        head = run(["git", "rev-parse", "HEAD"], cwd=worktree, timeout=10)
+        if head.returncode != 0 or head.stdout.strip() != str(pr["headRefOid"]):
+            raise FactoryError("browser worktree did not match the reviewed PR head")
+        completed = run(
+            ["/bin/sh", "-c", command], cwd=worktree, timeout=900, env=env
+        )
+        return {
+            "required": True,
+            "passed": completed.returncode == 0,
+            "returncode": completed.returncode,
+            "head_sha": head.stdout.strip(),
+            "stdout_tail": redact_secrets(completed.stdout[-2000:]),
+            "stderr_tail": redact_secrets(completed.stderr[-2000:]),
+        }
+    finally:
+        run(
+            ["git", "worktree", "remove", "--force", str(worktree)],
+            cwd=repo_path,
+            timeout=60,
+        )
 
 
 def _set_pr_verdict(
-    repo_path: Path, pr: dict[str, Any], browser: dict[str, Any], issue: dict[str, Any]
+    repo_path: Path,
+    name_with_owner: str,
+    pr: dict[str, Any],
+    browser: dict[str, Any],
+    issue: dict[str, Any],
 ) -> str:
     approved = browser.get("passed") is True
     verdict = "loop-approved" if approved else "needs-human-review"
-    competing = (
-        ["loop-changes-requested", "needs-human-review"]
-        if approved
-        else ["loop-approved", "loop-changes-requested"]
-    )
-    for label in competing:
+    for label in ("loop-approved", "loop-changes-requested", "needs-human-review"):
         run(
             ["gh", "pr", "edit", str(pr["number"]), "--remove-label", label],
             cwd=repo_path,
             timeout=30,
         )
-    edited = run(
-        ["gh", "pr", "edit", str(pr["number"]), "--add-label", verdict],
+    status = run(
+        [
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            f"repos/{name_with_owner}/statuses/{pr['headRefOid']}",
+            "-f",
+            f"state={'success' if approved else 'failure'}",
+            "-f",
+            "context=factory/review",
+            "-f",
+            f"description={verdict}; human merge required",
+            "-f",
+            f"target_url={pr['url']}",
+        ],
         cwd=repo_path,
         timeout=30,
     )
-    if edited.returncode != 0:
-        raise FactoryError(f"could not apply PR verdict: {edited.stderr[-800:]}")
+    if status.returncode != 0:
+        raise FactoryError(f"could not apply commit-scoped verdict: {status.stderr[-800:]}")
     body = (
         f"Factory review for [{issue['identifier']}]({issue['url']}) at "
         f"`{pr['headRefOid']}`: **{verdict}**.\n\n"
@@ -833,6 +1034,102 @@ def _set_pr_verdict(
     return verdict
 
 
+def _clear_pr_verdict(
+    repo_path: Path, name_with_owner: str, pr: dict[str, Any], reason: str
+) -> None:
+    for label in ("loop-approved", "loop-changes-requested", "needs-human-review"):
+        run(
+            ["gh", "pr", "edit", str(pr["number"]), "--remove-label", label],
+            cwd=repo_path,
+            timeout=30,
+        )
+    run(
+        [
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            f"repos/{name_with_owner}/statuses/{pr['headRefOid']}",
+            "-f",
+            "state=failure",
+            "-f",
+            "context=factory/review",
+            "-f",
+            f"description={reason[:120]}",
+            "-f",
+            f"target_url={pr['url']}",
+        ],
+        cwd=repo_path,
+        timeout=30,
+    )
+
+
+def _open_prs_for_issue(repo_path: Path, issue: dict[str, Any]) -> list[dict[str, Any]]:
+    completed = run(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--search",
+            f'"{issue["url"]}" in:body',
+            "--json",
+            "number,url,isDraft,headRefName,headRefOid,body",
+        ],
+        cwd=repo_path,
+        timeout=60,
+    )
+    if completed.returncode != 0:
+        raise FactoryError(f"issue-bound PR lookup failed: {completed.stderr[-800:]}")
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise FactoryError("issue-bound PR lookup returned invalid JSON") from exc
+    if not isinstance(payload, list):
+        raise FactoryError("issue-bound PR lookup returned a non-list")
+    return [
+        dict(item)
+        for item in payload
+        if isinstance(item, dict) and str(issue["url"]) in str(item.get("body") or "")
+    ]
+
+
+def _refresh_authorization(
+    client: LinearClient,
+    config: FactoryConfig,
+    issue_id: str,
+    contract: dict[str, Any],
+    ready_label_id: str,
+) -> dict[str, Any]:
+    issue = client.issue_snapshot(issue_id)
+    issue.update(client.approval_evidence(issue_id))
+    names = {
+        str(label.get("name") or "")
+        for label in issue.get("labels", {}).get("nodes", [])
+        if isinstance(label, dict)
+    }
+    if config.ready_label not in names:
+        raise FactoryError("human approval was revoked")
+    if config.blocked_label in names:
+        raise FactoryError("issue was blocked during factory execution")
+    if (issue.get("state") or {}).get("type") in {"completed", "canceled"}:
+        raise FactoryError("issue entered a terminal state during factory execution")
+    if is_dependency_blocked(issue):
+        raise FactoryError("issue dependency became blocked during factory execution")
+    refreshed = validate_contract(issue)
+    if refreshed["spec_sha256"] != contract["spec_sha256"]:
+        raise FactoryError("issue specification changed during factory execution")
+    approved, reason = human_approval_verified(
+        issue,
+        ready_label_id=ready_label_id,
+        approver_id=config.human_approver_id,
+    )
+    if not approved:
+        raise FactoryError(f"human approval became invalid: {reason}")
+    return issue
+
+
 def doctor(client: LinearClient, config: FactoryConfig) -> dict[str, Any]:
     workspace = client.workspace(config.team)
     labels = label_map(workspace)
@@ -849,50 +1146,14 @@ def doctor(client: LinearClient, config: FactoryConfig) -> dict[str, Any]:
                 raise FactoryError(
                     f"repo map expected {name_with_owner}, got {info['name_with_owner']}"
                 )
-            rules = run(
-                ["gh", "api", f"repos/{name_with_owner}/rulesets"],
-                cwd=path,
-                timeout=30,
+            required_contexts = _required_status_contexts(
+                path, name_with_owner, info["default_branch"]
             )
-            if rules.returncode != 0:
-                raise FactoryError("GitHub ruleset lookup failed")
-            rulesets = json.loads(rules.stdout)
-            if not isinstance(rulesets, list):
-                raise FactoryError("GitHub ruleset lookup returned invalid JSON")
-            protected = False
-            for ruleset in rulesets:
-                if (
-                    isinstance(ruleset, dict)
-                    and ruleset.get("target") == "branch"
-                    and ruleset.get("enforcement") == "active"
-                    and ruleset.get("id")
-                ):
-                    detail = run(
-                        [
-                            "gh",
-                            "api",
-                            f"repos/{name_with_owner}/rulesets/{ruleset['id']}",
-                        ],
-                        cwd=path,
-                        timeout=30,
-                    )
-                    if detail.returncode != 0:
-                        continue
-                    detail_payload = json.loads(detail.stdout)
-                    rule_types = {
-                        str(item.get("type"))
-                        for item in detail_payload.get("rules", [])
-                        if isinstance(item, dict)
-                    }
-                    if "pull_request" in rule_types and "required_status_checks" in rule_types:
-                        protected = True
-                        break
-            if not protected:
-                raise FactoryError("default branch lacks active PR and required-check rules")
             repo_results[name_with_owner] = {
                 "ok": True,
                 "path": str(path),
                 "default_branch": info["default_branch"],
+                "required_status_contexts": required_contexts,
             }
         except FactoryError as exc:
             repo_results[name_with_owner] = {"ok": False, "error": str(exc)}
@@ -1031,8 +1292,17 @@ def import_once(
         if repository["name_with_owner"] != contract["name_with_owner"]:
             raise FactoryError("repository mapping changed after preflight")
         base_ref = f"origin/{repository['default_branch']}"
+        required_contexts = _required_status_contexts(
+            repo_path,
+            contract["name_with_owner"],
+            repository["default_branch"],
+        )
+        existing_prs = _open_prs_for_issue(repo_path, issue)
+        if existing_prs:
+            raise FactoryError(
+                "an issue-bound open PR already exists; operator resume is required"
+            )
         labels = label_map(workspace)
-        issue_labels = _issue_label_ids(issue)
         previous_receipt = _load_receipt(config, issue["identifier"])
         previous_attempt = previous_receipt.get("attempt")
         attempt = previous_attempt + 1 if isinstance(previous_attempt, int) else 1
@@ -1058,7 +1328,13 @@ def import_once(
                 issue["id"],
                 assignee_id=str(workspace["viewer"]["id"]),
                 state_id=started_state,
-                label_ids=list(issue_labels.values()),
+            )
+            issue = _refresh_authorization(
+                client,
+                config,
+                str(issue["id"]),
+                contract,
+                workspace_labels[config.ready_label],
             )
             receipt.update(
                 {
@@ -1083,16 +1359,40 @@ def import_once(
             branch = str(pipeline.get("branch") or "")
             if not branch:
                 raise FactoryError("Herdr result did not identify its isolated branch")
-            pr = _pr_for_branch(repo_path, branch)
+            pr = _pr_for_branch(repo_path, branch, required_contexts)
+            receipt.update({"branch": branch, "pr": pr})
+            atomic_write_json(_receipt_path(config, issue["identifier"]), receipt)
             changed = _changed_files(repo_path, branch)
             browser = _browser_gate(repo_path, pr, changed)
-            verdict = _set_pr_verdict(repo_path, pr, browser, issue)
+            rechecked_pr = _pr_for_branch(repo_path, branch, required_contexts)
+            if rechecked_pr["headRefOid"] != pr["headRefOid"]:
+                raise FactoryError("PR head changed during factory review")
+            issue = _refresh_authorization(
+                client,
+                config,
+                str(issue["id"]),
+                contract,
+                workspace_labels[config.ready_label],
+            )
+            verdict = _set_pr_verdict(
+                repo_path,
+                contract["name_with_owner"],
+                rechecked_pr,
+                browser,
+                issue,
+            )
+            issue = _refresh_authorization(
+                client,
+                config,
+                str(issue["id"]),
+                contract,
+                workspace_labels[config.ready_label],
+            )
             receipt.update(
                 {
                     "status": "merge_ready" if verdict == "loop-approved" else "blocked",
                     "finished_at": now_iso(),
-                    "branch": branch,
-                    "pr": pr,
+                    "pr": rechecked_pr,
                     "changed_files": changed,
                     "browser": browser,
                     "verdict": verdict,
@@ -1100,18 +1400,18 @@ def import_once(
                     "herdr_state_path": pipeline.get("state_path"),
                 }
             )
-            target_labels = consumed_label_ids(issue_labels, config.ready_label)
-            if verdict != "loop-approved" and config.blocked_label in labels:
-                target_labels.append(labels[config.blocked_label])
             client.update_issue(
                 issue["id"],
                 assignee_id=str(workspace["viewer"]["id"]),
                 state_id=review_state,
-                label_ids=sorted(set(target_labels)),
+            )
+            client.remove_label(
+                str(issue["id"]), workspace_labels[config.ready_label]
             )
             client.comment(
                 issue["id"],
-                f"Draft PR {pr['url']} reviewed at `{pr['headRefOid']}`: **{verdict}**. "
+                f"Draft PR {rechecked_pr['url']} reviewed at "
+                f"`{rechecked_pr['headRefOid']}`: **{verdict}**. "
                 "Michael must make the merge decision.",
             )
             atomic_write_json(_receipt_path(config, issue["identifier"]), receipt)
@@ -1127,16 +1427,26 @@ def import_once(
                 }
             )
             atomic_write_json(_receipt_path(config, issue["identifier"]), receipt)
-            target_labels = list(issue_labels.values())
-            if config.blocked_label in labels:
-                target_labels.append(labels[config.blocked_label])
             cleanup_errors: list[str] = []
+            if isinstance(receipt.get("pr"), dict):
+                try:
+                    _clear_pr_verdict(
+                        repo_path,
+                        contract["name_with_owner"],
+                        receipt["pr"],
+                        "factory execution blocked",
+                    )
+                except Exception as cleanup_exc:
+                    cleanup_errors.append(
+                        redact_secrets(
+                            f"GitHub cleanup: {type(cleanup_exc).__name__}: {cleanup_exc}"
+                        )[:500]
+                    )
             try:
                 client.update_issue(
                     issue["id"],
                     assignee_id=None,
                     state_id=started_state,
-                    label_ids=sorted(set(target_labels)),
                 )
             except Exception as cleanup_exc:
                 cleanup_errors.append(
@@ -1144,6 +1454,16 @@ def import_once(
                         f"issue cleanup: {type(cleanup_exc).__name__}: {cleanup_exc}"
                     )[:500]
                 )
+            if config.blocked_label in labels:
+                try:
+                    client.add_label(str(issue["id"]), labels[config.blocked_label])
+                except Exception as cleanup_exc:
+                    cleanup_errors.append(
+                        redact_secrets(
+                            f"blocked label cleanup: {type(cleanup_exc).__name__}: "
+                            f"{cleanup_exc}"
+                        )[:500]
+                    )
             try:
                 client.comment(
                     issue["id"],

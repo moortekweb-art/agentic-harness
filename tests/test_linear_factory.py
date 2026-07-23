@@ -51,7 +51,14 @@ Michael applies agent-ready. Humans merge.
         "assignee": assignee,
         "labels": {
             "nodes": [
-                {"id": f"label-{name}", "name": name}
+                {
+                    "id": {
+                        "agent-ready": "ready",
+                        "blocked": "blocked",
+                        "spec-drafted": "draft",
+                    }.get(name, f"label-{name}"),
+                    "name": name,
+                }
                 for name in labels
             ]
         },
@@ -121,6 +128,57 @@ class FakeLinear:
         return {"history": row["history"], "comments": row["comments"]}
 
 
+class ActingFakeLinear(FakeLinear):
+    def __init__(self, issues: list[dict[str, Any]], *, revoke_on_claim: bool = False) -> None:
+        super().__init__(issues)
+        self.revoke_on_claim = revoke_on_claim
+        self.label_arguments: list[list[str] | None] = []
+        self.comments: list[str] = []
+
+    def issue_snapshot(self, issue_id: str) -> dict[str, Any]:
+        return next(item for item in self.issues if item["id"] == issue_id)
+
+    def update_issue(
+        self,
+        issue_id: str,
+        *,
+        assignee_id: str | None,
+        state_id: str,
+        label_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        row = self.issue_snapshot(issue_id)
+        self.label_arguments.append(label_ids)
+        row["assignee"] = (
+            {"id": assignee_id, "name": "Factory"} if assignee_id else None
+        )
+        row["state"] = {
+            "id": state_id,
+            "name": "In Review" if state_id == "review" else "In Progress",
+            "type": "started",
+        }
+        if self.revoke_on_claim and len(self.label_arguments) == 1:
+            row["labels"]["nodes"] = [
+                label
+                for label in row["labels"]["nodes"]
+                if label["name"] != "agent-ready"
+            ]
+        return row
+
+    def add_label(self, issue_id: str, label_id: str) -> None:
+        row = self.issue_snapshot(issue_id)
+        if label_id not in {label["id"] for label in row["labels"]["nodes"]}:
+            row["labels"]["nodes"].append({"id": label_id, "name": "blocked"})
+
+    def remove_label(self, issue_id: str, label_id: str) -> None:
+        row = self.issue_snapshot(issue_id)
+        row["labels"]["nodes"] = [
+            label for label in row["labels"]["nodes"] if label["id"] != label_id
+        ]
+
+    def comment(self, _issue_id: str, body: str) -> None:
+        self.comments.append(body)
+
+
 def config(tmp_path: Path) -> factory.FactoryConfig:
     adapter = tmp_path / "herdr.py"
     adapter.write_text("# adapter\n", encoding="utf-8")
@@ -146,25 +204,22 @@ def test_contract_is_stable_and_extracts_binding_ids() -> None:
     assert parsed["verification_command"] == ""
 
 
-def test_contract_extracts_only_explicit_verification_command() -> None:
+def test_contract_rejects_explicit_verification_command() -> None:
     body = issue()["description"].replace(
         "1. Run the focused tests.",
         "Run the focused tests.\n\nCommand: git diff --check",
     )
-    parsed = factory.validate_contract(issue(description=body))
-    assert parsed["verification"] == (
-        "Run the focused tests.\n\nCommand: git diff --check"
-    )
-    assert parsed["verification_command"] == "git diff --check"
+    with pytest.raises(factory.FactoryError, match="cannot contain executable"):
+        factory.validate_contract(issue(description=body))
 
 
-def test_contract_extracts_explicit_shell_verification_block() -> None:
+def test_contract_rejects_explicit_shell_verification_block() -> None:
     body = issue()["description"].replace(
         "1. Run the focused tests.",
         "Run the focused tests.\n\n```sh\ngit diff --check\npytest -q\n```",
     )
-    parsed = factory.validate_contract(issue(description=body))
-    assert parsed["verification_command"] == "git diff --check\npytest -q"
+    with pytest.raises(factory.FactoryError, match="cannot contain executable"):
+        factory.validate_contract(issue(description=body))
 
 
 @pytest.mark.parametrize(
@@ -310,6 +365,38 @@ def test_approval_evidence_fails_closed_on_invalid_cursor(
         client.approval_evidence("issue-id")
 
 
+def test_issue_queue_paginates_to_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = factory.LinearClient("test-key")
+    cursors: list[str | None] = []
+
+    def fake_query(_query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+        assert variables is not None
+        cursor = variables.get("after")
+        cursors.append(cursor)
+        if cursor is None:
+            return {
+                "issues": {
+                    "nodes": [{"id": "first"}],
+                    "pageInfo": {"hasNextPage": True, "endCursor": "page-2"},
+                }
+            }
+        return {
+            "issues": {
+                "nodes": [{"id": "second"}],
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+            }
+        }
+
+    monkeypatch.setattr(client, "query", fake_query)
+    assert client.eligible_issues("AI", "agent-ready") == [
+        {"id": "first"},
+        {"id": "second"},
+    ]
+    assert cursors == [None, "page-2"]
+
+
 @pytest.mark.parametrize(
     ("labels", "assignee", "state_type", "expected"),
     [
@@ -362,26 +449,18 @@ def test_blocked_assigned_issue_does_not_hold_builder_lock(tmp_path: Path) -> No
     assert payload["selected"] == "AI-11"
 
 
-def test_successful_handoff_consumes_only_queue_approval_label() -> None:
-    assert factory.consumed_label_ids(
-        {
-            "spec-drafted": "draft",
-            "agent-ready": "ready",
-            "customer-visible": "customer",
-        },
-        "agent-ready",
-    ) == ["draft", "customer"]
-
-
 def test_pipeline_uses_supported_scheduled_run_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: list[str] = []
+    captured_env: dict[str, str] = {}
 
-    def fake_run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         captured.extend(command)
+        captured_env.update(kwargs["env"])
         return subprocess.CompletedProcess(command, 0, '{"success": true}', "")
 
+    monkeypatch.setenv("LINEAR_API_KEY", "must-not-reach-pipeline")
     monkeypatch.setattr(factory, "run", fake_run)
     row = issue()
     payload = factory.run_pipeline(
@@ -401,6 +480,21 @@ def test_pipeline_uses_supported_scheduled_run_context(
     task = captured[captured.index("--task") + 1]
     assert "The outer Controller owns commit, push, draft PR creation" in task
     assert "do not block only because those outer steps are pending" in task
+    assert "LINEAR_API_KEY" not in captured_env
+
+
+def test_pipeline_env_rejects_credential_allowlist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LINEAR_FACTORY_PIPELINE_ENV_ALLOWLIST", "PATH,GH_TOKEN")
+    with pytest.raises(factory.FactoryError, match="denied credential names"):
+        factory.run_pipeline(
+            config=config(tmp_path),
+            issue=issue(),
+            contract=factory.validate_contract(issue()),
+            repo_path=tmp_path / "repo",
+            base_ref="origin/main",
+        )
 
 
 def test_terminal_receipt_prevents_duplicate_import(tmp_path: Path) -> None:
@@ -444,6 +538,86 @@ def test_execution_identity_cannot_be_human_approver(tmp_path: Path) -> None:
     )
     with pytest.raises(factory.FactoryError, match="must be independent"):
         factory.import_once(FakeLinear([issue()]), cfg, act=False)  # type: ignore[arg-type]
+
+
+def _patch_successful_external_gates(
+    monkeypatch: pytest.MonkeyPatch, cfg: factory.FactoryConfig
+) -> None:
+    monkeypatch.setattr(
+        factory,
+        "inspect_repository",
+        lambda _path: {
+            "name_with_owner": "moortekweb-art/agentic-harness",
+            "default_branch": "main",
+        },
+    )
+    monkeypatch.setattr(
+        factory, "_required_status_contexts", lambda *_args: ["required"]
+    )
+    monkeypatch.setattr(factory, "_open_prs_for_issue", lambda *_args: [])
+    monkeypatch.setattr(
+        factory,
+        "run_pipeline",
+        lambda **_kwargs: {"success": True, "branch": "nm/ai-10"},
+    )
+    pr = {
+        "number": 10,
+        "url": "https://github.example/pr/10",
+        "headRefOid": "a" * 40,
+        "isDraft": True,
+        "mergeStateStatus": "CLEAN",
+    }
+    monkeypatch.setattr(factory, "_pr_for_branch", lambda *_args: dict(pr))
+    monkeypatch.setattr(factory, "_changed_files", lambda *_args: ["docs/change.md"])
+    monkeypatch.setattr(
+        factory,
+        "_browser_gate",
+        lambda *_args: {
+            "required": False,
+            "passed": True,
+            "reason": "no_ui_files_changed",
+        },
+    )
+    monkeypatch.setattr(factory, "_set_pr_verdict", lambda *_args: "loop-approved")
+    assert cfg.repo_map["moortekweb-art/agentic-harness"].is_dir()
+
+
+def test_act_path_rechecks_authorization_and_never_overwrites_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = config(tmp_path)
+    client = ActingFakeLinear([issue()])
+    _patch_successful_external_gates(monkeypatch, cfg)
+    payload = factory.import_once(client, cfg, act=True)  # type: ignore[arg-type]
+    assert payload["action"] == "completed"
+    assert payload["receipt"]["status"] == "merge_ready"
+    assert client.label_arguments == [None, None]
+    assert "agent-ready" not in {
+        label["name"] for label in client.issues[0]["labels"]["nodes"]
+    }
+
+
+def test_revocation_during_claim_stops_before_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = config(tmp_path)
+    client = ActingFakeLinear([issue()], revoke_on_claim=True)
+    _patch_successful_external_gates(monkeypatch, cfg)
+    pipeline_called = False
+
+    def unexpected_pipeline(**_kwargs: Any) -> dict[str, Any]:
+        nonlocal pipeline_called
+        pipeline_called = True
+        return {}
+
+    monkeypatch.setattr(factory, "run_pipeline", unexpected_pipeline)
+    payload = factory.import_once(client, cfg, act=True)  # type: ignore[arg-type]
+    assert payload["action"] == "blocked"
+    assert pipeline_called is False
+    assert "human approval was revoked" in payload["receipt"]["error"]
+    assert "blocked" in {
+        label["name"] for label in client.issues[0]["labels"]["nodes"]
+    }
 
 
 def test_resolved_blocked_receipt_can_be_retried(tmp_path: Path) -> None:
@@ -511,10 +685,19 @@ def test_browser_gate_uses_allowlisted_env_and_redacts_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured_env: dict[str, str] = {}
+    verifier_command: list[str] = []
 
     def fake_run(
         command: list[str], **kwargs: Any
     ) -> subprocess.CompletedProcess[str]:
+        if command[:3] == ["git", "worktree", "add"]:
+            Path(command[-2]).mkdir()
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
+        if command[:3] == ["git", "worktree", "remove"]:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        verifier_command.extend(command)
         captured_env.update(kwargs["env"])
         return subprocess.CompletedProcess(
             command,
@@ -535,5 +718,86 @@ def test_browser_gate_uses_allowlisted_env_and_redacts_output(
     )
     assert captured_env["SAFE_VALUE"] == "allowed"
     assert "LINEAR_API_KEY" not in captured_env
+    assert "HOME" not in captured_env
+    assert verifier_command == ["/bin/sh", "-c", "verify-ui"]
     assert payload["stdout_tail"] == "token=<redacted>"
     assert payload["stderr_tail"] == "Bearer <redacted>"
+    assert payload["head_sha"] == "a" * 40
+
+
+def test_pr_gate_requires_each_exact_context_and_clean_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        payload = {
+            "number": 7,
+            "url": "https://github.example/pr/7",
+            "isDraft": True,
+            "headRefOid": "a" * 40,
+            "mergeStateStatus": "CLEAN",
+            "statusCheckRollup": [
+                {"name": "required-a", "conclusion": "SUCCESS"},
+                {"name": "required-b", "conclusion": "SKIPPED"},
+                {"name": "unrelated", "conclusion": "SUCCESS"},
+            ],
+        }
+        return subprocess.CompletedProcess(command, 0, factory.json.dumps(payload), "")
+
+    monkeypatch.setattr(factory, "run", fake_run)
+    with pytest.raises(factory.FactoryError, match="required-b"):
+        factory._pr_for_branch(  # noqa: SLF001
+            tmp_path, "branch", ["required-a", "required-b"]
+        )
+
+
+def test_required_contexts_apply_to_actual_default_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command[-1].endswith("/rulesets"):
+            payload: Any = [
+                {
+                    "id": 1,
+                    "target": "branch",
+                    "enforcement": "active",
+                },
+                {
+                    "id": 2,
+                    "target": "branch",
+                    "enforcement": "active",
+                },
+            ]
+        elif command[-1].endswith("/1"):
+            payload = {
+                "conditions": {"ref_name": {"include": ["release"], "exclude": []}},
+                "rules": [
+                    {"type": "pull_request"},
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {
+                            "required_status_checks": [{"context": "wrong-branch"}]
+                        },
+                    },
+                ],
+            }
+        else:
+            payload = {
+                "conditions": {
+                    "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}
+                },
+                "rules": [
+                    {"type": "pull_request"},
+                    {
+                        "type": "required_status_checks",
+                        "parameters": {
+                            "required_status_checks": [{"context": "required-main"}]
+                        },
+                    },
+                ],
+            }
+        return subprocess.CompletedProcess(command, 0, factory.json.dumps(payload), "")
+
+    monkeypatch.setattr(factory, "run", fake_run)
+    assert factory._required_status_contexts(  # noqa: SLF001
+        tmp_path, "owner/repo", "main"
+    ) == ["required-main"]
