@@ -60,7 +60,10 @@ interactive agent process alive. Templates are in `ops/systemd/`.
 - `LINEAR_FACTORY_REPO_MAP`: JSON map from allowed `owner/repo` to the local
   source checkout used to create clean worktrees.
 - `LINEAR_FACTORY_GITHUB_OWNER`: required GitHub owner allowlist.
-- `LINEAR_FACTORY_WORKER`: registered Herdr implementation worker.
+- `LINEAR_FACTORY_WORKER`: registered Herdr implementation worker allowed for
+  the scheduler's run context. The production timer must use a cron-eligible
+  non-premium worker resolved from Controller policy; `codex` remains a manual
+  lane and is rejected by the unattended paid-provider guard.
 - `LINEAR_FACTORY_HERDR_ADAPTER`: installed Controller Herdr adapter.
 - `LINEAR_FACTORY_STATE_ROOT`: durable receipt and lock directory.
 - `LINEAR_FACTORY_BROWSER_VERIFY_CMD`: optional repository-owned browser check.
