@@ -168,6 +168,15 @@ def test_gui_keeps_the_users_task_pinned_and_loads_its_readable_result() -> None
     assert "task = public_managed_task(session.record(task))" in server
 
 
+def test_ready_home_is_not_hijacked_by_an_older_foreground_result() -> None:
+    javascript = (STATIC / "app.js").read_text(encoding="utf-8")
+
+    assert "function isBlockingForegroundReview(task)" in javascript
+    assert "state.readiness?.can_start === false" in javascript
+    assert "const blockingForegroundReview = isBlockingForegroundReview(task);" in javascript
+    assert "if (\n    isBlockingForegroundReview(task)\n    && state.activeView === \"home\"" in javascript
+
+
 def test_gui_recovers_from_slow_requests_and_failed_status_streams() -> None:
     javascript = (STATIC / "app.js").read_text(encoding="utf-8")
 
