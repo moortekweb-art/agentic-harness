@@ -1155,16 +1155,21 @@ function updateStartButton() {
   }
 }
 
+function isBlockingForegroundReview(task) {
+  return task.status === "needs_review"
+    && task.metadata?.foreground_task === true
+    && state.readiness?.can_start === false;
+}
+
 function renderRecovery() {
   const readinessState = String(state.readiness?.state || "");
   const task = state.currentTask || state.liveTask || {};
-  const foregroundReview = task.status === "needs_review"
-    && task.metadata?.foreground_task === true;
-  const visibleState = foregroundReview ? "needs_review" : readinessState;
+  const blockingForegroundReview = isBlockingForegroundReview(task);
+  const visibleState = blockingForegroundReview ? "needs_review" : readinessState;
   const canContinue = hasAction(task, "continue");
   const canStop = hasAction(task, "stop");
   const hasTask = Boolean(task?.id);
-  const show = foregroundReview || state.readiness?.can_start === false
+  const show = blockingForegroundReview || state.readiness?.can_start === false
     && ["needs_review", "needs_attention", "blocked", "configuration_error"].includes(readinessState);
 
   els.recoveryCard.hidden = !show;
@@ -2426,8 +2431,7 @@ function adoptLiveTask(task, { force = false } = {}) {
     renderTask(task);
   }
   if (
-    task.status === "needs_review"
-    && task.metadata?.foreground_task === true
+    isBlockingForegroundReview(task)
     && state.activeView === "home"
   ) {
     showView("tasks", { focus: true });
