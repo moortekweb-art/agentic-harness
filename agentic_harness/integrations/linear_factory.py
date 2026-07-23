@@ -7,8 +7,8 @@ bounded pass at a time; systemd or another scheduler owns persistence.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, TextIO
 
 from agentic_harness.core.redaction import redact_secrets
 
@@ -75,6 +75,29 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def try_acquire_team_lock(handle: TextIO) -> bool:
+    """Acquire a non-blocking process lock on Unix or Windows."""
+    if os.name == "nt":
+        msvcrt = importlib.import_module("msvcrt")
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write("0")
+            handle.flush()
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+
+    fcntl = importlib.import_module("fcntl")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
 
 
 def run(
@@ -776,9 +799,7 @@ def import_once(
     config.state_root.mkdir(parents=True, exist_ok=True)
     lock_path = config.state_root / f"{slug(config.team, 40)}.lock"
     with lock_path.open("a+") as lock:
-        try:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        if not try_acquire_team_lock(lock):
             return {"contract": CONTRACT, "ok": True, "action": "busy", "team": config.team}
         workspace = client.workspace(config.team)
         workspace_labels = label_map(workspace)
