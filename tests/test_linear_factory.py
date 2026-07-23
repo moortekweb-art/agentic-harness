@@ -304,6 +304,7 @@ def test_pipeline_uses_supported_scheduled_run_context(
     )
     assert payload["success"] is True
     assert captured[captured.index("--run-context") + 1] == "cron"
+    assert captured[captured.index("--task-id") + 1].endswith("-a1")
 
 
 def test_terminal_receipt_prevents_duplicate_import(tmp_path: Path) -> None:

@@ -576,8 +576,12 @@ def run_pipeline(
     issue: dict[str, Any],
     contract: dict[str, Any],
     repo_path: Path,
+    attempt: int = 1,
 ) -> dict[str, Any]:
-    task_id = f"linear-{slug(issue['identifier'], 30)}-{contract['spec_sha256'][:12]}"
+    task_id = (
+        f"linear-{slug(issue['identifier'], 30)}-"
+        f"{contract['spec_sha256'][:12]}-a{attempt}"
+    )
     command = [
         sys.executable,
         str(config.herdr_adapter),
@@ -912,6 +916,9 @@ def import_once(
             )
         labels = label_map(workspace)
         issue_labels = _issue_label_ids(issue)
+        previous_receipt = _load_receipt(config, issue["identifier"])
+        previous_attempt = previous_receipt.get("attempt")
+        attempt = previous_attempt + 1 if isinstance(previous_attempt, int) else 1
         started_state = state_by_type(workspace, "started", "In Progress")
         review_state = state_by_type(workspace, "started", "In Review")
         claimed = client.update_issue(
@@ -929,6 +936,7 @@ def import_once(
             "repository": contract["name_with_owner"],
             "claimed_at": now_iso(),
             "claimed_by": claimed.get("assignee", {}).get("name"),
+            "attempt": attempt,
             "status": "running",
             "human_merge_only": True,
         }
@@ -940,7 +948,11 @@ def import_once(
         )
         try:
             pipeline = run_pipeline(
-                config=config, issue=issue, contract=contract, repo_path=repo_path
+                config=config,
+                issue=issue,
+                contract=contract,
+                repo_path=repo_path,
+                attempt=attempt,
             )
             branch = str(pipeline.get("branch") or "")
             if not branch:
