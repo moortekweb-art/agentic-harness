@@ -1,0 +1,21 @@
+[Unit]
+Description=Import one approved Linear issue into the guarded Controller code-work path
+After=network-online.target hermes-gateway-controller.service
+Wants=network-online.target
+Requires=hermes-gateway-controller.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/mnt/raid0/home-ai-inference/.hermes-control/profiles/controller/.env
+Environment=HOME=/mnt/raid0/home-ai-inference
+Environment=HERMES_HOME=/mnt/raid0/home-ai-inference/.hermes-control/profiles/controller
+Environment=LINEAR_FACTORY_TEAM=AI
+Environment=LINEAR_FACTORY_GITHUB_OWNER=moortekweb-art
+Environment=LINEAR_FACTORY_WORKER=codex
+Environment='LINEAR_FACTORY_REPO_MAP={"moortekweb-art/agentic-harness":"/mnt/raid0/home-ai-inference/agentic-harness"}'
+ExecStart=__FACTORY_BIN__ import-once --act
+WorkingDirectory=/mnt/raid0/home-ai-inference
+Nice=10
+
+[Install]
+WantedBy=default.target

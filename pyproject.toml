@@ -57,6 +57,7 @@ testpaths = ["tests"]
 [project.scripts]
 agentic-harness = "agentic_harness.cli:main"
 agentic-harness-gui = "agentic_harness.gui.cli:main"
+agentic-factory = "agentic_harness.integrations.linear_factory:main"
 
 [tool.setuptools.packages.find]
 include = ["agentic_harness*"]
