@@ -591,6 +591,10 @@ def _pipeline_task(issue: dict[str, Any], contract: dict[str, Any]) -> str:
         "- One issue maps to this one branch and one draft PR.\n"
         "- Non-goals are binding; do not broaden scope.\n"
         "- Run focused and repository-owned verification.\n"
+        "- The outer Controller owns commit, push, draft PR creation, CI watching, "
+        "and Linear transitions.\n"
+        "- Complete the builder task when the requested file changes and local "
+        "checks pass; do not block only because those outer steps are pending.\n"
         "- Never merge, enable auto-merge, publish, release, or deploy.\n"
     )
 

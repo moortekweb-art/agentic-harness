@@ -330,6 +330,9 @@ def test_pipeline_uses_supported_scheduled_run_context(
     assert captured[captured.index("--verification") + 1] == (
         "auto-detect repository verification"
     )
+    task = captured[captured.index("--task") + 1]
+    assert "The outer Controller owns commit, push, draft PR creation" in task
+    assert "do not block only because those outer steps are pending" in task
 
 
 def test_terminal_receipt_prevents_duplicate_import(tmp_path: Path) -> None:
