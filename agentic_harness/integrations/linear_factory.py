@@ -294,6 +294,29 @@ def _section(description: str, heading: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def _verification_command(verification: str) -> str:
+    """Return only an explicitly marked executable verification command."""
+    command_lines = re.findall(
+        r"^\s*(?:[-*]\s*)?Command:\s*(\S.*?)\s*$",
+        verification,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    shell_blocks = re.findall(
+        r"```(?:bash|sh|shell)\s*\n(.*?)^```",
+        verification,
+        re.MULTILINE | re.DOTALL | re.IGNORECASE,
+    )
+    candidates = [
+        value.strip() for value in [*command_lines, *shell_blocks] if value.strip()
+    ]
+    if len(candidates) > 1:
+        raise FactoryError(
+            "verification requirements must contain at most one explicit "
+            "`Command:` line or shell code block"
+        )
+    return candidates[0] if candidates else ""
+
+
 def validate_contract(issue: dict[str, Any]) -> dict[str, Any]:
     description = str(issue.get("description") or "")
     missing = [heading for heading in REQUIRED_SECTIONS if not _section(description, heading)]
@@ -315,6 +338,7 @@ def validate_contract(issue: dict[str, Any]) -> dict[str, Any]:
         raise FactoryError(f"{issue.get('identifier')}: missing GitHub repository URL")
     repository_url = repository_match.group(1).removesuffix(".git")
     name_with_owner = repository_url.removeprefix("https://github.com/")
+    verification = _section(description, "Verification requirements")
     return {
         "description": description,
         "spec_sha256": spec_sha256(description),
@@ -322,7 +346,8 @@ def validate_contract(issue: dict[str, Any]) -> dict[str, Any]:
         "name_with_owner": name_with_owner,
         "acceptance_ids": [f"AC-{value}" for value in acceptance],
         "non_goal_ids": [f"NG-{value}" for value in non_goals],
-        "verification": _section(description, "Verification requirements"),
+        "verification": verification,
+        "verification_command": _verification_command(verification),
     }
 
 
@@ -609,7 +634,7 @@ def run_pipeline(
         "--task-id",
         task_id,
         "--verification",
-        str(contract["verification"]),
+        str(contract["verification_command"] or "auto-detect repository verification"),
     ]
     completed = run(command, cwd=repo_path, timeout=7200, env=os.environ.copy())
     try:

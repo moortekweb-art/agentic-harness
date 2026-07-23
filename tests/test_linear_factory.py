@@ -138,6 +138,28 @@ def test_contract_is_stable_and_extracts_binding_ids() -> None:
     assert parsed["acceptance_ids"] == ["AC-1", "AC-2"]
     assert parsed["non_goal_ids"] == ["NG-1"]
     assert parsed["spec_sha256"] == factory.spec_sha256(parsed["description"])
+    assert parsed["verification_command"] == ""
+
+
+def test_contract_extracts_only_explicit_verification_command() -> None:
+    body = issue()["description"].replace(
+        "1. Run the focused tests.",
+        "Run the focused tests.\n\nCommand: git diff --check",
+    )
+    parsed = factory.validate_contract(issue(description=body))
+    assert parsed["verification"] == (
+        "Run the focused tests.\n\nCommand: git diff --check"
+    )
+    assert parsed["verification_command"] == "git diff --check"
+
+
+def test_contract_extracts_explicit_shell_verification_block() -> None:
+    body = issue()["description"].replace(
+        "1. Run the focused tests.",
+        "Run the focused tests.\n\n```sh\ngit diff --check\npytest -q\n```",
+    )
+    parsed = factory.validate_contract(issue(description=body))
+    assert parsed["verification_command"] == "git diff --check\npytest -q"
 
 
 @pytest.mark.parametrize(
@@ -305,6 +327,9 @@ def test_pipeline_uses_supported_scheduled_run_context(
     assert payload["success"] is True
     assert captured[captured.index("--run-context") + 1] == "cron"
     assert captured[captured.index("--task-id") + 1].endswith("-a1")
+    assert captured[captured.index("--verification") + 1] == (
+        "auto-detect repository verification"
+    )
 
 
 def test_terminal_receipt_prevents_duplicate_import(tmp_path: Path) -> None:

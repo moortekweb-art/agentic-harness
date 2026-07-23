@@ -21,6 +21,12 @@ Each approved issue must contain:
 The intake command creates `spec-drafted` issues. It never applies
 `agent-ready`; that label is the human approval boundary.
 
+Verification requirements are reviewer-facing prose by default. To authorize
+one bounded executable check, include exactly one `Command: ...` line or one
+fenced `sh`, `bash`, or `shell` block in that section. Unmarked prose is never
+passed to a shell; without an explicit command, Herdr uses repository-owned
+verification discovery.
+
 ## Commands
 
 Read-only preflight:
