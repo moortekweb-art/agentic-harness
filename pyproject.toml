@@ -37,7 +37,7 @@ test = [
     "build>=1.2",
     "mypy>=1.10",
     "pytest>=8",
-    "ruff>=0.5",
+    "ruff>=0.5,<0.16",
     "twine>=5.1",
     "types-PyYAML>=6.0",
 ]
@@ -57,6 +57,7 @@ testpaths = ["tests"]
 [project.scripts]
 agentic-harness = "agentic_harness.cli:main"
 agentic-harness-gui = "agentic_harness.gui.cli:main"
+agentic-factory = "agentic_harness.integrations.linear_factory:main"
 
 [tool.setuptools.packages.find]
 include = ["agentic_harness*"]

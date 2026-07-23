@@ -544,6 +544,12 @@ workers. `LocalLLMAdapter` remains importable for compatibility but is
 deprecated; new local and remote model profiles should use `model_agent`. See
 [examples](https://github.com/moortekweb-art/agentic-harness/tree/main/examples) for project-local configurations and safety notes.
 
+Operators with an existing Linear, Herdr, and GitHub control plane can use the
+optional [`agentic-factory`](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/LINEAR_FACTORY.md)
+command. It drafts human-approved Linear contracts, runs at most one approved
+issue per team through an isolated worktree, and prepares a reviewed draft PR.
+It never merges or enables auto-merge.
+
 The small public API remains available:
 
 ```python
@@ -561,6 +567,7 @@ pipx install local-agentic-harness
 The distribution name avoids a collision with the unrelated
 `agentic-harness` package on PyPI. The installed CLI command remains `agentic-harness`.
 The same installation also provides `agentic-harness-gui`.
+It also provides the optional `agentic-factory` operator command.
 
 The default branch can contain unreleased CLI and receipt changes. Install the
 current GitHub source with:
@@ -609,6 +616,7 @@ goal/report smoke test, and writes `SHA256SUMS` beside the artifacts.
 - [Autonomous goal contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/CODEX_GOAL_PARITY.md)
 - [Evidence contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EVIDENCE_CONTRACT.md)
 - [Turnstone integration boundary](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/TURNSTONE_INTEGRATION.md)
+- [Human-gated Linear factory](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/LINEAR_FACTORY.md)
 - [Release checklist](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/RELEASE_CHECKLIST.md)
 - [PyPI trusted publishing](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/PYPI_TRUSTED_PUBLISHING.md)
 - [Security policy](https://github.com/moortekweb-art/agentic-harness/blob/main/SECURITY.md)
