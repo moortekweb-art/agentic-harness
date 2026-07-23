@@ -64,6 +64,7 @@ Michael applies agent-ready. Humans merge.
                 }
             ]
         },
+        "comments": {"nodes": []},
         "relations": {"nodes": []},
         "inverseRelations": {"nodes": []},
     }
@@ -199,6 +200,25 @@ def test_human_approval_must_be_owner_applied_and_after_last_spec_change() -> No
     assert factory.human_approval_verified(
         row, ready_label_id="ready", viewer_id="viewer"
     )[1] == "spec_changed_after_approval"
+
+
+def test_hash_bound_owner_comment_is_auditable_approval_fallback() -> None:
+    row = issue()
+    row["history"]["nodes"] = []
+    row["comments"]["nodes"] = [
+        {
+            "user": {"id": "viewer", "name": "Michael"},
+            "body": f"Factory approval: {factory.spec_sha256(row['description'])}",
+            "createdAt": "2026-07-23T12:00:00Z",
+        }
+    ]
+    assert factory.human_approval_verified(
+        row, ready_label_id="ready", viewer_id="viewer"
+    ) == (True, "human_spec_hash_approval_verified")
+    row["description"] += "\nChanged after approval.\n"
+    assert factory.human_approval_verified(
+        row, ready_label_id="ready", viewer_id="viewer"
+    )[1] == "agent_ready_not_applied_by_human_owner"
 
 
 @pytest.mark.parametrize(

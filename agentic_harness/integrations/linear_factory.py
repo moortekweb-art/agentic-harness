@@ -188,6 +188,9 @@ class LinearClient:
               history(first: 100) {
                 nodes { actorId addedLabelIds updatedDescription createdAt }
               }
+              comments(first: 100) {
+                nodes { user { id name } body createdAt }
+              }
               relations { nodes { type relatedIssue { identifier state { type } } } }
               inverseRelations { nodes { type issue { identifier state { type } } } }
             }
@@ -520,6 +523,14 @@ def human_approval_verified(
         and str(row.get("actorId") or "") == viewer_id
     ]
     if not approvals:
+        approval_marker = f"Factory approval: {spec_sha256(str(issue.get('description') or ''))}"
+        comment_approval = any(
+            str((row.get("user") or {}).get("id") or "") == viewer_id
+            and approval_marker in str(row.get("body") or "")
+            for row in issue.get("comments", {}).get("nodes", [])
+        )
+        if comment_approval:
+            return True, "human_spec_hash_approval_verified"
         return False, "agent_ready_not_applied_by_human_owner"
     approved_at = max(str(row.get("createdAt") or "") for row in approvals)
     changed_after = any(
