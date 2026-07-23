@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -284,6 +285,27 @@ def test_successful_handoff_consumes_only_queue_approval_label() -> None:
     ) == ["draft", "customer"]
 
 
+def test_pipeline_uses_supported_scheduled_run_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[str] = []
+
+    def fake_run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        captured.extend(command)
+        return subprocess.CompletedProcess(command, 0, '{"success": true}', "")
+
+    monkeypatch.setattr(factory, "run", fake_run)
+    row = issue()
+    payload = factory.run_pipeline(
+        config=config(tmp_path),
+        issue=row,
+        contract=factory.validate_contract(row),
+        repo_path=tmp_path / "repo",
+    )
+    assert payload["success"] is True
+    assert captured[captured.index("--run-context") + 1] == "cron"
+
+
 def test_terminal_receipt_prevents_duplicate_import(tmp_path: Path) -> None:
     cfg = config(tmp_path)
     row = issue()
@@ -300,6 +322,24 @@ def test_terminal_receipt_prevents_duplicate_import(tmp_path: Path) -> None:
     payload = factory.import_once(FakeLinear([row]), cfg, act=False)  # type: ignore[arg-type]
     assert payload["selected"] is None
     assert payload["candidates"][0]["reason"] == "terminal_receipt_exists"
+
+
+def test_resolved_blocked_receipt_can_be_retried(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    row = issue()
+    parsed = factory.validate_contract(row)
+    factory.atomic_write_json(
+        factory._receipt_path(cfg, "AI-10"),  # noqa: SLF001
+        {
+            "contract": factory.CONTRACT,
+            "identifier": "AI-10",
+            "spec_sha256": parsed["spec_sha256"],
+            "status": "blocked",
+        },
+    )
+    payload = factory.import_once(FakeLinear([row]), cfg, act=False)  # type: ignore[arg-type]
+    assert payload["selected"] == "AI-10"
+    assert payload["candidates"][0]["reason"] == "eligible"
 
 
 def test_intake_draft_never_adds_agent_ready(tmp_path: Path) -> None:

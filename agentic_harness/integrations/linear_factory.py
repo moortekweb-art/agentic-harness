@@ -34,7 +34,7 @@ REQUIRED_SECTIONS = (
     "Verification requirements",
     "Approval boundary",
 )
-TERMINAL_RECEIPT_STATES = frozenset({"merge_ready", "blocked", "failed"})
+TERMINAL_RECEIPT_STATES = frozenset({"merge_ready", "failed"})
 UI_SUFFIXES = frozenset(
     {".css", ".html", ".htm", ".js", ".jsx", ".mjs", ".svelte", ".tsx", ".vue"}
 )
@@ -599,7 +599,7 @@ def run_pipeline(
         "--base",
         "origin/main",
         "--run-context",
-        "linear-factory",
+        "cron",
         "--timeout",
         "1800",
         "--task-id",
@@ -994,7 +994,7 @@ def import_once(
                 target_labels.append(labels[config.blocked_label])
             client.update_issue(
                 issue["id"],
-                assignee_id=str(workspace["viewer"]["id"]),
+                assignee_id=None,
                 state_id=started_state,
                 label_ids=sorted(set(target_labels)),
             )
