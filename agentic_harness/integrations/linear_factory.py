@@ -485,6 +485,15 @@ def _issue_label_ids(issue: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def consumed_label_ids(issue_labels: dict[str, str], ready_label: str) -> list[str]:
+    """Keep issue metadata while removing the consumed queue approval label."""
+    return [
+        label_id
+        for name, label_id in issue_labels.items()
+        if name != ready_label
+    ]
+
+
 def _eligible(issue: dict[str, Any], config: FactoryConfig) -> tuple[bool, str]:
     labels = set(_issue_label_ids(issue))
     if config.ready_label not in labels:
@@ -942,7 +951,7 @@ def import_once(
                     "herdr_state_path": pipeline.get("state_path"),
                 }
             )
-            target_labels = list(issue_labels.values())
+            target_labels = consumed_label_ids(issue_labels, config.ready_label)
             if verdict != "loop-approved" and config.blocked_label in labels:
                 target_labels.append(labels[config.blocked_label])
             client.update_issue(

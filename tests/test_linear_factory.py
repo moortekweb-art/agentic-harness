@@ -253,6 +253,17 @@ def test_blocked_assigned_issue_does_not_hold_builder_lock(tmp_path: Path) -> No
     assert payload["selected"] == "AI-11"
 
 
+def test_successful_handoff_consumes_only_queue_approval_label() -> None:
+    assert factory.consumed_label_ids(
+        {
+            "spec-drafted": "draft",
+            "agent-ready": "ready",
+            "customer-visible": "customer",
+        },
+        "agent-ready",
+    ) == ["draft", "customer"]
+
+
 def test_terminal_receipt_prevents_duplicate_import(tmp_path: Path) -> None:
     cfg = config(tmp_path)
     row = issue()
