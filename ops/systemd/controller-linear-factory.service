@@ -11,6 +11,7 @@ Environment=HOME=/mnt/raid0/home-ai-inference
 Environment=HERMES_HOME=/mnt/raid0/home-ai-inference/.hermes-control/profiles/controller
 Environment=LINEAR_FACTORY_TEAM=AI
 Environment=LINEAR_FACTORY_GITHUB_OWNER=moortekweb-art
+Environment=LINEAR_FACTORY_HUMAN_APPROVER_ID=__HUMAN_APPROVER_LINEAR_USER_ID__
 Environment=LINEAR_FACTORY_WORKER=opencode-minimax-build
 Environment='LINEAR_FACTORY_REPO_MAP={"moortekweb-art/agentic-harness":"/mnt/raid0/home-ai-inference/agentic-harness"}'
 ExecStart=__FACTORY_BIN__ import-once --act

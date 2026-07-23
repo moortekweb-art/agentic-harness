@@ -61,7 +61,13 @@ interactive agent process alive. Templates are in `ops/systemd/`.
 
 ## Production environment
 
-- `LINEAR_API_KEY`: Linear personal API key.
+- `LINEAR_FACTORY_API_KEY`: Linear API key for a dedicated execution identity.
+  The execution identity must be different from the configured human approver.
+  `LINEAR_API_KEY` remains a compatibility fallback for interactive use, but
+  the production doctor rejects it when it resolves to the approver.
+- `LINEAR_FACTORY_HUMAN_APPROVER_ID`: immutable Linear user ID authorized to
+  approve exact specifications. The factory reads the complete paginated
+  approval history and fails closed if it cannot prove this identity approved.
 - `LINEAR_FACTORY_TEAM`: one team key, such as `AI`.
 - `LINEAR_FACTORY_REPO_MAP`: JSON map from allowed `owner/repo` to the local
   source checkout used to create clean worktrees.
@@ -73,11 +79,19 @@ interactive agent process alive. Templates are in `ops/systemd/`.
 - `LINEAR_FACTORY_HERDR_ADAPTER`: installed Controller Herdr adapter.
 - `LINEAR_FACTORY_STATE_ROOT`: durable receipt and lock directory.
 - `LINEAR_FACTORY_BROWSER_VERIFY_CMD`: optional repository-owned browser check.
+- `LINEAR_FACTORY_BROWSER_ENV_ALLOWLIST`: comma-separated environment names
+  exposed to the browser verifier. It defaults to `PATH,HOME,LANG,LC_ALL`;
+  factory credentials are not inherited.
 
 Only one import pass may hold the team lock. Assigned, blocked,
 dependency-blocked, completed, canceled, malformed, or already-receipted issues
 remain outside the queue. UI changes without a configured passing browser check
 receive `needs-human-review`, never `loop-approved`.
+
+`agentic-factory doctor` fails unless the execution token resolves to a Linear
+viewer different from `LINEAR_FACTORY_HUMAN_APPROVER_ID`. Keep the timer
+disabled until that check reports both `human_approver_configured: true` and
+`approver_is_independent: true`.
 
 ## Verdicts
 

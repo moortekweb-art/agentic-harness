@@ -121,7 +121,7 @@ def run(
 class LinearClient:
     def __init__(self, api_key: str, *, api_url: str = LINEAR_API_URL) -> None:
         if not api_key.strip():
-            raise FactoryError("LINEAR_API_KEY is not set")
+            raise FactoryError("Linear API key is not set")
         self.api_key = api_key.strip()
         self.api_url = api_url
 
@@ -214,6 +214,53 @@ class LinearClient:
                 for label in issue.get("labels", {}).get("nodes", [])
             }
         ]
+
+    def approval_evidence(self, issue_id: str) -> dict[str, Any]:
+        """Read complete approval history and comments; partial evidence is unsafe."""
+
+        def collect(connection: str, fields: str) -> list[dict[str, Any]]:
+            nodes: list[dict[str, Any]] = []
+            cursor: str | None = None
+            while True:
+                query = f"""query($id: String!, $after: String) {{
+                  issue(id: $id) {{
+                    {connection}(first: 100, after: $after) {{
+                      nodes {{ {fields} }}
+                      pageInfo {{ hasNextPage endCursor }}
+                    }}
+                  }}
+                }}"""
+                payload = (
+                    self.query(query, {"id": issue_id, "after": cursor})
+                    .get("issue", {})
+                    .get(connection, {})
+                )
+                page_nodes = payload.get("nodes")
+                page_info = payload.get("pageInfo")
+                if not isinstance(page_nodes, list) or not isinstance(page_info, dict):
+                    raise FactoryError(f"Linear {connection} pagination was incomplete")
+                nodes.extend(dict(row) for row in page_nodes if isinstance(row, dict))
+                if page_info.get("hasNextPage") is not True:
+                    return nodes
+                next_cursor = page_info.get("endCursor")
+                if not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
+                    raise FactoryError(f"Linear {connection} pagination cursor was invalid")
+                cursor = next_cursor
+
+        return {
+            "history": {
+                "nodes": collect(
+                    "history",
+                    "actorId addedLabelIds updatedDescription createdAt",
+                )
+            },
+            "comments": {
+                "nodes": collect(
+                    "comments",
+                    "user { id name } body createdAt",
+                )
+            },
+        }
 
     def update_issue(
         self,
@@ -477,6 +524,7 @@ class FactoryConfig:
     worker: str
     herdr_adapter: Path
     github_owner: str
+    human_approver_id: str
     ready_label: str = "agent-ready"
     blocked_label: str = "blocked"
     draft_label: str = "spec-drafted"
@@ -503,6 +551,9 @@ class FactoryConfig:
                 )
             ),
             github_owner=os.environ.get("LINEAR_FACTORY_GITHUB_OWNER", "moortekweb-art"),
+            human_approver_id=os.environ.get(
+                "LINEAR_FACTORY_HUMAN_APPROVER_ID", ""
+            ).strip(),
         )
 
 
@@ -538,19 +589,21 @@ def _eligible(issue: dict[str, Any], config: FactoryConfig) -> tuple[bool, str]:
 
 
 def human_approval_verified(
-    issue: dict[str, Any], *, ready_label_id: str, viewer_id: str
+    issue: dict[str, Any], *, ready_label_id: str, approver_id: str
 ) -> tuple[bool, str]:
+    if not approver_id:
+        return False, "human_approver_not_configured"
     history = list(issue.get("history", {}).get("nodes", []))
     approvals = [
         row
         for row in history
         if ready_label_id in list(row.get("addedLabelIds") or [])
-        and str(row.get("actorId") or "") == viewer_id
+        and str(row.get("actorId") or "") == approver_id
     ]
     if not approvals:
         approval_marker = f"Factory approval: {spec_sha256(str(issue.get('description') or ''))}"
         comment_approval = any(
-            str((row.get("user") or {}).get("id") or "") == viewer_id
+            str((row.get("user") or {}).get("id") or "") == approver_id
             and approval_marker in str(row.get("body") or "")
             for row in issue.get("comments", {}).get("nodes", [])
         )
@@ -574,11 +627,15 @@ def _receipt_path(config: FactoryConfig, identifier: str) -> Path:
 
 def _load_receipt(config: FactoryConfig, identifier: str) -> dict[str, Any]:
     path = _receipt_path(config, identifier)
+    if not path.exists():
+        return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FactoryError(f"receipt is unreadable or invalid: {path}") from exc
+    if not isinstance(payload, dict):
+        raise FactoryError(f"receipt is not a JSON object: {path}")
+    return payload
 
 
 def _pipeline_task(issue: dict[str, Any], contract: dict[str, Any]) -> str:
@@ -605,6 +662,7 @@ def run_pipeline(
     issue: dict[str, Any],
     contract: dict[str, Any],
     repo_path: Path,
+    base_ref: str,
     attempt: int = 1,
 ) -> dict[str, Any]:
     task_id = (
@@ -630,7 +688,7 @@ def run_pipeline(
         "--workdir",
         str(repo_path),
         "--base",
-        "origin/main",
+        base_ref,
         "--run-context",
         "cron",
         "--timeout",
@@ -707,7 +765,15 @@ def _browser_gate(repo_path: Path, pr: dict[str, Any], changed: list[str]) -> di
     command = os.environ.get("LINEAR_FACTORY_BROWSER_VERIFY_CMD", "").strip()
     if not command:
         return {"required": True, "passed": False, "reason": "browser_verifier_not_configured"}
-    env = os.environ.copy()
+    allowed = {
+        name.strip()
+        for name in os.environ.get(
+            "LINEAR_FACTORY_BROWSER_ENV_ALLOWLIST",
+            "PATH,HOME,LANG,LC_ALL",
+        ).split(",")
+        if name.strip()
+    }
+    env = {name: value for name, value in os.environ.items() if name in allowed}
     env.update(
         {
             "LINEAR_FACTORY_PR_NUMBER": str(pr["number"]),
@@ -721,8 +787,8 @@ def _browser_gate(repo_path: Path, pr: dict[str, Any], changed: list[str]) -> di
         "required": True,
         "passed": completed.returncode == 0,
         "returncode": completed.returncode,
-        "stdout_tail": completed.stdout[-2000:],
-        "stderr_tail": completed.stderr[-2000:],
+        "stdout_tail": redact_secrets(completed.stdout[-2000:]),
+        "stderr_tail": redact_secrets(completed.stderr[-2000:]),
     }
 
 
@@ -833,11 +899,17 @@ def doctor(client: LinearClient, config: FactoryConfig) -> dict[str, Any]:
     return {
         "contract": CONTRACT,
         "ok": not missing_labels
+        and bool(config.human_approver_id)
+        and str(workspace["viewer"].get("id") or "") != config.human_approver_id
         and bool(config.repo_map)
         and all(item.get("ok") for item in repo_results.values())
         and config.herdr_adapter.is_file(),
         "team": config.team,
         "viewer": workspace["viewer"].get("name"),
+        "human_approver_configured": bool(config.human_approver_id),
+        "approver_is_independent": (
+            str(workspace["viewer"].get("id") or "") != config.human_approver_id
+        ),
         "missing_labels": missing_labels,
         "herdr_adapter": str(config.herdr_adapter),
         "herdr_adapter_present": config.herdr_adapter.is_file(),
@@ -855,6 +927,13 @@ def import_once(
         if not try_acquire_team_lock(lock):
             return {"contract": CONTRACT, "ok": True, "action": "busy", "team": config.team}
         workspace = client.workspace(config.team)
+        viewer_id = str(workspace["viewer"].get("id") or "")
+        if not config.human_approver_id:
+            raise FactoryError("LINEAR_FACTORY_HUMAN_APPROVER_ID is not configured")
+        if viewer_id == config.human_approver_id:
+            raise FactoryError(
+                "Linear execution identity must be independent from the human approver"
+            )
         workspace_labels = label_map(workspace)
         if config.ready_label not in workspace_labels:
             raise FactoryError(f"Linear label {config.ready_label!r} is missing")
@@ -868,7 +947,8 @@ def import_once(
                 "issues": [item["identifier"] for item in active],
             }
         candidates: list[dict[str, Any]] = []
-        for issue in client.eligible_issues(config.team, config.ready_label):
+        for raw_issue in client.eligible_issues(config.team, config.ready_label):
+            issue = dict(raw_issue)
             eligible, reason = _eligible(issue, config)
             row: dict[str, Any] = {
                 "identifier": issue["identifier"],
@@ -877,10 +957,11 @@ def import_once(
                 "reason": reason,
             }
             if eligible:
+                issue.update(client.approval_evidence(str(issue["id"])))
                 approved, approval_reason = human_approval_verified(
                     issue,
                     ready_label_id=workspace_labels[config.ready_label],
-                    viewer_id=str(workspace["viewer"]["id"]),
+                    approver_id=config.human_approver_id,
                 )
                 if not approved:
                     row.update(eligible=False, reason=approval_reason)
@@ -914,11 +995,14 @@ def import_once(
         }
         if not act or not selected:
             return result
-        issue = next(
-            item
-            for item in client.eligible_issues(config.team, config.ready_label)
-            if item["identifier"] == selected["identifier"]
+        issue = dict(
+            next(
+                item
+                for item in client.eligible_issues(config.team, config.ready_label)
+                if item["identifier"] == selected["identifier"]
+            )
         )
+        issue.update(client.approval_evidence(str(issue["id"])))
         still_eligible, current_reason = _eligible(issue, config)
         if not still_eligible:
             raise FactoryError(
@@ -927,7 +1011,7 @@ def import_once(
         approved, approval_reason = human_approval_verified(
             issue,
             ready_label_id=workspace_labels[config.ready_label],
-            viewer_id=str(workspace["viewer"]["id"]),
+            approver_id=config.human_approver_id,
         )
         if not approved:
             raise FactoryError(
@@ -943,6 +1027,10 @@ def import_once(
             raise FactoryError(
                 f"no production repository mapping for {contract['name_with_owner']}"
             )
+        repository = inspect_repository(str(repo_path))
+        if repository["name_with_owner"] != contract["name_with_owner"]:
+            raise FactoryError("repository mapping changed after preflight")
+        base_ref = f"origin/{repository['default_branch']}"
         labels = label_map(workspace)
         issue_labels = _issue_label_ids(issue)
         previous_receipt = _load_receipt(config, issue["identifier"])
@@ -950,12 +1038,6 @@ def import_once(
         attempt = previous_attempt + 1 if isinstance(previous_attempt, int) else 1
         started_state = state_by_type(workspace, "started", "In Progress")
         review_state = state_by_type(workspace, "started", "In Review")
-        claimed = client.update_issue(
-            issue["id"],
-            assignee_id=str(workspace["viewer"]["id"]),
-            state_id=started_state,
-            label_ids=list(issue_labels.values()),
-        )
         receipt = {
             "contract": CONTRACT,
             "issue_id": issue["id"],
@@ -964,23 +1046,38 @@ def import_once(
             "spec_sha256": contract["spec_sha256"],
             "repository": contract["name_with_owner"],
             "claimed_at": now_iso(),
-            "claimed_by": claimed.get("assignee", {}).get("name"),
+            "claimed_by": None,
             "attempt": attempt,
-            "status": "running",
+            "status": "claiming",
             "human_merge_only": True,
+            "base_ref": base_ref,
         }
         atomic_write_json(_receipt_path(config, issue["identifier"]), receipt)
-        client.comment(
-            issue["id"],
-            f"Factory claimed this exact specification (`{contract['spec_sha256']}`). "
-            "Build is running in an isolated Herdr worktree. Human merge remains mandatory.",
-        )
         try:
+            claimed = client.update_issue(
+                issue["id"],
+                assignee_id=str(workspace["viewer"]["id"]),
+                state_id=started_state,
+                label_ids=list(issue_labels.values()),
+            )
+            receipt.update(
+                {
+                    "status": "running",
+                    "claimed_by": claimed.get("assignee", {}).get("name"),
+                }
+            )
+            atomic_write_json(_receipt_path(config, issue["identifier"]), receipt)
+            client.comment(
+                issue["id"],
+                f"Factory claimed this exact specification (`{contract['spec_sha256']}`). "
+                "Build is running in an isolated Herdr worktree. Human merge remains mandatory.",
+            )
             pipeline = run_pipeline(
                 config=config,
                 issue=issue,
                 contract=contract,
                 repo_path=repo_path,
+                base_ref=base_ref,
                 attempt=attempt,
             )
             branch = str(pipeline.get("branch") or "")
@@ -1033,17 +1130,35 @@ def import_once(
             target_labels = list(issue_labels.values())
             if config.blocked_label in labels:
                 target_labels.append(labels[config.blocked_label])
-            client.update_issue(
-                issue["id"],
-                assignee_id=None,
-                state_id=started_state,
-                label_ids=sorted(set(target_labels)),
-            )
-            client.comment(
-                issue["id"],
-                f"Factory stopped safely: `{receipt['error']}`. The issue is blocked; "
-                "no merge was attempted.",
-            )
+            cleanup_errors: list[str] = []
+            try:
+                client.update_issue(
+                    issue["id"],
+                    assignee_id=None,
+                    state_id=started_state,
+                    label_ids=sorted(set(target_labels)),
+                )
+            except Exception as cleanup_exc:
+                cleanup_errors.append(
+                    redact_secrets(
+                        f"issue cleanup: {type(cleanup_exc).__name__}: {cleanup_exc}"
+                    )[:500]
+                )
+            try:
+                client.comment(
+                    issue["id"],
+                    f"Factory stopped safely: `{receipt['error']}`. The issue is blocked; "
+                    "no merge was attempted.",
+                )
+            except Exception as cleanup_exc:
+                cleanup_errors.append(
+                    redact_secrets(
+                        f"comment cleanup: {type(cleanup_exc).__name__}: {cleanup_exc}"
+                    )[:500]
+                )
+            if cleanup_errors:
+                receipt["cleanup_errors"] = cleanup_errors
+                atomic_write_json(_receipt_path(config, issue["identifier"]), receipt)
             result.update(ok=False, action="blocked", receipt=receipt)
             return result
 
@@ -1083,7 +1198,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         config = FactoryConfig.from_env(args)
-        client = LinearClient(os.environ.get("LINEAR_API_KEY", ""))
+        client = LinearClient(
+            os.environ.get("LINEAR_FACTORY_API_KEY")
+            or os.environ.get("LINEAR_API_KEY", "")
+        )
         if args.command == "doctor":
             payload = doctor(client, config)
         elif args.command == "draft":

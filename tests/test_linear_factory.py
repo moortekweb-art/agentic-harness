@@ -58,7 +58,7 @@ Michael applies agent-ready. Humans merge.
         "history": {
             "nodes": [
                 {
-                    "actorId": "viewer",
+                    "actorId": "human",
                     "addedLabelIds": ["ready"],
                     "updatedDescription": False,
                     "createdAt": "2026-07-23T12:00:00Z",
@@ -116,6 +116,10 @@ class FakeLinear:
             not in {item["name"] for item in row["labels"]["nodes"]}
         ]
 
+    def approval_evidence(self, issue_id: str) -> dict[str, Any]:
+        row = next(item for item in self.issues if item["id"] == issue_id)
+        return {"history": row["history"], "comments": row["comments"]}
+
 
 def config(tmp_path: Path) -> factory.FactoryConfig:
     adapter = tmp_path / "herdr.py"
@@ -129,6 +133,7 @@ def config(tmp_path: Path) -> factory.FactoryConfig:
         worker="codex",
         herdr_adapter=adapter,
         github_owner="moortekweb-art",
+        human_approver_id="human",
     )
 
 
@@ -205,23 +210,23 @@ def test_dependency_blocked_until_upstream_done() -> None:
 def test_human_approval_must_be_owner_applied_and_after_last_spec_change() -> None:
     row = issue()
     assert factory.human_approval_verified(
-        row, ready_label_id="ready", viewer_id="viewer"
+        row, ready_label_id="ready", approver_id="human"
     ) == (True, "human_approval_verified")
     row["history"]["nodes"][0]["actorId"] = "automation"
     assert factory.human_approval_verified(
-        row, ready_label_id="ready", viewer_id="viewer"
+        row, ready_label_id="ready", approver_id="human"
     )[1] == "agent_ready_not_applied_by_human_owner"
-    row["history"]["nodes"][0]["actorId"] = "viewer"
+    row["history"]["nodes"][0]["actorId"] = "human"
     row["history"]["nodes"].append(
         {
-            "actorId": "viewer",
+            "actorId": "human",
             "addedLabelIds": [],
             "updatedDescription": True,
             "createdAt": "2026-07-23T12:01:00Z",
         }
     )
     assert factory.human_approval_verified(
-        row, ready_label_id="ready", viewer_id="viewer"
+        row, ready_label_id="ready", approver_id="human"
     )[1] == "spec_changed_after_approval"
 
 
@@ -230,18 +235,79 @@ def test_hash_bound_owner_comment_is_auditable_approval_fallback() -> None:
     row["history"]["nodes"] = []
     row["comments"]["nodes"] = [
         {
-            "user": {"id": "viewer", "name": "Michael"},
+            "user": {"id": "human", "name": "Michael"},
             "body": f"Factory approval: {factory.spec_sha256(row['description'])}",
             "createdAt": "2026-07-23T12:00:00Z",
         }
     ]
     assert factory.human_approval_verified(
-        row, ready_label_id="ready", viewer_id="viewer"
+        row, ready_label_id="ready", approver_id="human"
     ) == (True, "human_spec_hash_approval_verified")
     row["description"] += "\nChanged after approval.\n"
     assert factory.human_approval_verified(
-        row, ready_label_id="ready", viewer_id="viewer"
+        row, ready_label_id="ready", approver_id="human"
     )[1] == "agent_ready_not_applied_by_human_owner"
+
+
+def test_approval_evidence_paginates_history_and_comments_to_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = factory.LinearClient("test-key")
+    calls: list[tuple[str, str | None]] = []
+
+    def fake_query(query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+        assert variables is not None
+        connection = "history" if "history(first:" in query else "comments"
+        cursor = variables.get("after")
+        calls.append((connection, cursor))
+        if cursor is None:
+            return {
+                "issue": {
+                    connection: {
+                        "nodes": [{"page": 1}],
+                        "pageInfo": {"hasNextPage": True, "endCursor": f"{connection}-2"},
+                    }
+                }
+            }
+        return {
+            "issue": {
+                connection: {
+                    "nodes": [{"page": 2}],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        }
+
+    monkeypatch.setattr(client, "query", fake_query)
+    evidence = client.approval_evidence("issue-id")
+    assert evidence["history"]["nodes"] == [{"page": 1}, {"page": 2}]
+    assert evidence["comments"]["nodes"] == [{"page": 1}, {"page": 2}]
+    assert calls == [
+        ("history", None),
+        ("history", "history-2"),
+        ("comments", None),
+        ("comments", "comments-2"),
+    ]
+
+
+def test_approval_evidence_fails_closed_on_invalid_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = factory.LinearClient("test-key")
+    monkeypatch.setattr(
+        client,
+        "query",
+        lambda *_args, **_kwargs: {
+            "issue": {
+                "history": {
+                    "nodes": [],
+                    "pageInfo": {"hasNextPage": True, "endCursor": None},
+                }
+            }
+        },
+    )
+    with pytest.raises(factory.FactoryError, match="cursor was invalid"):
+        client.approval_evidence("issue-id")
 
 
 @pytest.mark.parametrize(
@@ -323,9 +389,11 @@ def test_pipeline_uses_supported_scheduled_run_context(
         issue=row,
         contract=factory.validate_contract(row),
         repo_path=tmp_path / "repo",
+        base_ref="origin/trunk",
     )
     assert payload["success"] is True
     assert captured[captured.index("--run-context") + 1] == "cron"
+    assert captured[captured.index("--base") + 1] == "origin/trunk"
     assert captured[captured.index("--task-id") + 1].endswith("-a1")
     assert captured[captured.index("--verification") + 1] == (
         "auto-detect repository verification"
@@ -351,6 +419,31 @@ def test_terminal_receipt_prevents_duplicate_import(tmp_path: Path) -> None:
     payload = factory.import_once(FakeLinear([row]), cfg, act=False)  # type: ignore[arg-type]
     assert payload["selected"] is None
     assert payload["candidates"][0]["reason"] == "terminal_receipt_exists"
+
+
+def test_invalid_receipt_fails_closed(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    path = factory._receipt_path(cfg, "AI-10")  # noqa: SLF001
+    path.parent.mkdir(parents=True)
+    path.write_text("{not-json", encoding="utf-8")
+    payload = factory.import_once(FakeLinear([issue()]), cfg, act=False)  # type: ignore[arg-type]
+    assert payload["selected"] is None
+    assert "receipt is unreadable or invalid" in payload["candidates"][0]["reason"]
+
+
+def test_execution_identity_cannot_be_human_approver(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    cfg = factory.FactoryConfig(
+        team=cfg.team,
+        state_root=cfg.state_root,
+        repo_map=cfg.repo_map,
+        worker=cfg.worker,
+        herdr_adapter=cfg.herdr_adapter,
+        github_owner=cfg.github_owner,
+        human_approver_id="viewer",
+    )
+    with pytest.raises(factory.FactoryError, match="must be independent"):
+        factory.import_once(FakeLinear([issue()]), cfg, act=False)  # type: ignore[arg-type]
 
 
 def test_resolved_blocked_receipt_can_be_retried(tmp_path: Path) -> None:
@@ -412,3 +505,35 @@ def test_non_ui_change_does_not_invent_browser_evidence(tmp_path: Path) -> None:
         "passed": True,
         "reason": "no_ui_files_changed",
     }
+
+
+def test_browser_gate_uses_allowlisted_env_and_redacts_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured_env: dict[str, str] = {}
+
+    def fake_run(
+        command: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        captured_env.update(kwargs["env"])
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "token=sk-secretvalue123",
+            "Bearer secretvalue123",
+        )
+
+    monkeypatch.setenv("LINEAR_FACTORY_BROWSER_VERIFY_CMD", "verify-ui")
+    monkeypatch.setenv("LINEAR_FACTORY_BROWSER_ENV_ALLOWLIST", "PATH,SAFE_VALUE")
+    monkeypatch.setenv("SAFE_VALUE", "allowed")
+    monkeypatch.setenv("LINEAR_API_KEY", "must-not-leak")
+    monkeypatch.setattr(factory, "run", fake_run)
+    payload = factory._browser_gate(  # noqa: SLF001
+        tmp_path,
+        {"number": 7, "headRefOid": "a" * 40},
+        ["agentic_harness/gui/static/app.js"],
+    )
+    assert captured_env["SAFE_VALUE"] == "allowed"
+    assert "LINEAR_API_KEY" not in captured_env
+    assert payload["stdout_tail"] == "token=<redacted>"
+    assert payload["stderr_tail"] == "Bearer <redacted>"
