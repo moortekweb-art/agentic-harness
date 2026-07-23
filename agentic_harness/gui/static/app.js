@@ -2409,6 +2409,14 @@ function rememberForegroundTask(task) {
   localStorage.setItem(FOREGROUND_TASK_KEY, id);
 }
 
+function restoreForegroundTaskFromHash() {
+  const match = window.location.hash.match(
+    /^#(?:[^&]*&)*task=([A-Za-z0-9._-]{1,200})(?:&|$)/,
+  );
+  if (!match) return;
+  localStorage.setItem(FOREGROUND_TASK_KEY, match[1]);
+}
+
 function adoptLiveTask(task, { force = false } = {}) {
   if (!taskMatchesPendingStart(task)) return false;
   state.liveTask = task;
@@ -2925,6 +2933,7 @@ window.addEventListener("pageshow", recoverVisibleSession);
 window.addEventListener("online", recoverVisibleSession);
 
 restoreAuthToken();
+restoreForegroundTaskFromHash();
 applyTheme(localStorage.getItem(THEME_KEY) || "light");
 showView("home");
 restoreForm();
