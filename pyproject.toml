@@ -37,7 +37,7 @@ test = [
     "build>=1.2",
     "mypy>=1.10",
     "pytest>=8",
-    "ruff>=0.5",
+    "ruff==0.15.22",
     "twine>=5.1",
     "types-PyYAML>=6.0",
 ]
