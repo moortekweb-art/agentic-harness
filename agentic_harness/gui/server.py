@@ -598,7 +598,7 @@ def make_handler(
                         },
                         status=HTTPStatus.ACCEPTED,
                     )
-                except (ValueError, OSError, HarnessError) as exc:
+                except (ValueError, RuntimeError, OSError, HarnessError) as exc:
                     self._json(
                         {"ok": False, "error": str(exc)},
                         status=HTTPStatus.BAD_REQUEST,

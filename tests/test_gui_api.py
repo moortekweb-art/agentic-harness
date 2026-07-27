@@ -1614,6 +1614,142 @@ def test_embedded_gui_exposes_safe_demo_and_local_model_detection_routes(tmp_pat
     assert finished["result_category"] == "verified_done"
 
 
+def _registry_with_routes(*routes: dict[str, object]) -> dict[str, object]:
+    return {
+        "api_version": "1",
+        "registry_version": 1,
+        "owner": "agentic-harness",
+        "generated_at": "2026-01-01T00:00:00Z",
+        "selection": {"policy": "harness_decides", "operator_hint": ""},
+        "routes": list(routes),
+    }
+
+
+def test_read_only_analysis_requested_route_not_ready_returns_client_error(
+    monkeypatch,
+) -> None:
+    registry = _registry_with_routes(
+        {
+            "id": "local-node1-vllm",
+            "model_id": "local-qwen36-main",
+            "node": "node1",
+            "runtime": "vllm",
+            "role": "primary",
+            "status": "unavailable",
+            "status_reason": "TimeoutError",
+        }
+    )
+    monkeypatch.setattr(gui_server_module, "route_registry_payload", lambda: registry)
+
+    with gui_server(FakeBridge()) as base_url:
+        result = post_error(
+            base_url,
+            "/v1/tasks",
+            json.dumps(
+                {
+                    "kind": "read_only_analysis",
+                    "objective": "inspect the cluster",
+                    "route_id": "local-node1-vllm",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 400
+    assert result.payload["ok"] is False
+    assert "not ready" in str(result.payload["error"])
+
+
+def test_read_only_analysis_unknown_route_returns_client_error(monkeypatch) -> None:
+    registry = _registry_with_routes(
+        {
+            "id": "local-node1-vllm",
+            "model_id": "local-qwen36-main",
+            "node": "node1",
+            "runtime": "vllm",
+            "role": "primary",
+            "status": "ready",
+            "status_reason": "health endpoint passed",
+        }
+    )
+    monkeypatch.setattr(gui_server_module, "route_registry_payload", lambda: registry)
+
+    with gui_server(FakeBridge()) as base_url:
+        result = post_error(
+            base_url,
+            "/v1/tasks",
+            json.dumps(
+                {
+                    "kind": "read_only_analysis",
+                    "objective": "inspect the cluster",
+                    "route_id": "does-not-exist",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 400
+    assert result.payload["ok"] is False
+    assert "unknown route" in str(result.payload["error"])
+
+
+def test_read_only_analysis_no_ready_route_returns_client_error(monkeypatch) -> None:
+    registry = _registry_with_routes(
+        {
+            "id": "local-node1-vllm",
+            "model_id": "local-qwen36-main",
+            "node": "node1",
+            "runtime": "vllm",
+            "role": "primary",
+            "status": "unavailable",
+            "status_reason": "TimeoutError",
+        },
+        {
+            "id": "local-node2-overflow",
+            "model_id": "local-node2-overflow",
+            "node": "node2",
+            "runtime": "vllm",
+            "role": "overflow",
+            "status": "unavailable",
+            "status_reason": "TimeoutError",
+        },
+    )
+    monkeypatch.setattr(gui_server_module, "route_registry_payload", lambda: registry)
+
+    with gui_server(FakeBridge()) as base_url:
+        result = post_error(
+            base_url,
+            "/v1/tasks",
+            json.dumps(
+                {
+                    "kind": "read_only_analysis",
+                    "objective": "inspect the cluster",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 400
+    assert result.payload["ok"] is False
+    assert "no ready" in str(result.payload["error"])
+
+
+def test_route_execution_config_fails_closed_for_unknown_route_id() -> None:
+    from agentic_harness.gui.integration import route_execution_config
+
+    with pytest.raises(ValueError, match="unknown route id"):
+        route_execution_config({"id": "local-node1-vllm-shadow", "node": "node1"})
+    with pytest.raises(ValueError, match="unknown route id"):
+        route_execution_config({})
+
+
+def test_route_execution_config_requires_known_route_id() -> None:
+    from agentic_harness.gui.integration import route_execution_config
+
+    assert route_execution_config({"id": "local-node1-vllm"})["model"] == "qwen36-main"
+    assert route_execution_config({"id": "local-node2-overflow"})["model"] == "node2-overflow"
+
+
 def test_managed_gui_runs_and_dismisses_isolated_demo_without_changing_real_task() -> None:
     bridge = FakeBridge()
     with gui_server(bridge) as base_url:

@@ -1140,8 +1140,10 @@ class EmbeddedExecutionBackend:
             safety = metadata.get("safety")
             if isinstance(safety, dict) and body.get("read_only") is True:
                 safety["read_only"] = True
-            integration_metadata = body.get("integration_metadata")
-            if isinstance(integration_metadata, dict):
+            integration_metadata = _normalize_integration_metadata(
+                body.get("integration_metadata")
+            )
+            if integration_metadata is not None:
                 metadata["integration"] = deepcopy(integration_metadata)
             metadata["execution_strategy"] = strategy.to_metadata()
             frozen_spec: GoalSpec | None = None
@@ -2322,6 +2324,49 @@ def _safe_areas(value: Any, project_dir: Path) -> list[str]:
             raise ValueError(f"allowed path is outside the workspace: {text}") from exc
         result.append(path.as_posix())
     return result
+
+
+_INTEGRATION_METADATA_STRING_KEYS = (
+    "kind",
+    "route_id",
+    "model_id",
+    "node",
+    "runtime",
+    "decision_reason",
+)
+_INTEGRATION_METADATA_BOOL_KEYS = (
+    "connected_workspace_mutated",
+    "model_used",
+)
+
+
+def _normalize_integration_metadata(value: Any) -> dict[str, Any] | None:
+    """Validate and shape-restrict client-supplied integration metadata.
+
+    Only the known scalar fields produced by the route-selection integration
+    payload are copied through; anything else (unexpected keys, nested
+    structures, wrong types) is dropped rather than stored verbatim, since
+    this dict is later republished in public task metadata.
+    """
+
+    if not isinstance(value, dict):
+        return None
+    normalized: dict[str, Any] = {}
+    for key in _INTEGRATION_METADATA_STRING_KEYS:
+        if key in value:
+            raw = value[key]
+            if not isinstance(raw, str):
+                return None
+            normalized[key] = raw
+    for key in _INTEGRATION_METADATA_BOOL_KEYS:
+        if key in value:
+            raw = value[key]
+            if not isinstance(raw, bool):
+                return None
+            normalized[key] = raw
+    if set(value.keys()) - set(normalized.keys()):
+        return None
+    return normalized
 
 
 def _checks(value: Any) -> list[list[str]]:

@@ -154,20 +154,32 @@ def select_route(
     return dict(fallback), "primary unavailable; selected the first ready overflow route"
 
 
-def route_execution_config(route: dict[str, Any]) -> dict[str, str]:
-    """Return private provider settings for a selected route."""
-
-    if route.get("node") == "node2":
-        return {
-            "endpoint": "http://100.64.47.42:8009/v1/chat/completions",
-            "model": "node2-overflow",
-            "api_key_env": "VLLM_API_KEY",
-        }
-    return {
+_ROUTE_EXECUTION_CONFIG: dict[str, dict[str, str]] = {
+    "local-node1-vllm": {
         "endpoint": "http://127.0.0.1:8008/v1/chat/completions",
         "model": "qwen36-main",
         "api_key_env": "VLLM_API_KEY",
-    }
+    },
+    "local-node2-overflow": {
+        "endpoint": "http://100.64.47.42:8009/v1/chat/completions",
+        "model": "node2-overflow",
+        "api_key_env": "VLLM_API_KEY",
+    },
+}
+
+
+def route_execution_config(route: dict[str, Any]) -> dict[str, str]:
+    """Return private provider settings for a selected route.
+
+    Fails closed: an unrecognized route id must not silently execute against
+    Node1's live endpoint, even if its node label happens to be ``node1``.
+    """
+
+    route_id = route.get("id")
+    config = _ROUTE_EXECUTION_CONFIG.get(str(route_id))
+    if config is None:
+        raise ValueError(f"unknown route id: {route_id!r}")
+    return dict(config)
 
 
 def read_only_analysis_config(route: dict[str, Any]) -> dict[str, Any]:

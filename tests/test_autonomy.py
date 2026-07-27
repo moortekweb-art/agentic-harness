@@ -1404,6 +1404,134 @@ def test_failed_review_evidence_survives_automatic_repair(tmp_path: Path) -> Non
     assert history[0]["criteria"][0]["message"] == "focused review found a regression"
 
 
+def test_strict_autonomy_refuses_unproven_completion(tmp_path: Path) -> None:
+    worker = SequenceWorker(
+        [WorkerResult(success=True, summary="done") for _ in range(3)]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(supervisor).run("do not claim success without evidence")
+
+    assert goal.status is GoalStatus.FAILED
+    assert goal.metadata["accepted"] is not True
+    audit = goal.metadata["autonomy"]["completion_audit"]
+    assert audit["passed"] is False
+    assert "structured completion claim" in " ".join(audit["failures"])
+
+
+def test_strict_autonomy_refuses_a_malformed_completion_schema(tmp_path: Path) -> None:
+    malformed = complete_outcome()
+    malformed.pop("blockers")
+    worker = SequenceWorker(
+        [WorkerResult(success=True, summary="done", outcome=malformed) for _ in range(3)]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=passing_reviewer(),
+    )
+
+    goal = AutonomousRunner(supervisor).run("require a complete result schema")
+
+    assert goal.status is GoalStatus.FAILED
+    audit = goal.metadata["autonomy"]["completion_audit"]
+    assert audit["passed"] is False
+    assert "blockers list is missing" in audit["failures"]
+
+
+def test_strict_completion_cannot_be_downgraded_when_resumed(tmp_path: Path) -> None:
+    first = Supervisor(
+        project_dir=tmp_path,
+        worker=SequenceWorker(
+            [
+                WorkerResult(
+                    success=True,
+                    summary="partial",
+                    outcome={
+                        "status": "progress",
+                        "checkpoint": "partial",
+                        "current_subgoal": "finish",
+                        "plan": [{"step": "finish", "status": "in_progress"}],
+                        "requirements": [],
+                    },
+                )
+            ]
+        ),
+        reviewer=passing_reviewer(),
+    )
+    strict_goal = AutonomousRunner(first).step("preserve strict completion")
+
+    resumed = AutonomousRunner(
+        Supervisor(
+            project_dir=tmp_path,
+            worker=SequenceWorker([WorkerResult(success=True, summary="unstructured")]),
+            reviewer=passing_reviewer(),
+        ),
+        policy=AutonomyPolicy(require_completion_claim=False),
+    ).step()
+
+    assert strict_goal.metadata["autonomy"]["strict_completion"] is True
+    assert resumed.status is not GoalStatus.DONE
+    assert resumed.metadata["accepted"] is False
+    audit = resumed.metadata["autonomy"]["completion_audit"]
+    assert audit["passed"] is False
+    assert "structured completion claim is missing" in audit["failures"]
+
+
+def test_strict_completion_requires_an_independent_review_criterion(tmp_path: Path) -> None:
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=SequenceWorker(
+            [WorkerResult(success=True, summary="claimed", outcome=complete_outcome())]
+        ),
+    )
+
+    goal = AutonomousRunner(supervisor).step("verify independently")
+
+    assert goal.status is not GoalStatus.DONE
+    assert goal.metadata["accepted"] is False
+    audit = goal.metadata["autonomy"]["completion_audit"]
+    assert audit["passed"] is False
+    assert "deterministic review has no independent criterion" in audit["failures"]
+
+
+def test_early_model_claim_citing_review_evidence_cannot_bypass_independent_review(
+    tmp_path: Path,
+) -> None:
+    """A completion claim citing ``review:1`` must not be trusted unless that
+    exact review criterion actually passed on this attempt. Guards against a
+    worker citing the evidence id speculatively before independent review runs.
+    """
+
+    outcome = complete_outcome("review:1")
+    worker = SequenceWorker(
+        [WorkerResult(success=True, summary="claims complete", outcome=outcome)]
+    )
+    failing_reviewer = DeterministicReviewer(
+        [
+            ReviewCriterion(
+                name="deterministic_check",
+                check=lambda goal: (False, "independent check has not run yet"),
+                description="Focused check must pass",
+            )
+        ]
+    )
+    supervisor = Supervisor(
+        project_dir=tmp_path,
+        worker=worker,
+        reviewer=failing_reviewer,
+    )
+
+    goal = AutonomousRunner(supervisor).step("reject premature review citation")
+
+    assert goal.status is not GoalStatus.DONE
+    assert goal.metadata["accepted"] is False
+    blocker = goal.metadata["autonomy"]["blocker"]
+    assert blocker["reason"] == "independent check has not run yet"
 def test_restart_preserves_original_workspace_snapshot(tmp_path: Path) -> None:
     target = tmp_path / "target.txt"
     target.write_text("before\n", encoding="utf-8")

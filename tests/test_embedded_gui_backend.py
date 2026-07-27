@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from agentic_harness.gui import backend as gui_backend_module
+from agentic_harness.gui.backend import _normalize_integration_metadata
 from agentic_harness.cli import write_goal_report
 from agentic_harness.core.artifacts import ArtifactStore
 from agentic_harness.core.autonomy import AUTONOMY_CONTRACT, AutonomousRunner
@@ -275,6 +276,39 @@ def test_embedded_high_assurance_rejects_stale_review_binding(tmp_path) -> None:
     assert result["status"] == "blocked"
     assert "no longer current" in str(result["summary"])
     assert backend.store.read_current_goal().id == "replacement-task"
+
+
+def test_normalize_integration_metadata_accepts_the_known_route_decision_shape() -> None:
+    value = {
+        "kind": "read_only_analysis",
+        "route_id": "local-node1-vllm",
+        "model_id": "local-qwen36-main",
+        "node": "node1",
+        "runtime": "vllm",
+        "decision_reason": "primary route is ready",
+        "connected_workspace_mutated": False,
+        "model_used": True,
+    }
+
+    assert _normalize_integration_metadata(value) == value
+
+
+def test_normalize_integration_metadata_rejects_non_dict_input() -> None:
+    assert _normalize_integration_metadata("not-a-dict") is None
+    assert _normalize_integration_metadata(["kind", "route_id"]) is None
+    assert _normalize_integration_metadata(None) is None
+
+
+def test_normalize_integration_metadata_rejects_unknown_keys() -> None:
+    value = {"kind": "read_only_analysis", "unexpected": "value"}
+
+    assert _normalize_integration_metadata(value) is None
+
+
+def test_normalize_integration_metadata_rejects_wrong_value_types() -> None:
+    assert _normalize_integration_metadata({"kind": 123}) is None
+    assert _normalize_integration_metadata({"model_used": "true"}) is None
+    assert _normalize_integration_metadata({"route_id": {"nested": "object"}}) is None
 
 
 def test_embedded_backend_persists_provider_independent_quick_strategy(tmp_path) -> None:
