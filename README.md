@@ -609,6 +609,7 @@ goal/report smoke test, and writes `SHA256SUMS` beside the artifacts.
 - [Autonomous goal contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/CODEX_GOAL_PARITY.md)
 - [Evidence contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EVIDENCE_CONTRACT.md)
 - [Turnstone integration boundary](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/TURNSTONE_INTEGRATION.md)
+- [Local Studio integration contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/LOCAL_STUDIO_INTEGRATION.md)
 - [Release checklist](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/RELEASE_CHECKLIST.md)
 - [PyPI trusted publishing](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/PYPI_TRUSTED_PUBLISHING.md)
 - [Security policy](https://github.com/moortekweb-art/agentic-harness/blob/main/SECURITY.md)
