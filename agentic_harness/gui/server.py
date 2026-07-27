@@ -30,6 +30,10 @@ from agentic_harness.core.strategies import (
     PUBLIC_STRATEGIES,
 )
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
+from agentic_harness.gui.integration import (
+    integration_health_payload,
+    route_registry_payload,
+)
 from agentic_harness.gui.api import (
     command_task,
     details_payload,
@@ -261,7 +265,7 @@ def make_handler(
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             route = parsed.path
-            if route.startswith("/api/") and not self._trusted_host():
+            if (route.startswith("/api/") or route.startswith("/v1/")) and not self._trusted_host():
                 return
             if route == "/api/tasks/stream":
                 if not self._same_origin():
@@ -270,10 +274,20 @@ def make_handler(
                     return
                 self._websocket_status()
                 return
-            if route.startswith("/api/") and not self._allowed(parsed.query):
+            if (route.startswith("/api/") or route.startswith("/v1/")) and not self._allowed(parsed.query):
                 return
             active = active_embedded_service()
-            if route in {"/api/health", "/api/status"}:
+            if route == "/v1/health":
+                self._json(integration_health_payload())
+            elif route == "/v1/routes":
+                self._json(route_registry_payload())
+            elif route == "/v1/tasks":
+                self._json(self._integration_tasks(active))
+            elif route == "/v1/tasks/current":
+                self._json(self._integration_current_task(active))
+            elif route.startswith("/v1/tasks/"):
+                self._integration_task_get(route, parsed, active)
+            elif route in {"/api/health", "/api/status"}:
                 self._json(public_health())
             elif route == "/api/modes":
                 if embedded:
@@ -402,7 +416,7 @@ def make_handler(
                     if active is not None
                     else session.export()
                 )
-            elif route.startswith("/api/"):
+            elif route.startswith("/api/") or route.startswith("/v1/"):
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
             else:
                 self._static(route)
@@ -410,17 +424,62 @@ def make_handler(
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             route = parsed.path
-            if route.startswith("/api/") and not self._trusted_host():
+            if (route.startswith("/api/") or route.startswith("/v1/")) and not self._trusted_host():
                 return
             if not self._same_origin():
                 return
-            if route.startswith("/api/") and not self._allowed(parsed.query):
+            if (route.startswith("/api/") or route.startswith("/v1/")) and not self._allowed(parsed.query):
                 return
             body = self._read_json()
             if body is None:
                 return
             active = active_embedded_service()
-            if route == "/api/demo":
+            if route == "/v1/tasks":
+                kind = str(body.get("kind") or "").strip().lower()
+                if kind not in {"safe_demo", "read_only_canary"}:
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "unsupported task kind",
+                            "supported_kinds": ["read_only_canary"],
+                            "detail": (
+                                "The first integration slice only exposes the credential-free "
+                                "read-only canary. Managed tasks remain on /api/tasks."
+                            ),
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                try:
+                    task = demo_service.start_demo()
+                    self._json(
+                        {
+                            "api_version": "1",
+                            "accepted": True,
+                            "id": task.get("id"),
+                            "task": task,
+                            "ownership": {
+                                "executor": "agentic-harness",
+                                "operator": "local-studio",
+                            },
+                            "safety": {
+                                "kind": "read_only_canary",
+                                "connected_workspace_mutated": False,
+                                "model_used": False,
+                            },
+                            "route_decision": {
+                                "route_id": "safe-demo",
+                                "reason": "credential-free isolated Harness canary",
+                            },
+                        },
+                        status=HTTPStatus.ACCEPTED,
+                    )
+                except (ValueError, OSError, HarnessError) as exc:
+                    self._json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+            elif route == "/api/demo":
                 try:
                     self._json(demo_service.start_demo())
                 except (ValueError, OSError, HarnessError) as exc:
@@ -688,6 +747,76 @@ def make_handler(
                     self._json({"ok": True, "tasks": session.history()})
             else:
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
+
+        def _integration_current_task(
+            self, active: EmbeddedExecutionBackend | None
+        ) -> dict[str, Any]:
+            if active is not None:
+                return active.status()
+            return session.record(status_task(bridge))
+
+        def _integration_tasks(self, active: EmbeddedExecutionBackend | None) -> dict[str, Any]:
+            if active is not None:
+                current = active.status()
+                return {
+                    "api_version": "1",
+                    "current": current,
+                    "tasks": active.history(),
+                    "owner": "agentic-harness",
+                }
+            payload = tasks_payload(bridge)
+            current = session.record(payload["current"])
+            return {
+                "api_version": "1",
+                "current": current,
+                "tasks": session.history() or payload["tasks"],
+                "owner": "agentic-harness",
+            }
+
+        def _integration_task_get(
+            self,
+            route: str,
+            parsed: Any,
+            active: EmbeddedExecutionBackend | None,
+        ) -> None:
+            suffix = route.removeprefix("/v1/tasks/").strip("/")
+            parts = suffix.split("/") if suffix else []
+            task_id = parts[0] if parts else ""
+            if not task_id or task_id == "current":
+                self._json({"ok": False, "error": "task id required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            tasks = active.history() if active is not None else session.history()
+            task = next((item for item in tasks if str(item.get("id")) == task_id), None)
+            if task is None and active is not None:
+                current = active.status()
+                if str(current.get("id")) == task_id:
+                    task = current
+            if task is None:
+                self._json({"ok": False, "error": "task not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            if len(parts) == 1:
+                self._json({"api_version": "1", "task": task, "owner": "agentic-harness"})
+                return
+            if parts[1] == "events":
+                after_raw = parse_qs(parsed.query).get("after", ["0"])[0]
+                try:
+                    after = max(0, int(after_raw))
+                except ValueError:
+                    after = 0
+                events = active.events(after=after) if active is not None else []
+                self._json({"api_version": "1", "task_id": task_id, "events": events})
+                return
+            if parts[1] == "artifacts":
+                artifacts = task.get("artifacts")
+                self._json(
+                    {
+                        "api_version": "1",
+                        "task_id": task_id,
+                        "artifacts": artifacts if isinstance(artifacts, list) else [],
+                    }
+                )
+                return
+            self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
         def log_message(self, format: str, *args: object) -> None:
             return
