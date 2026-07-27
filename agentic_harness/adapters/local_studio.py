@@ -182,6 +182,7 @@ class _HttpRunRecord:
     settled: bool = False
     failed: bool = False
     cancelled: bool = False
+    error_message: str = ""
 
 
 class HttpLocalStudioTransport:
@@ -271,13 +272,14 @@ class HttpLocalStudioTransport:
             record.started = True
         if isinstance(last_error, str) and last_error.strip():
             record.failed = True
+            record.error_message = redact_secrets(last_error.strip())
         if record.cancelled:
             return _cancelled_state(handle)
         if record.failed and not active:
             summary = (
-                redact_secrets(last_error.strip())
+                record.error_message
                 if isinstance(last_error, str) and last_error.strip()
-                else "Local Studio agent session failed"
+                else record.error_message or "Local Studio agent session failed"
             )
             return LocalStudioRunState(
                 run_id=handle.run_id,
@@ -382,6 +384,10 @@ class HttpLocalStudioTransport:
                 for key in ("error", "errorMessage", "aborted", "cancelled", "canceled", "failed")
             ):
                 record.failed = True
+            event_error = _event_error_message(event)
+            if event_error:
+                record.failed = True
+                record.error_message = redact_secrets(event_error)
 
     def _request_json(
         self,
@@ -420,6 +426,27 @@ class HttpLocalStudioTransport:
         if not isinstance(decoded, dict):
             raise RuntimeError("Local Studio returned a non-object JSON response")
         return decoded
+
+
+def _event_error_message(value: object) -> str:
+    """Find nested runtime error fields in an untrusted Pi event."""
+    if isinstance(value, Mapping):
+        for key in ("error", "errorMessage", "lastError"):
+            detail = value.get(key)
+            if isinstance(detail, str) and detail.strip():
+                return detail.strip()
+        if value.get("stopReason") == "error":
+            return "Local Studio agent turn reported an error"
+        for child in value.values():
+            detail = _event_error_message(child)
+            if detail:
+                return detail
+    elif isinstance(value, list):
+        for child in value:
+            detail = _event_error_message(child)
+            if detail:
+                return detail
+    return ""
 
 
 def _required_string(payload: Mapping[str, object], key: str) -> str:

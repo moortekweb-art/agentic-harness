@@ -278,6 +278,44 @@ def test_http_transport_fails_fast_on_inactive_runtime_error(tmp_path: Path) -> 
     assert "provider failed" in result.summary
 
 
+def test_http_transport_rejects_nested_agent_error(tmp_path: Path) -> None:
+    _init_git_workspace(tmp_path)
+    transport = StubHttpLocalStudioTransport(
+        [
+            {"runtimeSessionId": "run-1"},
+            {
+                "sessionId": "run-1",
+                "status": {"active": False, "lastError": None},
+                "events": [
+                    {
+                        "seq": 1,
+                        "event": {
+                            "type": "agent_end",
+                            "messages": [
+                                {
+                                    "stopReason": "error",
+                                    "errorMessage": "model rejected request",
+                                }
+                            ],
+                        },
+                    },
+                    {"seq": 2, "event": {"type": "agent_settled"}},
+                ],
+            },
+        ],
+        tmp_path,
+    )
+
+    result = LocalStudioWorker(
+        transport,
+        workspace=tmp_path,
+        poll_interval=0,
+    ).run(Goal("inspect fixture", id="goal-1", metadata={"worker_run_id": "run-1"}))
+
+    assert result.success is False
+    assert "model rejected request" in result.summary
+
+
 @pytest.mark.parametrize(
     ("endpoint", "message"),
     [
