@@ -35,8 +35,7 @@ def freeze_verifier_assets(
             candidates.add(candidate)
         elif candidate.is_dir():
             candidates.update(_regular_files(root, candidate))
-            relative = candidate.relative_to(root).as_posix()
-            protected_patterns.add(f"{relative}/**")
+            _protect_directory_membership(root, candidate, protected_patterns)
 
     for command in review_commands:
         lowered = [Path(argument).name.lower() for argument in command]
@@ -55,6 +54,7 @@ def freeze_verifier_assets(
                 candidates.add(candidate)
             elif candidate.is_dir():
                 candidates.update(_regular_files(root, candidate))
+                _protect_directory_membership(root, candidate, protected_patterns)
 
         python_verifier = any(
             "pytest" in argument or argument == "unittest" for argument in lowered
@@ -77,7 +77,14 @@ def freeze_verifier_assets(
             protected_paths.update(python_paths)
             protected_patterns.add("**/conftest.py")
             _add_patterns(root, candidates, python_paths)
-        if any(argument in {"npm", "pnpm", "yarn", "bun"} for argument in lowered):
+        command_names = set(lowered)
+        if command_names & {"npm", "pnpm", "yarn", "bun"}:
+            if not explicit_assets:
+                raise ConfigError(
+                    "verified best-of-N treats package-manager test commands as "
+                    "opaque; configure review_assets with the verifier and every "
+                    "repository-controlled dependency"
+                )
             boundary_established = True
             javascript_paths = (
                 "package.json",
@@ -99,7 +106,6 @@ def freeze_verifier_assets(
             protected_patterns.update(("**/Cargo.toml", "**/Cargo.lock"))
             _add_patterns(root, candidates, ("Cargo.toml", "Cargo.lock"))
 
-        command_names = set(lowered)
         if "go" in command_names:
             boundary_established = True
             protected_paths.update(("go.mod", "go.sum", "go.work", "go.work.sum"))
@@ -111,9 +117,21 @@ def freeze_verifier_assets(
         if command_names & {"mvn", "mvnw", "mvnw.cmd", "mvnw.bat"}:
             boundary_established = True
             protected_paths.update(("mvnw", "mvnw.cmd", "mvnw.bat"))
-            protected_patterns.update(("pom.xml", "**/pom.xml", ".mvn/**"))
+            protected_patterns.update(
+                (
+                    "pom.xml",
+                    "**/pom.xml",
+                    ".mvn/**",
+                    "src/test/**",
+                    "**/src/test/**",
+                )
+            )
             _add_patterns(root, candidates, ("mvnw", "mvnw.cmd", "mvnw.bat"))
-            _add_globs(root, candidates, ("**/pom.xml", ".mvn/**/*"))
+            _add_globs(
+                root,
+                candidates,
+                ("**/pom.xml", ".mvn/**/*", "**/src/test/**/*"),
+            )
         if command_names & {"gradle", "gradlew", "gradlew.cmd", "gradlew.bat"}:
             boundary_established = True
             protected_paths.update(("gradlew", "gradlew.cmd", "gradlew.bat"))
@@ -130,6 +148,8 @@ def freeze_verifier_assets(
                     "**/settings.gradle.kts",
                     "**/gradle.properties",
                     "gradle/wrapper/**",
+                    "src/test/**",
+                    "**/src/test/**",
                 )
             )
             _add_patterns(root, candidates, ("gradlew", "gradlew.cmd", "gradlew.bat"))
@@ -143,6 +163,7 @@ def freeze_verifier_assets(
                     "**/settings.gradle.kts",
                     "**/gradle.properties",
                     "gradle/wrapper/**/*",
+                    "**/src/test/**/*",
                 ),
             )
         if "dotnet" in command_names:
@@ -171,6 +192,10 @@ def freeze_verifier_assets(
                     "**/*.vbproj",
                     "**/*.props",
                     "**/*.targets",
+                    "tests/**",
+                    "**/tests/**",
+                    "**/*Test.cs",
+                    "**/*Tests.cs",
                 )
             )
             _add_patterns(
@@ -189,6 +214,9 @@ def freeze_verifier_assets(
                     "**/*.vbproj",
                     "**/*.props",
                     "**/*.targets",
+                    "**/tests/**/*",
+                    "**/*Test.cs",
+                    "**/*Tests.cs",
                 ),
             )
         if "rspec" in command_names:
@@ -409,6 +437,15 @@ def _add_globs(root: Path, candidates: set[Path], patterns: tuple[str, ...]) -> 
             if candidate.is_file():
                 require_lexical_regular_path(root, candidate, label=str(candidate))
                 candidates.add(candidate)
+
+
+def _protect_directory_membership(
+    root: Path,
+    directory: Path,
+    protected_patterns: set[str],
+) -> None:
+    relative = directory.relative_to(root).as_posix()
+    protected_patterns.add("**" if relative == "." else f"{relative}/**")
 
 
 def _matching_paths(root: Path, pattern: str, available_paths: set[str]) -> list[str]:

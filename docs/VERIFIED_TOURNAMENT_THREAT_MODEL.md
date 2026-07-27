@@ -26,8 +26,10 @@ A candidate may be selected only when all of these invariants hold:
 ## Verifier boundary
 
 The manifest includes repository-local command arguments, including argument
-zero, plus known definitions for Python, JavaScript, Rust, Go, Maven, Gradle,
-.NET, and RSpec. It records both file hashes and protected path-set membership,
+zero, plus known definitions for Python, Rust, Go, Maven, Gradle, .NET, and
+RSpec. JavaScript package-manager commands are treated as opaque and require
+an explicit `review.assets` dependency boundary. It records both file hashes
+and protected path-set membership,
 including sensitive paths that were absent at tournament start. Lexical
 symlinks, symlinked parent components, Windows reparse points, and parent
 traversal are rejected before hashing and on every drift check. Python

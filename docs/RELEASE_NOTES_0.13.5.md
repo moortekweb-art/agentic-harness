@@ -3,6 +3,15 @@
 Version 0.13.5 fixes a Home-screen state conflict that could make a ready
 installation feel stuck on an older completed task.
 
+## Verified boundary hardening
+
+- Treats `npm`, `pnpm`, `yarn`, and `bun` test commands as opaque unless the
+  complete repository-controlled verifier boundary is declared with
+  `review.assets` or top-level `review_assets`.
+- Freezes direct verifier-directory membership and standard Maven, Gradle, and
+  .NET test-source membership so candidates cannot add acceptance inputs after
+  the manifest is captured.
+
 ## Ready means a new task can start
 
 - Keeps Home open when installation readiness says a new task can start.

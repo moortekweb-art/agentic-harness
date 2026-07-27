@@ -193,7 +193,9 @@ All candidates start from the same commit, receive the same immutable GoalSpec,
 and run the same configured checks. Repository-local command executables,
 test-suite membership, verifier definitions, and verifier-sensitive paths that
 must remain absent are frozen before work. The built-in manifests cover Python,
-JavaScript, Rust, Go, Maven, Gradle, .NET, and RSpec. A candidate that changes,
+Rust, Go, Maven, Gradle, .NET, and RSpec; JavaScript package-manager commands
+require explicit verifier assets because their scripts and transitive test
+inputs are opaque. A candidate that changes,
 adds, removes, or replaces those assets with a symlink is disqualified even if
 its altered check returns zero. Python module checks also use safe-path startup
 so a candidate cannot shadow the installed Pytest or unittest package from the

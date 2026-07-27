@@ -804,6 +804,153 @@ def test_explicit_custom_verifier_directory_freezes_membership(tmp_path: Path) -
     )
 
 
+def test_package_manager_test_requires_explicit_review_assets(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "package.json").write_text('{"scripts":{"test":"node verify.js"}}\n', encoding="utf-8")
+    (root / "verify.js").write_text("process.exit(0);\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add package verifier")
+
+    with pytest.raises(ConfigError, match="package-manager"):
+        tournament_module._freeze_verifier_assets(root, [["npm", "test"]])
+
+
+def test_explicit_package_manager_assets_freeze_script_and_directory_membership(
+    tmp_path: Path,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / "package.json").write_text('{"scripts":{"test":"node verify.js"}}\n', encoding="utf-8")
+    (root / "verify.js").write_text("process.exit(0);\n", encoding="utf-8")
+    (root / "integration").mkdir()
+    (root / "integration" / "smoke.test.js").write_text("console.log('ok');\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add package verifier assets")
+
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [["npm", "test"]],
+        review_assets=["package.json", "verify.js", "integration"],
+    )
+    (root / "verify.js").write_text("process.exit(1);\n", encoding="utf-8")
+    (root / "integration" / "new.test.js").write_text("console.log('new');\n", encoding="utf-8")
+
+    drift = tournament_module._verifier_asset_drift(root, assets)
+    assert "verify.js" in drift
+    assert "integration/new.test.js" in drift
+
+
+@pytest.mark.skipif(os.name == "nt", reason="direct POSIX npm shim regression")
+def test_npm_verifier_tamper_is_blocked_end_to_end(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path, tamper_verifier=True)
+    worker = root / "worker.py"
+    source = worker.read_text(encoding="utf-8")
+    source = source.replace(
+        'Path("check.py").write_text("raise SystemExit(0)\\n", encoding="utf-8")',
+        'Path("verify.js").write_text("raise SystemExit(0)\\n", encoding="utf-8")',
+    )
+    assert 'Path("verify.js")' in source
+    worker.write_text(source, encoding="utf-8")
+    (root / "package.json").write_text(
+        '{"scripts":{"test":"python verify.js"}}\n', encoding="utf-8"
+    )
+    (root / "verify.js").write_text(
+        "from pathlib import Path\n"
+        "raise SystemExit(0 if Path('value.txt').read_text() == 'good\\n' else 1)\n",
+        encoding="utf-8",
+    )
+    npm = root / "npm"
+    npm.write_text(f"#!/bin/sh\nexec {sys.executable} verify.js\n", encoding="utf-8")
+    npm.chmod(0o755)
+    _git(root, "add", "worker.py", "package.json", "verify.js", "npm")
+    _git(root, "commit", "-m", "use package-manager verifier")
+
+    result = run_verified_tournament(
+        root,
+        "Make value.txt contain good.",
+        candidate_count=2,
+        review_commands=[["./npm", "test"]],
+        review_assets=["npm", "package.json", "verify.js"],
+        max_attempts=1,
+    )
+
+    assert result.status == "blocked"
+    assert result.winner is None
+    assert result.applied is False
+    assert result.candidates[1].receipt_category == "verified_done"
+    assert result.candidates[1].verified is False
+    assert result.candidates[1].verifier_asset_drift == ["verify.js"]
+    assert root.joinpath("value.txt").read_text(encoding="utf-8") == "original\n"
+
+
+def test_direct_python_verifier_directory_freezes_membership(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "integration").mkdir()
+    (root / "integration" / "test_smoke.py").write_text(
+        "def test_smoke():\n    assert True\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add integration verifier directory")
+
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [[sys.executable, "-m", "pytest", "integration", "-q"]],
+    )
+    (root / "integration" / "test_added.py").write_text(
+        "def test_added():\n    assert True\n", encoding="utf-8"
+    )
+
+    assert "integration/test_added.py" in tournament_module._verifier_asset_drift(
+        root,
+        assets,
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "baseline", "test_source"),
+    [
+        (
+            ["./mvnw", "test"],
+            {"mvnw": "#!/bin/sh\nexit 0\n", "pom.xml": "<project/>\n"},
+            "module/src/test/java/FooTest.java",
+        ),
+        (
+            ["./gradlew", "test"],
+            {
+                "gradlew": "#!/bin/sh\nexit 0\n",
+                "settings.gradle": "rootProject.name = 'demo'\n",
+            },
+            "module/src/test/kotlin/FooTest.kt",
+        ),
+        (
+            ["dotnet", "test"],
+            {"demo.sln": "Microsoft Visual Studio Solution File\n"},
+            "src/Project.Tests/FooTests.cs",
+        ),
+    ],
+)
+def test_standard_test_sources_are_frozen(
+    tmp_path: Path,
+    command: list[str],
+    baseline: dict[str, str],
+    test_source: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    for relative, content in baseline.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    source = root / test_source
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("baseline test source\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add ecosystem verifier assets")
+
+    assets = tournament_module._freeze_verifier_assets(root, [command])
+    source.write_text("candidate changed test source\n", encoding="utf-8")
+
+    assert test_source in tournament_module._verifier_asset_drift(root, assets)
+
+
 def test_pytest_shadow_candidate_cannot_be_accepted_end_to_end(tmp_path: Path) -> None:
     root, _ = _project(tmp_path)
     tests_dir = root / "tests"
