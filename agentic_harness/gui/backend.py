@@ -1137,6 +1137,12 @@ class EmbeddedExecutionBackend:
                 secret_env_names=[config.llm_api_key_env],
                 interface="gui",
             )
+            safety = metadata.get("safety")
+            if isinstance(safety, dict) and body.get("read_only") is True:
+                safety["read_only"] = True
+            integration_metadata = body.get("integration_metadata")
+            if isinstance(integration_metadata, dict):
+                metadata["integration"] = deepcopy(integration_metadata)
             metadata["execution_strategy"] = strategy.to_metadata()
             frozen_spec: GoalSpec | None = None
             if candidate_count > 1:
@@ -1921,6 +1927,21 @@ class EmbeddedExecutionBackend:
             summary = receipt.trusted_reason
         elif terminal and not report_ready:
             summary = "Finalizing the durable terminal report."
+        public_metadata = {
+            "created_at": goal.created_at,
+            "updated_at": goal.updated_at,
+            "observed_at": goal.updated_at,
+            "worker": self._public_worker(),
+            "strategy": _public_strategy(goal),
+            "budget": autonomy.get("budget")
+            if isinstance(autonomy.get("budget"), dict)
+            else {},
+        }
+        integration = goal.metadata.get("integration")
+        if isinstance(integration, dict):
+            public_metadata["integration"] = dict(integration)
+        public_metadata["specification_review"] = self._specification_review(goal, autonomy)
+        public_metadata["verified_tournament"] = _public_tournament(goal)
         return {
             "contract": GUI_TASK_CONTRACT,
             "id": goal.id,
@@ -1957,18 +1978,7 @@ class EmbeddedExecutionBackend:
                 verification=verification,
                 requirements=requirements,
             ),
-            "metadata": {
-                "created_at": goal.created_at,
-                "updated_at": goal.updated_at,
-                "observed_at": goal.updated_at,
-                "worker": self._public_worker(),
-                "strategy": _public_strategy(goal),
-                "budget": autonomy.get("budget")
-                if isinstance(autonomy.get("budget"), dict)
-                else {},
-                "specification_review": self._specification_review(goal, autonomy),
-                "verified_tournament": _public_tournament(goal),
-            },
+            "metadata": public_metadata,
         }
 
     def _requirement_rows(
@@ -2583,6 +2593,7 @@ def _public_safety(goal: Goal) -> dict[str, Any]:
             if isinstance(row, dict)
         ],
         "path_enforcement": safety.get("path_enforcement") is True,
+        "read_only": safety.get("read_only") is True,
     }
 
 

@@ -32,7 +32,10 @@ from agentic_harness.core.strategies import (
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.gui.integration import (
     integration_health_payload,
+    read_only_analysis_config,
     route_registry_payload,
+    route_execution_config,
+    select_route,
 )
 from agentic_harness.gui.api import (
     command_task,
@@ -176,6 +179,9 @@ def make_handler(
     else:
         managed_demo_workspace = TemporaryDirectory(prefix="agentic-harness-managed-demo-host-")
         demo_service = EmbeddedExecutionBackend(managed_demo_workspace.name)
+    analysis_workspace: TemporaryDirectory[str] | None = None
+    analysis_service: EmbeddedExecutionBackend | None = None
+    analysis_integration: dict[str, Any] = {}
     auth_token = os.environ.get("AGENTIC_HARNESS_GUI_TOKEN", "").strip()
     rate_limiter = RateLimiter(limit=240, window_seconds=60)
     trusted_hosts = allowed_hosts or {"127.0.0.1", "localhost", "::1"}
@@ -187,6 +193,88 @@ def make_handler(
         if embedded_service is not None:
             return embedded_service
         return demo_service if demo_task() is not None else None
+
+    def integration_active_service(
+        active: EmbeddedExecutionBackend | None,
+    ) -> EmbeddedExecutionBackend | None:
+        return analysis_service if analysis_service is not None else active
+
+    def dispose_analysis() -> None:
+        nonlocal analysis_workspace, analysis_service, analysis_integration
+        analysis_service = None
+        analysis_integration = {}
+        if analysis_workspace is not None:
+            analysis_workspace.cleanup()
+            analysis_workspace = None
+
+    def start_read_only_analysis(body: dict[str, Any]) -> dict[str, Any]:
+        nonlocal analysis_workspace, analysis_service, analysis_integration
+        objective = str(body.get("objective") or "").strip()
+        if not objective:
+            raise ValueError("objective must not be empty")
+        if analysis_service is not None:
+            current = analysis_service.status()
+            if str(current.get("status")) in {
+                "starting",
+                "working",
+                "checking",
+                "stopping",
+                "needs_review",
+            }:
+                return current
+            dispose_analysis()
+        active = active_embedded_service()
+        if active is not None:
+            current = active.status()
+            if str(current.get("status")) in {
+                "starting",
+                "working",
+                "checking",
+                "stopping",
+                "needs_review",
+            }:
+                raise ValueError("finish the active safe canary before starting model analysis")
+            demo_service.clear_demo()
+
+        registry = route_registry_payload()
+        requested_route = str(body.get("route_id") or body.get("route_hint") or "")
+        route, reason = select_route(registry, requested_route)
+        provider = route_execution_config(route)
+        analysis_workspace = TemporaryDirectory(prefix="agentic-harness-read-only-analysis-")
+        workspace = Path(analysis_workspace.name).resolve()
+        workspace.chmod(0o700)
+        analysis_service = EmbeddedExecutionBackend(workspace)
+        analysis_service._write_config(read_only_analysis_config(route))
+        analysis_integration = {
+            "kind": "read_only_analysis",
+            "route_id": route["id"],
+            "model_id": route["model_id"],
+            "node": route["node"],
+            "runtime": route["runtime"],
+            "decision_reason": reason,
+            "connected_workspace_mutated": False,
+            "model_used": True,
+        }
+        analysis_objective = "\n".join(
+            [
+                "Read-only cluster analysis through Agentic Harness.",
+                "Do not call create_file or replace_text. Do not claim completion without a concise analysis.",
+                "Use report_outcome with status=complete when the answer is ready.",
+                f"Selected route: {route['id']} ({provider['model']}).",
+                "Question:",
+                objective[:4_000],
+            ]
+        )
+        task = analysis_service.start(
+            {
+                "objective": analysis_objective,
+                "strategy": "quick",
+                "safe_areas": [],
+                "read_only": True,
+                "integration_metadata": analysis_integration,
+            }
+        )
+        return task
 
     def public_setup() -> dict[str, Any]:
         if embedded_service is not None:
@@ -277,16 +365,17 @@ def make_handler(
             if (route.startswith("/api/") or route.startswith("/v1/")) and not self._allowed(parsed.query):
                 return
             active = active_embedded_service()
+            integration_active = integration_active_service(active)
             if route == "/v1/health":
                 self._json(integration_health_payload())
             elif route == "/v1/routes":
                 self._json(route_registry_payload())
             elif route == "/v1/tasks":
-                self._json(self._integration_tasks(active))
+                self._json(self._integration_tasks(integration_active))
             elif route == "/v1/tasks/current":
-                self._json(self._integration_current_task(active))
+                self._json(self._integration_current_task(integration_active))
             elif route.startswith("/v1/tasks/"):
-                self._integration_task_get(route, parsed, active)
+                self._integration_task_get(route, parsed, integration_active)
             elif route in {"/api/health", "/api/status"}:
                 self._json(public_health())
             elif route == "/api/modes":
@@ -436,21 +525,56 @@ def make_handler(
             active = active_embedded_service()
             if route == "/v1/tasks":
                 kind = str(body.get("kind") or "").strip().lower()
-                if kind not in {"safe_demo", "read_only_canary"}:
+                if kind not in {"safe_demo", "read_only_canary", "read_only_analysis"}:
                     self._json(
                         {
                             "ok": False,
                             "error": "unsupported task kind",
-                            "supported_kinds": ["read_only_canary"],
+                            "supported_kinds": ["read_only_canary", "read_only_analysis"],
                             "detail": (
-                                "The first integration slice only exposes the credential-free "
-                                "read-only canary. Managed tasks remain on /api/tasks."
+                                "Read-only tasks run in an isolated Harness workspace. "
+                                "Managed mutating tasks remain on /api/tasks."
                             ),
                         },
                         status=HTTPStatus.BAD_REQUEST,
                     )
                     return
                 try:
+                    if kind == "read_only_analysis":
+                        task = start_read_only_analysis(body)
+                        integration = task.get("metadata", {}).get("integration", {})
+                        self._json(
+                            {
+                                "api_version": "1",
+                                "accepted": True,
+                                "id": task.get("id"),
+                                "task": task,
+                                "ownership": {
+                                    "executor": "agentic-harness",
+                                    "operator": "local-studio",
+                                },
+                                "safety": {
+                                    "kind": "read_only_analysis",
+                                    "connected_workspace_mutated": False,
+                                    "model_used": True,
+                                    "write_tools": "disabled",
+                                },
+                                "route_decision": integration,
+                            },
+                            status=HTTPStatus.ACCEPTED,
+                        )
+                        return
+                    if analysis_service is not None:
+                        current = analysis_service.status()
+                        if str(current.get("status")) in {
+                            "starting",
+                            "working",
+                            "checking",
+                            "stopping",
+                            "needs_review",
+                        }:
+                            raise ValueError("finish the active model analysis before starting a safe canary")
+                        dispose_analysis()
                     task = demo_service.start_demo()
                     self._json(
                         {

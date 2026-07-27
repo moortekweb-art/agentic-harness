@@ -970,6 +970,15 @@ def test_provider_profile_reports_accurate_network_scope(endpoint, scope, locati
     assert profile.to_public_dict()["network_scope"] == scope
 
 
+def test_provider_profile_allows_private_overlay_http_for_cluster_models() -> None:
+    profile = ProviderProfile(
+        endpoint="http://100.64.47.42:8009/v1/chat/completions",
+        model="node2-overflow",
+    )
+
+    assert profile.data_location == "local"
+
+
 class FakeHTTPResponse:
     def __init__(self, payload: dict[str, Any]) -> None:
         self.payload = payload

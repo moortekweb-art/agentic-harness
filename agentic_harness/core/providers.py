@@ -202,4 +202,13 @@ def _is_local_hostname(hostname: str) -> bool:
         address = ipaddress.ip_address(normalized)
     except ValueError:
         return False
-    return bool(address.is_loopback or address.is_private or address.is_link_local)
+    # Tailscale and similar private overlays commonly use CGNAT addresses.
+    # They are cluster-local even though Python does not classify 100.64/10
+    # as ``is_private``.
+    overlay = ipaddress.ip_network("100.64.0.0/10")
+    return bool(
+        address.is_loopback
+        or address.is_private
+        or address.is_link_local
+        or address in overlay
+    )

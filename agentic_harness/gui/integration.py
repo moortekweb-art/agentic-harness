@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import os
+import sys
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -114,4 +115,92 @@ def integration_health_payload() -> dict[str, Any]:
         },
         "routes_status": "ready" if statuses == {"ready"} else "degraded",
         "route_count": len(registry["routes"]),
+    }
+
+
+def select_route(
+    registry: dict[str, Any],
+    requested: str = "",
+) -> tuple[dict[str, Any], str]:
+    """Select a ready route without exposing transport credentials to clients."""
+
+    routes = [row for row in registry.get("routes", []) if isinstance(row, dict)]
+    normalized = requested.strip().lower()
+    if normalized:
+        selected = next(
+            (
+                row
+                for row in routes
+                if str(row.get("id", "")).lower() == normalized
+                or str(row.get("model_id", "")).lower() == normalized
+            ),
+            None,
+        )
+        if selected is None:
+            raise ValueError(f"unknown route: {requested}")
+        if selected.get("status") != "ready":
+            raise RuntimeError(f"requested route is not ready: {selected.get('id', requested)}")
+        return dict(selected), "operator requested this route"
+
+    primary = next(
+        (row for row in routes if row.get("role") == "primary" and row.get("status") == "ready"),
+        None,
+    )
+    if primary is not None:
+        return dict(primary), "primary route is ready"
+    fallback = next((row for row in routes if row.get("status") == "ready"), None)
+    if fallback is None:
+        raise RuntimeError("no ready vLLM route is available")
+    return dict(fallback), "primary unavailable; selected the first ready overflow route"
+
+
+def route_execution_config(route: dict[str, Any]) -> dict[str, str]:
+    """Return private provider settings for a selected route."""
+
+    if route.get("node") == "node2":
+        return {
+            "endpoint": "http://100.64.47.42:8009/v1/chat/completions",
+            "model": "node2-overflow",
+            "api_key_env": "VLLM_API_KEY",
+        }
+    return {
+        "endpoint": "http://127.0.0.1:8008/v1/chat/completions",
+        "model": "qwen36-main",
+        "api_key_env": "VLLM_API_KEY",
+    }
+
+
+def read_only_analysis_config(route: dict[str, Any]) -> dict[str, Any]:
+    """Build a bounded model-agent config for an isolated analysis workspace."""
+
+    provider = route_execution_config(route)
+    review = (
+        "from pathlib import Path; "
+        "unexpected = [str(p) for p in Path('.').rglob('*') "
+        "if p.is_file() and '.agentic-harness' not in p.parts]; "
+        "assert not unexpected, unexpected"
+    )
+    return {
+        "version": 1,
+        "worker": "model_agent",
+        "llm": {
+            "endpoint": provider["endpoint"],
+            "model": provider["model"],
+            "api_key_env": provider["api_key_env"],
+            "remote_data_confirmed": False,
+            "max_steps": 4,
+            "timeout": 120,
+        },
+        "llm_credential_source": "env",
+        "llm_retries": 1,
+        "llm_retry_delay": 1.0,
+        "review_command": [sys.executable, "-c", review],
+        "review_command_timeout": 30,
+        "autonomy": {
+            "max_cycles": 2,
+            "max_elapsed_seconds": 180,
+            "max_total_tokens": 4_000,
+            "max_provider_calls": 4,
+            "max_tool_calls": 8,
+        },
     }
