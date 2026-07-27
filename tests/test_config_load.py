@@ -488,6 +488,47 @@ llm_endpoint: http://localhost:8008
     assert "llm_model" in str(exc_info.value)
 
 
+def test_local_studio_worker_loads_nested_config_without_persisting_secret(tmp_path) -> None:
+    _write_config(
+        tmp_path,
+        """
+version: 1
+worker: local_studio
+local_studio:
+  endpoint: http://127.0.0.1:8081
+  model: kimi-k3
+  api_key_env: LOCAL_STUDIO_KEY
+  timeout: 240
+  poll_interval: 0.25
+  tool_access: full
+""",
+    )
+
+    config = load_config(tmp_path)
+
+    assert config.worker == "local_studio"
+    assert config.local_studio_endpoint == "http://127.0.0.1:8081"
+    assert config.local_studio_model == "kimi-k3"
+    assert config.local_studio_api_key_env == "LOCAL_STUDIO_KEY"
+    assert config.local_studio_timeout == 240
+    assert config.local_studio_poll_interval == 0.25
+    assert "kimi-k3" in config.config_path.read_text(encoding="utf-8")
+
+
+def test_local_studio_worker_requires_model(tmp_path) -> None:
+    _write_config(
+        tmp_path,
+        """
+version: 1
+worker: local_studio
+local_studio_endpoint: http://127.0.0.1:8081
+""",
+    )
+
+    with pytest.raises(ConfigError, match="local_studio.*model"):
+        load_config(tmp_path)
+
+
 def test_github_actions_worker_requires_owner(tmp_path) -> None:
     """GitHub Actions worker without github_owner must raise."""
     _write_config(

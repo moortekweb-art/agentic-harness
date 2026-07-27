@@ -42,6 +42,12 @@ ALLOWED_KEYS = {
     "llm_timeout",
     "llm_retries",
     "llm_retry_delay",
+    "local_studio_endpoint",
+    "local_studio_model",
+    "local_studio_api_key_env",
+    "local_studio_timeout",
+    "local_studio_poll_interval",
+    "local_studio_tool_access",
     "github_owner",
     "github_repo",
     "github_workflow_id",
@@ -83,6 +89,12 @@ ALLOWED_WORKER_DICT_KEYS = {
     "llm_timeout",
     "llm_retries",
     "llm_retry_delay",
+    "local_studio_endpoint",
+    "local_studio_model",
+    "local_studio_api_key_env",
+    "local_studio_timeout",
+    "local_studio_poll_interval",
+    "local_studio_tool_access",
     "github_owner",
     "github_repo",
     "github_workflow_id",
@@ -117,6 +129,14 @@ ALLOWED_LLM_DICT_KEYS = {
     "max_steps",
     "timeout",
 }
+ALLOWED_LOCAL_STUDIO_DICT_KEYS = {
+    "endpoint",
+    "model",
+    "api_key_env",
+    "timeout",
+    "poll_interval",
+    "tool_access",
+}
 ALLOWED_REVIEW_DICT_KEYS = {
     "command",
     "command_timeout",
@@ -140,6 +160,7 @@ ALLOWED_WORKERS = {
     "tmux",
     "local_llm",
     "model_agent",
+    "local_studio",
     "github_actions",
 }
 LIST_KEYS = {
@@ -174,6 +195,12 @@ class HarnessConfig:
     llm_timeout: int = 120
     llm_retries: int = 2
     llm_retry_delay: float = 1.0
+    local_studio_endpoint: str = "http://127.0.0.1:8081"
+    local_studio_model: str = ""
+    local_studio_api_key_env: str = ""
+    local_studio_timeout: int = 1800
+    local_studio_poll_interval: float = 0.5
+    local_studio_tool_access: str = "full"
     github_owner: str = ""
     github_repo: str = ""
     github_workflow_id: str = ""
@@ -610,6 +637,7 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
             "llm_timeout",
             "llm_retries",
             "llm_max_steps",
+            "local_studio_timeout",
             "github_timeout",
             "review_command_timeout",
             "goal_max_cycles",
@@ -619,7 +647,7 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
             "goal_max_tool_calls",
         }:
             setattr(config, key, _parse_int(value, key))
-        elif key in {"llm_retry_delay", "github_poll_interval"}:
+        elif key in {"llm_retry_delay", "github_poll_interval", "local_studio_poll_interval"}:
             setattr(config, key, _parse_float(value, key))
         elif key == "github_token":
             config.github_token = _parse_str(value, key) or None
@@ -639,6 +667,20 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
         raise ConfigError("model_agent worker requires llm_endpoint")
     if config.worker == "model_agent" and not config.llm_model:
         raise ConfigError("model_agent worker requires llm_model")
+    if config.worker == "local_studio" and not config.local_studio_endpoint:
+        raise ConfigError("local_studio worker requires local_studio.endpoint")
+    if config.worker == "local_studio" and not config.local_studio_model:
+        raise ConfigError("local_studio worker requires local_studio.model")
+    if config.worker == "local_studio" and config.local_studio_timeout <= 0:
+        raise ConfigError("local_studio.timeout must be positive")
+    if config.worker == "local_studio" and config.local_studio_poll_interval < 0:
+        raise ConfigError("local_studio.poll_interval must not be negative")
+    if config.local_studio_tool_access not in {"read_only", "full"}:
+        raise ConfigError("local_studio.tool_access must be read_only or full")
+    if config.local_studio_api_key_env and not re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_]*", config.local_studio_api_key_env
+    ):
+        raise ConfigError("local_studio.api_key_env must be a valid environment variable name")
     if config.worker == "model_agent" and "llm_api_key" in provided_keys:
         raise ConfigError("model_agent credentials must use llm.api_key_env, not plaintext api_key")
     if config.worker == "model_agent":
@@ -753,6 +795,17 @@ def _flatten_config(payload: dict[str, Any]) -> dict[str, Any]:
             if target in values:
                 raise ConfigError(
                     f"conflicting config: both top-level '{target}' and llm.{key} are set; pick one"
+                )
+            values[target] = value
+    local_studio = values.pop("local_studio", None)
+    if isinstance(local_studio, dict):
+        _check_unknown_keys(local_studio, ALLOWED_LOCAL_STUDIO_DICT_KEYS, "local_studio")
+        for key, value in local_studio.items():
+            target = f"local_studio_{key}"
+            if target in values:
+                raise ConfigError(
+                    f"conflicting config: both top-level '{target}' and "
+                    f"local_studio.{key} are set; pick one"
                 )
             values[target] = value
     autonomy = values.pop("autonomy", None)

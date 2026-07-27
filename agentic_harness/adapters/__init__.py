@@ -9,6 +9,7 @@ from agentic_harness.adapters.local_studio import (
     LocalStudioRunSpec,
     LocalStudioRunState,
     LocalStudioWorker,
+    HttpLocalStudioTransport,
 )
 from agentic_harness.adapters.model_agent import EmbeddedModelAgent, ProviderResponse
 from agentic_harness.adapters.shell import ShellWorker
@@ -22,6 +23,7 @@ __all__ = [
     "LocalStudioRunSpec",
     "LocalStudioRunState",
     "LocalStudioWorker",
+    "HttpLocalStudioTransport",
     "LOCAL_STUDIO_PROTOCOL_VERSION",
     "EmbeddedModelAgent",
     "ProviderResponse",

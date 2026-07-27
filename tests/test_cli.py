@@ -13,6 +13,7 @@ import agentic_harness.cli as cli
 from agentic_harness.adapters.coding_agent import CodingAgentWorker
 from agentic_harness.adapters.github_actions import GitHubActionsAdapter
 from agentic_harness.adapters.local_llm import LocalLLMAdapter
+from agentic_harness.adapters.local_studio import LocalStudioWorker
 from agentic_harness.adapters.tmux import TmuxWorker
 from agentic_harness import Goal, Supervisor, Worker
 from agentic_harness.cli import build_supervisor, format_quickstart_text, main
@@ -1949,6 +1950,23 @@ def test_build_supervisor_wires_local_llm_worker_from_config(tmp_path) -> None:
         supervisor = build_supervisor(tmp_path)
 
     assert isinstance(supervisor.worker, LocalLLMAdapter)
+
+
+def test_build_supervisor_wires_local_studio_worker_from_config(tmp_path) -> None:
+    config_dir = tmp_path / ".agentic-harness"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        "version: 1\n"
+        "worker: local_studio\n"
+        "local_studio:\n"
+        "  endpoint: http://127.0.0.1:8081\n"
+        "  model: test-model\n",
+        encoding="utf-8",
+    )
+
+    supervisor = build_supervisor(tmp_path)
+
+    assert isinstance(supervisor.worker, LocalStudioWorker)
 
 
 def test_build_supervisor_wires_github_actions_worker_from_config(tmp_path) -> None:

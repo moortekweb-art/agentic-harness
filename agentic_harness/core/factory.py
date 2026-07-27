@@ -8,6 +8,7 @@ from typing import Callable
 from agentic_harness.adapters.coding_agent import CodingAgentWorker
 from agentic_harness.adapters.github_actions import GitHubActionsAdapter
 from agentic_harness.adapters.local_llm import LocalLLMAdapter
+from agentic_harness.adapters.local_studio import HttpLocalStudioTransport, LocalStudioWorker
 from agentic_harness.adapters.model_agent import EmbeddedModelAgent, OpenAICompatibleProvider
 from agentic_harness.adapters.shell import ShellWorker
 from agentic_harness.adapters.tmux import TmuxWorker
@@ -64,6 +65,25 @@ def build_supervisor(
             timeout=config.llm_timeout,
             retries=config.llm_retries,
             retry_delay=config.llm_retry_delay,
+        )
+    elif config.worker == "local_studio":
+        api_key = (
+            resolve_api_key(config.local_studio_api_key_env)
+            if config.local_studio_api_key_env
+            else ""
+        )
+        worker = LocalStudioWorker(
+            HttpLocalStudioTransport(
+                endpoint=config.local_studio_endpoint,
+                model=config.local_studio_model,
+                api_key=api_key,
+                tool_access=config.local_studio_tool_access,
+            ),
+            workspace=project_dir,
+            model=config.local_studio_model,
+            timeout=config.local_studio_timeout,
+            poll_interval=config.local_studio_poll_interval,
+            cancel_requested=cancel_requested,
         )
     elif config.worker == "model_agent":
         if config.llm_credential_source == "session":

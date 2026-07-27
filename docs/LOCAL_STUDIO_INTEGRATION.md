@@ -1,6 +1,6 @@
 # Local Studio integration contract
 
-Status: design and contract-test scaffold; not enabled by default.
+Status: opt-in HTTP transport and contract tests; not enabled by default.
 
 This document defines how [Local Studio](https://github.com/sybil-solutions/local-studio)
 can become an execution lane for Agentic Harness without creating a second
@@ -42,14 +42,28 @@ Harness dispatch
   -> Harness receipt
 ```
 
-The Local Studio adapter is opt-in and transport-neutral. This change adds the
-contract types and fake-transport tests; it does not add an HTTP client, new
-Local Studio endpoints, default configuration, Hermes routing, or unattended
-automation.
+The Local Studio adapter is opt-in. The HTTP transport targets the existing
+Local Studio `agent-runtime` API (`/api/agent/turn`, runtime status, and abort)
+without adding a second Local Studio endpoint. It does not enable default
+configuration, Hermes routing, or unattended automation.
+
+Example configuration:
+
+```yaml
+version: 1
+worker: local_studio
+local_studio:
+  endpoint: http://127.0.0.1:8081
+  model: kimi-k3
+  tool_access: full
+review:
+  command: [python, -m, pytest, tests/, -q]
+  covers: ["*"]
+```
 
 ## Adapter boundary
 
-The future transport implements four operations:
+The HTTP transport implements four operations:
 
 ```python
 submit(spec) -> run_handle
@@ -83,6 +97,10 @@ The response is intentionally split into execution state and evidence:
 - `LocalStudioWorker` returns a normal Harness `WorkerResult`, which can move a
   goal to review after a clean process exit. It never creates a `Verified done`
   result.
+- Runtime session IDs must match the Harness run ID. The transport waits for a
+  real `agent_settled`/`agent_end` event, captures a private redacted JSONL
+  transcript, and computes workspace fingerprints locally before and after the
+  run.
 
 The adapter must reject mismatched run identities and evidence that has not
 been redacted. It must not copy secrets into durable reports, and it must not
@@ -135,7 +153,6 @@ Before this becomes a default or production path, the live canary must prove:
 
 ## Deferred work
 
-- HTTP/WebSocket transport selection after the Local Studio API is frozen.
 - Local Studio UI receipt/status bridge.
 - Best-of-N Claude/Kimi K3 candidate selection.
 - Harness-managed subagents and scheduled automations.
