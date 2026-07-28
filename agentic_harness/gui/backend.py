@@ -37,8 +37,6 @@ from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.factory import autonomy_policy_from_config, build_supervisor
 from agentic_harness.core.goal_spec import GoalSpec, derived_objective_spec
 from agentic_harness.core.presentation import safe_inline_text
-from agentic_harness.core.state import Goal, GoalStatus
-from agentic_harness.core.specification_amendment import amended_requirements
 from agentic_harness.core.providers import (
     PROVIDER_TEMPLATES,
     ProviderProfile,
@@ -55,6 +53,7 @@ from agentic_harness.core.safety import (
     split_command,
 )
 from agentic_harness.core.secure_io import write_private_text
+from agentic_harness.core.specification_amendment import amended_requirements
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.strategies import (
     DEFAULT_PUBLIC_STRATEGY,
