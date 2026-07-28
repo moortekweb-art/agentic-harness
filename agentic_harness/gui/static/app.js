@@ -2576,7 +2576,14 @@ async function startWork() {
 
 async function postAction(path, body = {}) {
   await runAction(async () => {
-    const task = await api(path, { method: "POST", body: JSON.stringify(body) });
+    const taskId = state.liveTask?.id || state.currentTask?.id;
+    if (!taskId) {
+      throw new Error("The current task changed. Refresh before trying that action again.");
+    }
+    const task = await api(path, {
+      method: "POST",
+      body: JSON.stringify({ ...body, task_id: taskId }),
+    });
     rememberForegroundTask(task);
     state.viewingHistoryId = "";
     state.liveTask = task;

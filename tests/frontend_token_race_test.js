@@ -1667,6 +1667,7 @@ async function testHighAssuranceAmendmentShowsEditablePlainLanguageReview() {
     goal_id: "amendment-run",
     goal_spec_sha256: "reviewed-spec-sha256",
     version: 1,
+    task_id: "amendment-run",
   });
 }
 

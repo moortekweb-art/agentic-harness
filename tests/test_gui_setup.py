@@ -1190,6 +1190,7 @@ def test_setup_connection_test_proves_structured_model_response_without_echoing_
         {
             "endpoint": "https://different-provider.example/v1/chat/completions",
             "model": "different-provider-model",
+            "confirm_remote_data": True,
         }
     )
     assert captured["api_key"] == ""
@@ -1300,6 +1301,10 @@ def test_changing_env_credential_name_or_value_invalidates_model_validation(
         FakeProvider,
     )
     monkeypatch.setenv("MODEL_KEY_A", "tested-secret")
+    monkeypatch.setenv(
+        "AGENTIC_HARNESS_ALLOWED_API_KEY_ENVS",
+        "MODEL_KEY_A,MODEL_KEY_B",
+    )
     backend = EmbeddedExecutionBackend(tmp_path)
     connection = {
         "endpoint": "http://127.0.0.1:8000/v1/chat/completions",

@@ -183,6 +183,7 @@ def make_handler(
     analysis_integration: dict[str, Any] = {}
     auth_token = os.environ.get("AGENTIC_HARNESS_GUI_TOKEN", "").strip()
     rate_limiter = RateLimiter(limit=240, window_seconds=60)
+    task_action_lock = Lock()
     trusted_hosts = allowed_hosts or {"127.0.0.1", "localhost", "::1"}
 
     def demo_task() -> dict[str, Any] | None:
@@ -634,7 +635,7 @@ def make_handler(
                             )
                             return
                     task = session.enrich(start_task(bridge, body), body)
-                    session.record(task)
+                    task = session.record(task)
                     self._json(task)
             elif route == "/api/setup" and embedded:
                 if body.get("api_key") and not self._client_is_loopback():
@@ -713,48 +714,9 @@ def make_handler(
                     task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/accept":
-                current = active.status() if active is not None else session.record(status_task(bridge))
-                if body.get("task_id") and body.get("task_id") != current.get("id"):
-                    self._json(
-                        {"ok": False, "error": "The requested task is no longer current."},
-                        status=HTTPStatus.CONFLICT,
-                    )
-                    return
-                if active is not None:
-                    self._json(active.accept())
-                else:
-                    task = command_task(bridge, "accept", body)
-                    task = session.record(task)
-                    self._json(task)
+                self._current_task_action("accept", body, active)
             elif route == "/api/tasks/current/continue":
-                current = active.status() if active is not None else session.record(status_task(bridge))
-                if body.get("task_id") and body.get("task_id") != current.get("id"):
-                    self._json(
-                        {"ok": False, "error": "The requested task is no longer current."},
-                        status=HTTPStatus.CONFLICT,
-                    )
-                    return
-                if active is not None:
-                    self._json(active.continue_task(str(body.get("feedback") or "")))
-                else:
-                    current = session.record(status_task(bridge))
-                    try:
-                        session.expect_continuation(current)
-                    except GuiSecurityError as exc:
-                        self._json(
-                            {"ok": False, "error": str(exc)},
-                            status=HTTPStatus.CONFLICT,
-                        )
-                        return
-                    continuation_body = dict(body)
-                    continuation_body["feedback"] = session.continuation_feedback(
-                        str(body.get("feedback") or "")
-                    )
-                    task = command_task(bridge, "continue", continuation_body)
-                    if str(task.get("status") or "") == "blocked":
-                        session.cancel_continuation()
-                    task = session.record(task)
-                    self._json(task)
+                self._current_task_action("continue", body, active)
             elif route == "/api/tasks/current/message":
                 if active is not None:
                     self._json(
@@ -864,19 +826,7 @@ def make_handler(
                         status=HTTPStatus.BAD_REQUEST,
                     )
             elif route == "/api/tasks/current/stop":
-                current = active.status() if active is not None else session.record(status_task(bridge))
-                if body.get("task_id") and body.get("task_id") != current.get("id"):
-                    self._json(
-                        {"ok": False, "error": "The requested task is no longer current."},
-                        status=HTTPStatus.CONFLICT,
-                    )
-                    return
-                if active is not None:
-                    self._json(active.stop())
-                else:
-                    task = command_task(bridge, "stop", body)
-                    task = session.record(task)
-                    self._json(task)
+                self._current_task_action("stop", body, active)
             elif route == "/api/session/import":
                 if active is not None:
                     self._json(
@@ -891,6 +841,59 @@ def make_handler(
                     self._json({"ok": True, "tasks": session.history()})
             else:
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
+
+        def _current_task_action(
+            self,
+            action: str,
+            body: dict[str, Any],
+            active: EmbeddedExecutionBackend | None,
+        ) -> None:
+            task_id = body.get("task_id")
+            if not isinstance(task_id, str) or not task_id.strip():
+                self._json(
+                    {"ok": False, "error": "task_id is required for current-task actions."},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            with task_action_lock:
+                current = (
+                    active.status()
+                    if active is not None
+                    else session.record(status_task(bridge))
+                )
+                if task_id != current.get("id"):
+                    self._json(
+                        {"ok": False, "error": "The requested task is no longer current."},
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
+                if active is not None:
+                    if action == "accept":
+                        task = active.accept()
+                    elif action == "continue":
+                        task = active.continue_task(str(body.get("feedback") or ""))
+                    else:
+                        task = active.stop()
+                elif action == "continue":
+                    try:
+                        session.expect_continuation(current)
+                    except GuiSecurityError as exc:
+                        self._json(
+                            {"ok": False, "error": str(exc)},
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
+                    continuation_body = dict(body)
+                    continuation_body["feedback"] = session.continuation_feedback(
+                        str(body.get("feedback") or "")
+                    )
+                    task = command_task(bridge, action, continuation_body)
+                    if str(task.get("status") or "") == "blocked":
+                        session.cancel_continuation()
+                    task = session.record(task)
+                else:
+                    task = session.record(command_task(bridge, action, body))
+                self._json(task)
 
         def _integration_current_task(
             self, active: EmbeddedExecutionBackend | None
@@ -1422,8 +1425,27 @@ class GuiSession:
             entry = dict(task)
             identity = _task_identity(entry)
             if not entry.get("id"):
-                entry["id"] = f"task-{self._next_id}"
-                self._next_id += 1
+                prior = next(
+                    (
+                        item
+                        for item in self._history
+                        if (
+                            _has_identity(identity)
+                            and _identities_match(identity, _task_identity(item))
+                        )
+                        or (
+                            not _has_identity(identity)
+                            and item.get("summary") == entry.get("summary")
+                            and item.get("id")
+                        )
+                    ),
+                    None,
+                )
+                if prior is not None:
+                    entry["id"] = prior["id"]
+                else:
+                    entry["id"] = f"task-{self._next_id}"
+                    self._next_id += 1
             if _has_identity(identity):
                 self._history = [
                     item
@@ -1440,7 +1462,7 @@ class GuiSession:
             self._history.insert(0, entry)
             self._history = self._history[:MAX_GUI_HISTORY]
             self._save_locked()
-            return task
+            return entry
 
     def append_user_message(self, task: dict[str, Any], text: str, *, action: str) -> int:
         """Persist a revisioned user amendment bound to the active managed run."""

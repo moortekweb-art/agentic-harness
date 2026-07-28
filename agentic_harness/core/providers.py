@@ -160,7 +160,11 @@ class ProviderProfile:
             return "private_network" if hostname.endswith(".local") else "remote"
         if address.is_loopback:
             return "device"
-        if address.is_private or address.is_link_local:
+        if (
+            address.is_private
+            or address.is_link_local
+            or (_cgnat_overlay_trusted() and address in _CGNAT_OVERLAY)
+        ):
             return "private_network"
         return "remote"
 

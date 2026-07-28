@@ -970,7 +970,8 @@ def test_provider_profile_reports_accurate_network_scope(endpoint, scope, locati
     assert profile.to_public_dict()["network_scope"] == scope
 
 
-def test_provider_profile_allows_private_overlay_http_for_cluster_models() -> None:
+def test_provider_profile_allows_private_overlay_http_for_cluster_models(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTIC_HARNESS_TRUST_CGNAT_OVERLAY", "1")
     profile = ProviderProfile(
         endpoint="http://100.64.47.42:8009/v1/chat/completions",
         model="node2-overflow",
