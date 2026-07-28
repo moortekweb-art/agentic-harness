@@ -30,14 +30,13 @@ from agentic_harness.gui.api import (
     status_task,
     task_from_command_result,
 )
+from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.gui.server import (
     GuiPortUnavailable,
     GuiSecurityError,
     create_gui_server,
     make_handler,
 )
-from agentic_harness.gui.backend import EmbeddedExecutionBackend
-
 
 MAX_REQUEST_BYTES = 1_048_576
 
@@ -1592,6 +1591,35 @@ def test_setup_returns_json_400_for_malformed_numeric_setting(tmp_path) -> None:
     assert "whole number" in str(result.payload["error"]).lower()
 
 
+def test_gui_connection_test_returns_json_error_for_invalid_provider_url(tmp_path) -> None:
+    handler = make_handler(EmbeddedExecutionBackend(tmp_path))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        result = post_error(
+            base_url,
+            "/api/setup/test",
+            json.dumps(
+                {
+                    "execution": "local_model",
+                    "endpoint": "file:///etc/passwd",
+                    "model": "chosen-model",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert result.code == 400
+    assert result.payload["ok"] is False
+    assert "http" in str(result.payload["error"]).lower()
+
+
 def test_embedded_gui_exposes_safe_demo_and_local_model_detection_routes(tmp_path) -> None:
     backend = EmbeddedExecutionBackend(tmp_path)
 
@@ -1986,6 +2014,21 @@ def test_serve_gui_browser_open_failure_does_not_stop_server(monkeypatch, capsys
     assert "Could not open a browser automatically" in output
     assert "agentic-harness gui --no-open" in output
     assert events == ["open:http://127.0.0.1:43210/", "served", "closed"]
+
+
+def test_gui_rejects_action_for_stale_current_task() -> None:
+    bridge = FakeBridge()
+    with gui_server(bridge) as base_url:
+        result = post_error(
+            base_url,
+            "/api/tasks/current/stop",
+            json.dumps({"task_id": "stale-task-id"}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Origin": base_url},
+        )
+
+    assert result.code == 409
+    assert "no longer current" in str(result.payload["error"])
+    assert ["stop"] not in bridge.commands
 
 
 def test_gui_server_post_task_workflow_routes() -> None:

@@ -2,40 +2,32 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib.resources import files
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Any, cast
-from urllib.parse import parse_qs, urlparse
 import base64
-import hmac
+from datetime import UTC, datetime
 import hashlib
+import hmac
 import json
 import mimetypes
 import os
 import secrets
 import stat
-from threading import Lock, RLock
 import time
 import webbrowser
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Lock, RLock
+from typing import Any, cast
+from urllib.parse import parse_qs, urlparse
 
-from agentic_harness.core.local_goal_bridge import LocalGoalBridge, resolve_doc_root
 from agentic_harness.core.errors import HarnessError
+from agentic_harness.core.local_goal_bridge import LocalGoalBridge, resolve_doc_root
 from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.strategies import (
     DEFAULT_PUBLIC_STRATEGY,
     PUBLIC_STRATEGIES,
-)
-from agentic_harness.gui.backend import EmbeddedExecutionBackend
-from agentic_harness.gui.integration import (
-    integration_health_payload,
-    read_only_analysis_config,
-    route_registry_payload,
-    route_execution_config,
-    select_route,
 )
 from agentic_harness.gui.api import (
     command_task,
@@ -53,7 +45,14 @@ from agentic_harness.gui.api import (
     tasks_payload,
     watch_task,
 )
-
+from agentic_harness.gui.backend import EmbeddedExecutionBackend
+from agentic_harness.gui.integration import (
+    integration_health_payload,
+    read_only_analysis_config,
+    route_execution_config,
+    route_registry_payload,
+    select_route,
+)
 
 MAX_REQUEST_BYTES = 1_048_576
 MAX_CONVERSATION_BYTES = 64 * 1024
@@ -714,6 +713,13 @@ def make_handler(
                     task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/accept":
+                current = active.status() if active is not None else session.record(status_task(bridge))
+                if body.get("task_id") and body.get("task_id") != current.get("id"):
+                    self._json(
+                        {"ok": False, "error": "The requested task is no longer current."},
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
                 if active is not None:
                     self._json(active.accept())
                 else:
@@ -721,6 +727,13 @@ def make_handler(
                     task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/continue":
+                current = active.status() if active is not None else session.record(status_task(bridge))
+                if body.get("task_id") and body.get("task_id") != current.get("id"):
+                    self._json(
+                        {"ok": False, "error": "The requested task is no longer current."},
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
                 if active is not None:
                     self._json(active.continue_task(str(body.get("feedback") or "")))
                 else:
@@ -851,6 +864,13 @@ def make_handler(
                         status=HTTPStatus.BAD_REQUEST,
                     )
             elif route == "/api/tasks/current/stop":
+                current = active.status() if active is not None else session.record(status_task(bridge))
+                if body.get("task_id") and body.get("task_id") != current.get("id"):
+                    self._json(
+                        {"ok": False, "error": "The requested task is no longer current."},
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
                 if active is not None:
                     self._json(active.stop())
                 else:

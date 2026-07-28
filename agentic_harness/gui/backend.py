@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from http.client import HTTPConnection
 import hashlib
 import json
 import math
 import os
-from pathlib import Path
 import stat
 import subprocess
 import sys
+from copy import deepcopy
+from http.client import HTTPConnection
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Lock, RLock, Thread
 from typing import Any
@@ -36,6 +36,7 @@ from agentic_harness.core.errors import ConfigError, HarnessError, StateLockErro
 from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.factory import autonomy_policy_from_config, build_supervisor
 from agentic_harness.core.goal_spec import GoalSpec, derived_objective_spec
+from agentic_harness.core.presentation import safe_inline_text
 from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.specification_amendment import amended_requirements
 from agentic_harness.core.providers import (
@@ -43,7 +44,6 @@ from agentic_harness.core.providers import (
     ProviderProfile,
     resolve_api_key,
 )
-from agentic_harness.core.presentation import safe_inline_text
 from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.reporting import RunReceipt, build_run_receipt
 from agentic_harness.core.safety import (
@@ -55,6 +55,7 @@ from agentic_harness.core.safety import (
     split_command,
 )
 from agentic_harness.core.secure_io import write_private_text
+from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.strategies import (
     DEFAULT_PUBLIC_STRATEGY,
     ExecutionStrategy,
@@ -70,9 +71,9 @@ from agentic_harness.core.tournament import (
 )
 from agentic_harness.core.workspace import workspace_change_summary
 
-
 GUI_TASK_CONTRACT = "agentic_harness.gui_task.v2"
 TERMINAL_REPORT_CONTRACT = "agentic_harness.terminal_report.v2"
+ALLOWED_API_KEY_ENVS_ENV = "AGENTIC_HARNESS_ALLOWED_API_KEY_ENVS"
 
 _CODING_AGENT_COMMANDS = {
     "codex": ["codex", "exec", "--skip-git-repo-check", "{objective}"],
@@ -185,6 +186,58 @@ outcome = {
 print(summary)
 print("HARNESS_RESULT_JSON=" + json.dumps(outcome, separators=(",", ":")))
 '''
+
+
+def _allowed_api_key_envs() -> tuple[str, ...]:
+    raw = os.environ.get(ALLOWED_API_KEY_ENVS_ENV, "")
+    names = {name for name in raw.replace(",", " ").split() if name}
+    return tuple(sorted(names))
+
+
+def _require_allowed_api_key_env(name: str) -> None:
+    if not name:
+        return
+    allowed = _allowed_api_key_envs()
+    if name in allowed:
+        return
+    if allowed:
+        choices = ", ".join(allowed)
+        raise ValueError(
+            f"API key environment variable {name!r} is not allowed for GUI setup. "
+            f"Choose one of: {choices}."
+        )
+    raise ValueError(
+        "Environment-variable credentials are disabled for GUI setup. "
+        f"Set {ALLOWED_API_KEY_ENVS_ENV} on the service to allow specific names."
+    )
+
+
+def _verification_command(text: str) -> list[str]:
+    command = split_command(text) if text else []
+    if not command:
+        return []
+    executable = Path(command[0]).name.lower()
+    shell_executables = {
+        "bash",
+        "cmd",
+        "cmd.exe",
+        "powershell",
+        "powershell.exe",
+        "pwsh",
+        "pwsh.exe",
+        "sh",
+        "zsh",
+    }
+    shell_tokens = {"|", "||", "&&", ";", ">", ">>", "<", "2>", "2>>"}
+    has_shell_syntax = any(
+        token in shell_tokens or "$(" in token or "`" in token for token in command
+    )
+    if has_shell_syntax and executable not in shell_executables:
+        raise ValueError(
+            "Verification commands run directly without a shell. "
+            "Use an explicit shell command, for example: bash -lc 'your command'."
+        )
+    return command
 
 
 class EmbeddedExecutionBackend:
@@ -403,6 +456,15 @@ class EmbeddedExecutionBackend:
                 "mode": "automatic" if suggested_argv else "setup_needed",
                 "label": _review_command_label(suggested_argv),
                 "technical_command": suggested,
+            },
+            "allowed_api_key_envs": list(_allowed_api_key_envs()),
+            "verification_contract": {
+                "shell": False,
+                "summary": (
+                    "The verification command runs directly without a shell. "
+                    "Use an explicit shell command such as bash -lc for pipes, "
+                    "redirection, or command substitution."
+                ),
             },
             "deployment": {
                 "scope": "local_self_hosted",
@@ -650,7 +712,7 @@ class EmbeddedExecutionBackend:
             or (format_command(existing.review_command) if existing else "")
             or _detect_check(self.project_dir)
         ).strip()
-        verification = split_command(verification_text) if verification_text else []
+        verification = _verification_command(verification_text)
         if not verification:
             raise ValueError("Choose an independent verification command before saving setup.")
         if execution in {"local_model", "cloud_model"}:
@@ -659,6 +721,7 @@ class EmbeddedExecutionBackend:
                 model=str(body.get("model") or ""),
                 api_key_env=str(body.get("api_key_env") or ""),
             )
+            _require_allowed_api_key_env(profile.api_key_env)
             if profile.data_location == "cloud" and body.get("confirm_remote_data") is not True:
                 raise ValueError(
                     "Confirm that selected file excerpts and tool results may leave this computer."
@@ -796,6 +859,7 @@ class EmbeddedExecutionBackend:
             model=str(body.get("model") or ""),
             api_key_env=str(body.get("api_key_env") or ""),
         )
+        _require_allowed_api_key_env(profile.api_key_env)
         entered_key = str(body.get("api_key") or "").strip()
         if entered_key and profile.api_key_env:
             raise ValueError(
