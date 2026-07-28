@@ -2028,7 +2028,7 @@ def test_gui_rejects_action_for_stale_current_task() -> None:
 
     assert result.code == 409
     assert "no longer current" in str(result.payload["error"])
-    assert ["stop"] not in bridge.commands
+    assert bridge.commands == []
 
 
 def test_gui_server_post_task_workflow_routes() -> None:

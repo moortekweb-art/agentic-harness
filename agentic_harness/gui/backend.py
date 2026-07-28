@@ -860,6 +860,10 @@ class EmbeddedExecutionBackend:
             api_key_env=str(body.get("api_key_env") or ""),
         )
         _require_allowed_api_key_env(profile.api_key_env)
+        if profile.data_location == "cloud" and body.get("confirm_remote_data") is not True:
+            raise ValueError(
+                "Confirm that the connection test may send a test prompt to this cloud endpoint."
+            )
         entered_key = str(body.get("api_key") or "").strip()
         if entered_key and profile.api_key_env:
             raise ValueError(

@@ -1134,6 +1134,7 @@ def test_setup_connection_test_proves_structured_model_response_without_echoing_
             "endpoint": "https://api.example.test/v1/chat/completions",
             "model": "user-model",
             "api_key": "connection-test-secret",
+            "confirm_remote_data": True,
         }
     )
 
@@ -1330,6 +1331,18 @@ def test_changing_env_credential_name_or_value_invalidates_model_validation(
         }
     )
     assert backend.setup()["execution_validation"]["verified"] is False
+
+
+def test_cloud_connection_test_requires_explicit_remote_data_confirmation(tmp_path: Path) -> None:
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with pytest.raises(ValueError, match="connection test may send"):
+        backend.test_connection(
+            {
+                "endpoint": "https://api.example.test/v1/chat/completions",
+                "model": "user-model",
+            }
+        )
 
 
 def test_codex_connection_test_runs_the_configured_model_in_read_only_mode(
