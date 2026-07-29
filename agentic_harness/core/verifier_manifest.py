@@ -6,8 +6,10 @@ import hashlib
 from fnmatch import fnmatchcase
 import json
 from pathlib import Path
+import re
 import stat
 import subprocess
+import xml.etree.ElementTree as ET
 
 from agentic_harness.core.config import CONFIG_DIR
 from agentic_harness.core.errors import ConfigError
@@ -55,6 +57,8 @@ def freeze_verifier_assets(
                 candidates.add(candidate)
             elif candidate.is_dir():
                 candidates.update(_regular_files(root, candidate))
+                relative = candidate.relative_to(root).as_posix()
+                protected_patterns.add(f"{relative}/**")
 
         python_verifier = any(
             "pytest" in argument or argument == "unittest" for argument in lowered
@@ -78,6 +82,12 @@ def freeze_verifier_assets(
             protected_patterns.add("**/conftest.py")
             _add_patterns(root, candidates, python_paths)
         if any(argument in {"npm", "pnpm", "yarn", "bun"} for argument in lowered):
+            if not explicit_assets:
+                raise ConfigError(
+                    "verified best-of-N treats package-manager test scripts as opaque; "
+                    "configure review_assets with the script and every "
+                    "repository-controlled dependency"
+                )
             boundary_established = True
             javascript_paths = (
                 "package.json",
@@ -111,9 +121,21 @@ def freeze_verifier_assets(
         if command_names & {"mvn", "mvnw", "mvnw.cmd", "mvnw.bat"}:
             boundary_established = True
             protected_paths.update(("mvnw", "mvnw.cmd", "mvnw.bat"))
-            protected_patterns.update(("pom.xml", "**/pom.xml", ".mvn/**"))
+            protected_patterns.update(
+                ("pom.xml", "**/pom.xml", ".mvn/**", "src/test/**", "**/src/test/**")
+            )
             _add_patterns(root, candidates, ("mvnw", "mvnw.cmd", "mvnw.bat"))
-            _add_globs(root, candidates, ("**/pom.xml", ".mvn/**/*"))
+            _add_globs(
+                root,
+                candidates,
+                ("**/pom.xml", ".mvn/**/*", "src/test/**/*", "**/src/test/**/*"),
+            )
+            _protect_configured_test_roots(
+                root,
+                candidates,
+                protected_patterns,
+                _maven_test_roots(root, allow_dynamic=bool(explicit_assets)),
+            )
         if command_names & {"gradle", "gradlew", "gradlew.cmd", "gradlew.bat"}:
             boundary_established = True
             protected_paths.update(("gradlew", "gradlew.cmd", "gradlew.bat"))
@@ -129,7 +151,10 @@ def freeze_verifier_assets(
                     "**/settings.gradle",
                     "**/settings.gradle.kts",
                     "**/gradle.properties",
-                    "gradle/wrapper/**",
+                    "gradle/**",
+                    "**/gradle/**",
+                    "src/test/**",
+                    "**/src/test/**",
                 )
             )
             _add_patterns(root, candidates, ("gradlew", "gradlew.cmd", "gradlew.bat"))
@@ -142,55 +167,27 @@ def freeze_verifier_assets(
                     "**/settings.gradle",
                     "**/settings.gradle.kts",
                     "**/gradle.properties",
-                    "gradle/wrapper/**/*",
+                    "gradle/**/*",
+                    "**/gradle/**/*",
+                    "src/test/**/*",
+                    "**/src/test/**/*",
                 ),
+            )
+            _protect_configured_test_roots(
+                root,
+                candidates,
+                protected_patterns,
+                _gradle_test_roots(root, allow_dynamic=bool(explicit_assets)),
             )
         if "dotnet" in command_names:
-            boundary_established = True
-            dotnet_paths = (
-                "global.json",
-                "NuGet.config",
-                "Directory.Build.props",
-                "Directory.Build.targets",
-                "Directory.Packages.props",
-            )
-            protected_paths.update(dotnet_paths)
-            protected_patterns.update(
-                (
-                    "*.sln",
-                    "*.slnx",
-                    "*.csproj",
-                    "*.fsproj",
-                    "*.vbproj",
-                    "*.props",
-                    "*.targets",
-                    "**/*.sln",
-                    "**/*.slnx",
-                    "**/*.csproj",
-                    "**/*.fsproj",
-                    "**/*.vbproj",
-                    "**/*.props",
-                    "**/*.targets",
+            if not explicit_assets:
+                raise ConfigError(
+                    "verified best-of-N cannot infer the evaluated MSBuild input closure "
+                    "for dotnet test; configure review_assets with every selected test "
+                    "project, source directory, imported build file, and other "
+                    "repository-controlled dependency"
                 )
-            )
-            _add_patterns(
-                root,
-                candidates,
-                dotnet_paths,
-            )
-            _add_globs(
-                root,
-                candidates,
-                (
-                    "**/*.sln",
-                    "**/*.slnx",
-                    "**/*.csproj",
-                    "**/*.fsproj",
-                    "**/*.vbproj",
-                    "**/*.props",
-                    "**/*.targets",
-                ),
-            )
+            boundary_established = True
         if "rspec" in command_names:
             boundary_established = True
             protected_paths.update(("Gemfile", "Gemfile.lock", ".rspec", "Rakefile"))
@@ -409,6 +406,227 @@ def _add_globs(root: Path, candidates: set[Path], patterns: tuple[str, ...]) -> 
             if candidate.is_file():
                 require_lexical_regular_path(root, candidate, label=str(candidate))
                 candidates.add(candidate)
+
+
+_GRADLE_TEST_BLOCK = re.compile(
+    r"""(?x)
+    (?:
+        \btest
+        |
+        \b(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)
+    )
+    \s*\{
+    """
+)
+_GRADLE_DIRECT_TEST_CONFIG = re.compile(
+    r"""(?x)
+    \bsourceSets\s*
+    (?:
+        \.\s*test
+        |
+        \[\s*["']test["']\s*\]
+        |
+        \.\s*(?:getByName|named)\(\s*["']test["']\s*\)
+    )
+    [^\n;]*
+    """
+)
+_GRADLE_SOURCE_ROOT_CALL = re.compile(
+    r"\b(?:java|resources)\s*\.\s*(?:srcDirs?|setSrcDirs)\b(?P<expression>[^\n;}]*)"
+)
+_QUOTED_PATH = re.compile(r"""(?P<quote>['"])(?P<path>[^'"]+)(?P=quote)""")
+
+
+def _maven_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
+    configured: set[Path] = set()
+    for pom in sorted(root.glob("**/pom.xml")):
+        require_lexical_regular_path(root, pom, label=str(pom))
+        try:
+            document = ET.parse(pom)
+        except (ET.ParseError, OSError) as exc:
+            raise ConfigError(f"unable to inspect Maven verifier inputs: {pom}") from exc
+        for element in document.iter():
+            if element.tag.rsplit("}", 1)[-1] != "testSourceDirectory":
+                continue
+            value = (element.text or "").strip()
+            if not value:
+                continue
+            configured.add(
+                _configured_test_root(
+                    root,
+                    pom.parent,
+                    value,
+                    ecosystem="Maven",
+                    allow_dynamic=allow_dynamic,
+                )
+            )
+        for test_resources in (
+            element
+            for element in document.iter()
+            if element.tag.rsplit("}", 1)[-1] == "testResources"
+        ):
+            for resource in test_resources:
+                if resource.tag.rsplit("}", 1)[-1] != "testResource":
+                    continue
+                for child in resource:
+                    if child.tag.rsplit("}", 1)[-1] != "directory":
+                        continue
+                    value = (child.text or "").strip()
+                    if value:
+                        configured.add(
+                            _configured_test_root(
+                                root,
+                                pom.parent,
+                                value,
+                                ecosystem="Maven",
+                                allow_dynamic=allow_dynamic,
+                            )
+                        )
+        for execution in (
+            element
+            for element in document.iter()
+            if element.tag.rsplit("}", 1)[-1] == "execution"
+        ):
+            goals = {
+                (goal.text or "").strip()
+                for goal in execution.iter()
+                if goal.tag.rsplit("}", 1)[-1] == "goal"
+            }
+            selected_tags: set[str] = set()
+            if "add-test-source" in goals:
+                selected_tags.add("source")
+            if "add-test-resource" in goals:
+                selected_tags.add("directory")
+            if not selected_tags:
+                continue
+            for child in execution.iter():
+                if child.tag.rsplit("}", 1)[-1] not in selected_tags:
+                    continue
+                value = (child.text or "").strip()
+                if value:
+                    configured.add(
+                        _configured_test_root(
+                            root,
+                            pom.parent,
+                            value,
+                            ecosystem="Maven",
+                            allow_dynamic=allow_dynamic,
+                        )
+                    )
+    return configured
+
+
+def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
+    configured: set[Path] = set()
+    for build_file in sorted(
+        {
+            *root.glob("**/build.gradle"),
+            *root.glob("**/build.gradle.kts"),
+        }
+    ):
+        require_lexical_regular_path(root, build_file, label=str(build_file))
+        try:
+            text = build_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ConfigError(f"unable to inspect Gradle verifier inputs: {build_file}") from exc
+        expressions: list[str] = []
+        for match in _GRADLE_TEST_BLOCK.finditer(text):
+            block = _balanced_brace_body(text, match.end() - 1)
+            expressions.extend(
+                item.group("expression")
+                for item in _GRADLE_SOURCE_ROOT_CALL.finditer(block)
+            )
+        expressions.extend(
+            source_match.group("expression")
+            for item in _GRADLE_DIRECT_TEST_CONFIG.finditer(text)
+            if (source_match := _GRADLE_SOURCE_ROOT_CALL.search(item.group(0)))
+        )
+        for expression in expressions:
+            paths = _literal_gradle_test_paths(expression)
+            if paths is None and not allow_dynamic:
+                raise ConfigError(
+                    "verified best-of-N cannot infer a dynamic Gradle test source root; "
+                    "configure review_assets with every selected test directory"
+                )
+            for value in paths or []:
+                configured.add(
+                    _configured_test_root(
+                        root,
+                        build_file.parent,
+                        value,
+                        ecosystem="Gradle",
+                        allow_dynamic=allow_dynamic,
+                    )
+                )
+    return configured
+
+
+def _literal_gradle_test_paths(expression: str) -> list[str] | None:
+    paths = [match.group("path") for match in _QUOTED_PATH.finditer(expression)]
+    scrubbed = _QUOTED_PATH.sub("", expression)
+    scrubbed = re.sub(r"\b(?:files|listOf|setOf)\b", "", scrubbed)
+    if "$" in scrubbed or re.search(r"[A-Za-z_]", scrubbed):
+        return None
+    return paths or None
+
+
+def _balanced_brace_body(text: str, opening: int) -> str:
+    depth = 0
+    for index in range(opening, len(text)):
+        character = text[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return text[opening + 1 : index]
+    return text[opening + 1 :]
+
+
+def _configured_test_root(
+    root: Path,
+    base: Path,
+    value: str,
+    *,
+    ecosystem: str,
+    allow_dynamic: bool,
+) -> Path:
+    if "$" in value:
+        if allow_dynamic:
+            return root / "src" / "test"
+        raise ConfigError(
+            f"verified best-of-N cannot infer a dynamic {ecosystem} test source root; "
+            "configure review_assets with every selected test directory"
+        )
+    raw = Path(value)
+    if raw.is_absolute() or ".." in raw.parts:
+        raise ConfigError(f"{ecosystem} test source root is outside the workspace: {value}")
+    candidate = (base / raw).absolute()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{ecosystem} test source root is outside the workspace: {value}"
+        ) from exc
+    return candidate
+
+
+def _protect_configured_test_roots(
+    root: Path,
+    candidates: set[Path],
+    protected_patterns: set[str],
+    configured_roots: set[Path],
+) -> None:
+    for directory in configured_roots:
+        relative = directory.relative_to(root).as_posix()
+        protected_patterns.add(f"{relative}/**")
+        if not _lexists(directory):
+            continue
+        if is_link_or_reparse(directory) or not directory.is_dir():
+            raise ConfigError(
+                f"verifier test source root must be a regular directory: {relative}"
+            )
+        candidates.update(_regular_files(root, directory))
 
 
 def _matching_paths(root: Path, pattern: str, available_paths: set[str]) -> list[str]:

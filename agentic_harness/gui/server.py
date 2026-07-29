@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 import base64
+import getpass
 import hmac
 import hashlib
 import json
@@ -24,7 +25,11 @@ import webbrowser
 
 from agentic_harness.core.local_goal_bridge import LocalGoalBridge, resolve_doc_root
 from agentic_harness.core.errors import HarnessError
-from agentic_harness.core.redaction import redact_secrets
+from agentic_harness.core.redaction import (
+    redact_json_value,
+    redact_secrets,
+    sensitive_json_key,
+)
 from agentic_harness.core.strategies import (
     DEFAULT_PUBLIC_STRATEGY,
     PUBLIC_STRATEGIES,
@@ -164,7 +169,22 @@ def make_handler(
     embedded_service = service if isinstance(service, EmbeddedExecutionBackend) else None
     embedded = embedded_service is not None
     bridge = cast(LocalGoalBridge, service)
-    session = GuiSession(state_path=None if embedded else _managed_session_path(project_dir))
+    workspace_identity = (
+        None
+        if embedded
+        else _managed_workspace_identity(bridge, project_dir=project_dir)
+    )
+    session = GuiSession(
+        state_path=(
+            None
+            if embedded
+            else _managed_session_path(
+                project_dir,
+                workspace_identity=workspace_identity,
+            )
+        ),
+        workspace_identity=workspace_identity,
+    )
     managed_demo_workspace: TemporaryDirectory[str] | None = None
     demo_service: EmbeddedExecutionBackend
     if embedded_service is not None:
@@ -747,7 +767,9 @@ def make_handler(
             return value
 
         def _json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
-            encoded = redact_secrets(json.dumps(payload, indent=2, sort_keys=True)).encode("utf-8")
+            encoded = redact_secrets(
+                json.dumps(redact_json_value(payload), indent=2, sort_keys=True)
+            ).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))
@@ -868,7 +890,9 @@ def make_handler(
                         task = status_task(bridge)
                     if active is None and not embedded:
                         task = public_managed_task(session.record(task))
-                    message = redact_secrets(json.dumps(task, sort_keys=True))
+                    message = redact_secrets(
+                        json.dumps(redact_json_value(task), sort_keys=True)
+                    )
                     self.wfile.write(_websocket_text_frame(message))
                     self.wfile.flush()
                     time.sleep(2)
@@ -988,7 +1012,12 @@ _GUI_SNAPSHOT_FIELDS = frozenset(
 class GuiSession:
     """Keep GUI-owned labels attached to the exact durable managed run."""
 
-    def __init__(self, state_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        state_path: str | Path | None = None,
+        *,
+        workspace_identity: dict[str, str] | None = None,
+    ) -> None:
         self._history: list[dict[str, Any]] = []
         self._next_id = 1
         self._active_objective = ""
@@ -997,6 +1026,7 @@ class GuiSession:
         self._active_lineage: list[dict[str, str]] = []
         self._continuation_pending = False
         self._state_path = Path(state_path).expanduser() if state_path else None
+        self._workspace_identity = dict(workspace_identity or {})
         self._lock = RLock()
         self._last_serialized = ""
         self._persistence_warning = ""
@@ -1394,6 +1424,7 @@ class GuiSession:
             ]
         return {
             "contract": GUI_SESSION_CONTRACT,
+            "workspace_identity": self._workspace_identity or None,
             "active_identity": (
                 self._active_identity if _has_identity(self._active_identity) else None
             ),
@@ -1412,6 +1443,8 @@ class GuiSession:
             payload = json.loads(raw)
             if not isinstance(payload, dict) or payload.get("contract") != GUI_SESSION_CONTRACT:
                 raise ValueError("GUI session state has an unsupported contract")
+            if self._workspace_identity and payload.get("workspace_identity") != self._workspace_identity:
+                raise ValueError("GUI session workspace identity does not match this service")
             records = payload.get("records")
             if not isinstance(records, list):
                 raise ValueError("GUI session records are invalid")
@@ -1497,7 +1530,30 @@ class GuiSession:
         self._last_serialized = serialized
 
 
-def _managed_session_path(project_dir: str | Path | None) -> Path | None:
+def _managed_workspace_identity(
+    bridge: LocalGoalBridge,
+    *,
+    project_dir: str | Path | None = None,
+) -> dict[str, str]:
+    """Bind persisted GUI state to the controller, project, and OS user."""
+
+    doc_root = Path(cast(str | Path, bridge.doc_root)).expanduser().resolve()
+    local_goal = Path(cast(str | Path, bridge.local_goal)).expanduser().resolve()
+    identity = {
+        "doc_root": str(doc_root),
+        "local_goal": str(local_goal),
+        "os_user": getpass.getuser(),
+    }
+    if project_dir is not None:
+        identity["project_dir"] = str(Path(project_dir).expanduser().resolve())
+    return identity
+
+
+def _managed_session_path(
+    project_dir: str | Path | None,
+    *,
+    workspace_identity: dict[str, str] | None = None,
+) -> Path | None:
     configured = os.environ.get(GUI_SESSION_PATH_ENV)
     if configured is not None:
         value = configured.strip()
@@ -1506,14 +1562,21 @@ def _managed_session_path(project_dir: str | Path | None) -> Path | None:
         return Path(value).expanduser()
     if project_dir is None:
         return None
-    project = Path(project_dir).expanduser().resolve()
     state_home = os.environ.get("XDG_STATE_HOME", "").strip()
     state_root = (
         Path(state_home).expanduser()
         if state_home
         else Path.home() / ".local" / "state"
     )
-    project_key = hashlib.sha256(str(project).encode("utf-8")).hexdigest()[:24]
+    if workspace_identity:
+        key_material = json.dumps(
+            workspace_identity,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    else:
+        key_material = str(Path(project_dir).expanduser().resolve())
+    project_key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
     return state_root / "agentic-harness" / "gui-sessions" / f"{project_key}.json"
 
 
@@ -1922,15 +1985,24 @@ def _is_internal_qualification_task(task: dict[str, Any]) -> bool:
 def _task_identity(task: dict[str, Any]) -> dict[str, str]:
     run_dir = ""
     run_id = ""
+    queue_id = ""
 
     def collect(source: object) -> None:
-        nonlocal run_dir, run_id
+        nonlocal run_dir, run_id, queue_id
         if not isinstance(source, dict):
             return
         if not run_dir:
             run_dir = str(source.get("run_dir") or "").strip().rstrip("/")
+        if not queue_id:
+            queue_id = str(
+                source.get("queue_id") or source.get("queued_id") or ""
+            ).strip()
         if not run_id:
-            run_id = str(source.get("run_id") or source.get("id") or "").strip()
+            run_id = str(
+                source.get("run_id")
+                or source.get("id")
+                or ""
+            ).strip()
 
     task_id = str(task.get("id") or "").strip()
     if task_id and not task_id.startswith("task-"):
@@ -1951,6 +2023,13 @@ def _task_identity(task: dict[str, Any]) -> dict[str, str]:
                 run_dir = value.strip().rstrip("/")
             elif key.strip() == "run_id" and not run_id:
                 run_id = value.strip()
+            elif key.strip() in {"queue_id", "queued_id"} and not queue_id:
+                queue_id = value.strip()
+    metadata = task.get("metadata")
+    if isinstance(metadata, dict):
+        collect(metadata.get("route_receipt"))
+    if queue_id:
+        run_id = queue_id
     readiness = task.get("readiness_gate")
     if isinstance(readiness, dict) and not run_dir:
         run_dir = str(readiness.get("active_run_dir") or "").strip().rstrip("/")
@@ -2002,34 +2081,7 @@ def _safe_json_value(value: object, *, depth: int = 0) -> Any:
 
 
 def _sensitive_json_key(key: str) -> bool:
-    lowered = key.strip().lower()
-    compact = "".join(character for character in lowered if character.isalnum())
-    if compact in _SENSITIVE_JSON_KEYS:
-        return True
-    pieces = {
-        piece
-        for piece in "".join(
-            character if character.isalnum() else " " for character in lowered
-        ).split()
-        if piece
-    }
-    if pieces.intersection(
-        {
-            "authorization",
-            "credential",
-            "credentials",
-            "password",
-            "passwd",
-            "pwd",
-            "secret",
-            "token",
-        }
-    ):
-        return True
-    return any(
-        marker in compact
-        for marker in ("accesskey", "apikey", "clientsecret", "privatekey", "refreshtoken")
-    )
+    return sensitive_json_key(key)
 
 
 def _redacted_json(payload: dict[str, Any]) -> str:

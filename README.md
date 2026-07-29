@@ -193,15 +193,20 @@ All candidates start from the same commit, receive the same immutable GoalSpec,
 and run the same configured checks. Repository-local command executables,
 test-suite membership, verifier definitions, and verifier-sensitive paths that
 must remain absent are frozen before work. The built-in manifests cover Python,
-JavaScript, Rust, Go, Maven, Gradle, .NET, and RSpec. A candidate that changes,
-adds, removes, or replaces those assets with a symlink is disqualified even if
-its altered check returns zero. Python module checks also use safe-path startup
+Rust, Go, Maven, Gradle, .NET, and RSpec. Package-manager test scripts such as
+`npm test`, `pnpm test`, `yarn test`, and `bun test` are treated as opaque and
+require explicit `review.assets`, because the package manifest can delegate to
+arbitrary repository code. A candidate that changes, adds, removes, or replaces
+protected assets with a symlink is disqualified even if its altered check
+returns zero. Python module checks also use safe-path startup
 so a candidate cannot shadow the installed Pytest or unittest package from the
 repository root. Opaque custom check runners must declare their complete
 repository dependency boundary with
 `review.assets` (or top-level `review_assets`); the tournament refuses to run
-when it cannot infer that boundary. A declared directory freezes both its
-contents and membership. Among passing candidates, the harness
+when it cannot infer that boundary. A declared directory, or a repository
+directory named directly in a verifier command, freezes both its contents and
+membership. Standard Maven and Gradle test source trees and common .NET test
+files are also membership-protected. Among passing candidates, the harness
 deterministically prefers the smallest patch, verifies it again in a fresh
 worktree, and rejects any verifier side effect by comparing complete workspace
 fingerprints before applying that exact state to the original workspace. If no

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 import stat
 from datetime import UTC, datetime
 from inspect import Parameter, signature
@@ -27,6 +29,8 @@ from agentic_harness.core.local_goal_bridge import (
     managed_mode_record_dispatchable,
     managed_route_key,
 )
+from agentic_harness.core.redaction import redact_preview_text
+from agentic_harness.gui.preview_security import sensitive_preview_path
 
 
 TaskPayload = dict[str, Any]
@@ -44,6 +48,9 @@ _TECHNICAL_SUMMARY_TERMS = (
 )
 _PERMANENT_COMMAND_FAILURES = frozenset({2, 126, 127})
 _MAX_START_TICKET_BYTES = 128 * 1024
+_MAX_QUEUE_RECEIPT_BYTES = 16 * 1024 * 1024
+_START_REQUEST_CONTRACT = "agentic_harness_start_request.v1"
+_QUEUE_CONTRACT = "local_node1_goal_queue.v1"
 
 
 _MANAGED_ROUTE_SPECS: tuple[dict[str, Any], ...] = (
@@ -1227,6 +1234,14 @@ def start_task(
             safe_areas=safe_areas,
             checks=checks,
         )
+    request_binding = _start_request_binding(
+        objective=objective,
+        route_id=expected_route_id,
+        safe_areas=safe_areas,
+        checks=checks,
+        execution_profile=execution_profile,
+        supervision=supervision,
+    )
     try:
         start_kwargs: dict[str, Any] = {
             "mode_key": route,
@@ -1242,6 +1257,10 @@ def start_task(
             start_kwargs["route_id"] = expected_route_id
         if _accepts_keyword(bridge.start_human_goal, "supervision"):
             start_kwargs["supervision"] = supervision
+        if isinstance(bridge, LocalGoalBridge) and _accepts_keyword(
+            bridge.start_human_goal, "request_binding"
+        ):
+            start_kwargs["request_binding"] = request_binding
         result = bridge.start_human_goal(**start_kwargs)
     except ValueError as exc:
         return _task(
@@ -1251,12 +1270,13 @@ def start_task(
             advanced_details={"error": str(exc)},
         )
     task = task_from_command_result(result, fallback_status="starting")
-    if (
-        route == "mode1"
-        and result.returncode == 0
-        and isinstance(bridge, LocalGoalBridge)
-        and not _start_receipt_matches_objective(result, objective)
-    ):
+    receipt_matches = True
+    if result.returncode == 0 and isinstance(bridge, LocalGoalBridge):
+        if route in {"mode1", "legacy-guided"}:
+            receipt_matches = _start_receipt_matches_request(result, request_binding)
+        elif route in {"legacy-cloud", "mode3a", "mode4"}:
+            receipt_matches = _queue_receipt_matches_request(result, request_binding)
+    if result.returncode == 0 and not receipt_matches:
         glm_receipt = result.metadata.get("glm_supervision")
         if (
             isinstance(glm_receipt, dict)
@@ -1277,6 +1297,8 @@ def start_task(
                 "returncode": result.returncode,
                 "error": "start_identity_mismatch",
                 "observed_run_dir": _started_run_dir(result),
+                "observed_queue_id": _started_queue_id(result),
+                "request_id": request_binding["request_id"],
             },
         )
     task = _annotate_requested_execution(
@@ -1308,7 +1330,62 @@ def _started_run_dir(result: CommandResult) -> str:
     return ""
 
 
-def _start_receipt_matches_objective(result: CommandResult, objective: str) -> bool:
+def _started_queue_id(result: CommandResult) -> str:
+    payload = _json_from_output(result.stdout)
+    if payload is not None:
+        value = str(payload.get("queued_id") or payload.get("queue_id") or "").strip()
+        if value:
+            return value
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() in {"queued_id", "queue_id"} and value.strip():
+            return value.strip()
+    return ""
+
+
+def _result_output_value(result: CommandResult, expected_key: str) -> str:
+    payload = _json_from_output(result.stdout)
+    if payload is not None:
+        value = payload.get(expected_key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == expected_key and value.strip():
+            return value.strip()
+    return ""
+
+
+def _start_request_binding(
+    *,
+    objective: str,
+    route_id: str,
+    safe_areas: tuple[str, ...],
+    checks: tuple[str, ...],
+    execution_profile: str,
+    supervision: str,
+) -> dict[str, str]:
+    return {
+        "contract": _START_REQUEST_CONTRACT,
+        "request_id": secrets.token_hex(24),
+        "objective_sha256": hashlib.sha256(objective.encode("utf-8")).hexdigest(),
+        "route_id": route_id,
+        "safe_areas_sha256": _sequence_sha256(safe_areas),
+        "verification_sha256": _sequence_sha256(checks),
+        "execution_profile": execution_profile,
+        "supervision": supervision,
+    }
+
+
+def _sequence_sha256(values: tuple[str, ...]) -> str:
+    serialized = json.dumps(list(values), ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _start_receipt_matches_request(
+    result: CommandResult,
+    request_binding: dict[str, str],
+) -> bool:
     """Bind a successful Mode 1 start only to its exact harness-owned ticket."""
 
     run_dir = _started_run_dir(result)
@@ -1343,15 +1420,101 @@ def _start_receipt_matches_objective(result: CommandResult, objective: str) -> b
         if len(raw) > _MAX_START_TICKET_BYTES:
             return False
         payload = json.loads(raw.decode("utf-8"))
-        criteria = payload.get("done_criteria") if isinstance(payload, dict) else None
-        source_goal = str(payload.get("source_goal") or "") if isinstance(payload, dict) else ""
-        turnstone_marker = (
-            "Original objective (preserve this exactly):\n"
-            f"{objective}\n\nExecution effort:"
+        if not isinstance(payload, dict):
+            return False
+        source_goal = str(payload.get("source_goal") or "")
+        expected_marker = (
+            "Agentic Harness managed start binding "
+            f"({_START_REQUEST_CONTRACT}):\n"
+            + json.dumps(
+                request_binding,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         )
-        return (isinstance(criteria, list) and objective in criteria) or (
-            turnstone_marker in source_goal
+        return (
+            payload.get("title")
+            == _managed_request_title(request_binding["request_id"])
+            and expected_marker in source_goal
         )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return False
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _managed_request_title(request_id: str) -> str:
+    """Match the bounded controller title without weakening the full binding."""
+
+    return f"Agentic Harness GUI request {request_id[:24]}"
+
+
+def _queue_receipt_matches_request(
+    result: CommandResult,
+    request_binding: dict[str, str],
+) -> bool:
+    """Bind a cloud queue ID to the exact request recorded by the controller."""
+
+    queue_id = _started_queue_id(result)
+    queue_path_text = _result_output_value(result, "queue_json")
+    if not queue_id or not queue_path_text:
+        return False
+    queue_path = Path(queue_path_text)
+    if not queue_path.is_absolute():
+        return False
+    descriptor = -1
+    try:
+        resolved_queue_path = queue_path.resolve(strict=True)
+        if resolved_queue_path != queue_path:
+            return False
+        queue_stat = os.lstat(queue_path)
+        if stat.S_ISLNK(queue_stat.st_mode) or not stat.S_ISREG(queue_stat.st_mode):
+            return False
+        if queue_stat.st_size > _MAX_QUEUE_RECEIPT_BYTES:
+            return False
+        descriptor = os.open(
+            queue_path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        observed = os.fstat(descriptor)
+        if (queue_stat.st_dev, queue_stat.st_ino) != (observed.st_dev, observed.st_ino):
+            return False
+        if not stat.S_ISREG(observed.st_mode):
+            return False
+        raw = os.read(descriptor, _MAX_QUEUE_RECEIPT_BYTES + 1)
+        if len(raw) > _MAX_QUEUE_RECEIPT_BYTES:
+            return False
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict) or payload.get("contract") != _QUEUE_CONTRACT:
+            return False
+        items = payload.get("items")
+        if not isinstance(items, list):
+            return False
+        matching_items = [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and item.get("id") == queue_id
+            and item.get("queue_id") == queue_id
+        ]
+        if len(matching_items) != 1:
+            return False
+        goal = matching_items[0].get("goal")
+        if not isinstance(goal, str):
+            return False
+        expected_marker = (
+            "Agentic Harness managed start binding "
+            f"({_START_REQUEST_CONTRACT}):\n"
+            + json.dumps(
+                request_binding,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        return expected_marker in goal
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return False
     finally:
@@ -1406,10 +1569,7 @@ def status_task(bridge: LocalGoalBridge) -> TaskPayload:
 def watch_task(bridge: LocalGoalBridge) -> TaskPayload:
     if not bridge.available():
         return status_task(bridge)
-    result = bridge.monitor(json_output=True)
-    task = task_from_command_result(result, fallback_status="checking")
-    _attach_managed_route_receipt(task, bridge, _json_from_output(result.stdout))
-    return task
+    return status_task(bridge)
 
 
 def command_task(
@@ -1419,6 +1579,18 @@ def command_task(
         return status_task(bridge)
     body = body or {}
     if command == "accept":
+        review = bridge.run(["review"])
+        if review.returncode != 0:
+            task = status_task(bridge)
+            details = dict(task.get("advanced_details") or {})
+            details["review_command"] = {
+                "args": review.args,
+                "returncode": review.returncode,
+                "stdout": review.stdout,
+                "stderr": review.stderr,
+            }
+            task["advanced_details"] = details
+            return task
         result = bridge.run(["accept"])
     elif command == "continue":
         feedback = str(body.get("feedback", "")).strip()
@@ -1601,7 +1773,10 @@ def task_from_command_result(result: CommandResult, *, fallback_status: str) -> 
 
 def _ticket_was_rejected_before_start(result: CommandResult) -> bool:
     output = f"{result.stdout}\n{result.stderr}".lower()
-    return "failed pre-execution validation; not starting worker" in output
+    return (
+        "failed pre-execution validation; not starting worker" in output
+        or "frozen verification contract is invalid; not starting worker" in output
+    )
 
 
 def _ticket_rejection_summary(result: CommandResult) -> str:
@@ -1614,6 +1789,12 @@ def _ticket_rejection_summary(result: CommandResult) -> str:
         return (
             "Your task did not start because its work area was not available to the worker. "
             "Your request is still saved; choose the entire project or a specific folder and try again."
+        )
+    if any("effective verifiers are invalid" in error for error in errors):
+        return (
+            "Your task did not start because its completion check was not safe to run. "
+            "Your request is still saved; choose Automatic completion checks or enter a direct "
+            "test command without shell expansion, then try again."
         )
     if errors:
         return "Your task did not start. Your request is still saved. " + " ".join(errors)
@@ -2585,6 +2766,13 @@ def _managed_route_receipt(
     route_id = _first_route_text(run_meta.get("route_id"), active.get("route_id"))
     if route_id:
         receipt["route_id"] = route_id
+    queue_id = _first_route_text(
+        run_meta.get("queue_id"),
+        active.get("queue_id"),
+        active.get("queued_id"),
+    )
+    if queue_id:
+        receipt["queue_id"] = queue_id
     if reviewer_model:
         receipt["reviewer_model"] = reviewer_model
     return receipt
@@ -2626,7 +2814,7 @@ def _managed_owned_files(root: Path, run_dir: Path) -> list[str]:
             target.relative_to(root)
         except ValueError:
             continue
-        if target.is_file() and not _sensitive_managed_preview_path(target, root):
+        if target.is_file() and not sensitive_preview_path(target, root):
             owned.append(Path(relative).as_posix())
     return list(dict.fromkeys(owned))[:12]
 
@@ -2703,7 +2891,7 @@ def _preview_managed_workspace_file(root: Path, relative: str) -> dict[str, Any]
         path.relative_to(root)
     except ValueError as exc:
         raise ValueError("Preview path is outside the workspace.") from exc
-    if _sensitive_managed_preview_path(path, root):
+    if sensitive_preview_path(path, root):
         raise ValueError("Preview file is unavailable.")
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -2725,35 +2913,8 @@ def _preview_managed_workspace_file(root: Path, relative: str) -> dict[str, Any]
         raise ValueError("Binary files cannot be previewed.") from exc
     # Keep the JSON contract stable across platforms.  Windows checkouts may
     # store text with CRLF even when the authored content used LF.
-    content = content.replace("\r\n", "\n").replace("\r", "\n")
+    content = redact_preview_text(content)
     return {"path": requested.as_posix(), "content": content, "truncated": False}
-
-
-def _sensitive_managed_preview_path(path: Path, root: Path) -> bool:
-    try:
-        relative = path.relative_to(root)
-    except ValueError:
-        return True
-    parts = {part.lower() for part in relative.parts}
-    name = path.name.lower()
-    dotenv = name == ".env" or name == ".envrc" or name.startswith((".env.", ".env-"))
-    protected = {
-        ".git-credentials",
-        ".netrc",
-        ".npmrc",
-        ".pypirc",
-        "credentials.json",
-        "id_ed25519",
-        "id_rsa",
-        "token.json",
-        "tokens.json",
-    }
-    return (
-        dotenv
-        or bool(parts & {".aws", ".azure", ".docker", ".git", ".gnupg", ".kube", ".ssh"})
-        or name in protected
-        or path.suffix.lower() in {".jks", ".key", ".keystore", ".p12", ".pem", ".pfx"}
-    )
 
 
 def _json_from_output(output: str) -> dict[str, Any] | None:
@@ -2774,6 +2935,14 @@ def _status_from_payload(payload: dict[str, Any] | None, *, fallback_status: str
         return "working"
     if _payload_reports_completion(payload):
         return "done" if _payload_is_accepted(payload) else "needs_review"
+    if _local_goal_lane_is_ready(payload):
+        # The controller's current-state contract is authoritative for whether
+        # another goal may start. Queue counters can retain stale "running"
+        # residue after the associated run has stopped, so they must not turn a
+        # proven idle, free lane into a permanent GUI blocker.
+        return "ready"
+    if _payload_has_active_queue(payload):
+        return "working"
     if (
         payload.get("active") is False
         or payload.get("active_goal") is None
@@ -2818,6 +2987,22 @@ def _status_from_payload(payload: dict[str, Any] | None, *, fallback_status: str
     if any(marker in text for marker in ('"done"', '"complete"', '"completed"')):
         return "needs_review"
     return "working"
+
+
+def _payload_has_active_queue(payload: dict[str, Any]) -> bool:
+    queue = payload.get("queue")
+    if isinstance(queue, dict):
+        for key in ("queued", "running", "starting", "reviewing"):
+            value = queue.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                return True
+    capabilities = payload.get("capabilities")
+    current = (
+        capabilities.get("current_state")
+        if isinstance(capabilities, dict)
+        else None
+    )
+    return isinstance(current, dict) and current.get("queue_has_active_work") is True
 
 
 def _recovery_status(payload: dict[str, Any]) -> str:

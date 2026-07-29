@@ -10,6 +10,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 
+import pytest
+
 from agentic_harness.core.local_goal_bridge import (
     CommandResult,
     LocalGoalBridge,
@@ -18,7 +20,12 @@ from agentic_harness.core.local_goal_bridge import (
 from agentic_harness.gui import api as gui_api
 from agentic_harness.gui import server as gui_server
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
-from agentic_harness.gui.server import GuiSession, _managed_session_path, make_handler
+from agentic_harness.gui.server import (
+    GuiSession,
+    _managed_session_path,
+    _managed_workspace_identity,
+    make_handler,
+)
 
 
 MANAGED_ROUTE_FIELDS = {
@@ -822,16 +829,25 @@ class TicketBoundRaceBridge(LocalGoalBridge):
         )
 
     def start_human_goal(self, **kwargs: object) -> CommandResult:
+        request_binding = dict(kwargs["request_binding"])  # type: ignore[arg-type]
+        if self.ticket_objective != "Create my exact canary":
+            request_binding["request_id"] = "another-request"
+        binding_json = json.dumps(request_binding, sort_keys=True, separators=(",", ":"))
         run = Path(self.doc_root) / "runs" / "observed-run"
         run.mkdir(parents=True)
         (run / "ticket.json").write_text(
             json.dumps(
                 {
+                    "title": (
+                        "Agentic Harness GUI request "
+                        f"{request_binding['request_id'][:24]}"
+                    ),
                     "done_criteria": ["Managed task request"],
                     "source_goal": (
                         "Managed task request\n\n"
-                        "Original objective (preserve this exactly):\n"
-                        f"{self.ticket_objective}\n\nExecution effort: quick"
+                        "Agentic Harness managed start binding "
+                        "(agentic_harness_start_request.v1):\n"
+                        f"{binding_json}"
                     ),
                 }
             ),
@@ -843,6 +859,74 @@ class TicketBoundRaceBridge(LocalGoalBridge):
             f"run_dir={run}\nstarted local-node1-goal\n",
             "",
         )
+
+
+class QueueReceiptBridge(LocalGoalBridge):
+    def __init__(self, root: Path, *, queue_id: str, bind_request: bool = True) -> None:
+        local_goal = root / "local-goal"
+        local_goal.write_text("#!/bin/sh\n", encoding="utf-8")
+        local_goal.chmod(0o700)
+        super().__init__(doc_root=root, local_goal=local_goal)
+        self.queue_id = queue_id
+        self.bind_request = bind_request
+        self.starts: list[dict[str, object]] = []
+
+    def available(self) -> bool:
+        return True
+
+    def background_supervision(self) -> dict[str, object]:
+        return {"active": True, "state": "active", "timer_active": True}
+
+    def status(self, *, json_output: bool = False) -> CommandResult:
+        return CommandResult(
+            ("local-goal", "status", "--json"),
+            0,
+            json.dumps(
+                {
+                    "classification": "idle",
+                    "active_goal": None,
+                    "capabilities": {
+                        "current_state": {
+                            "classification": "idle",
+                            "local_goal_lane_free": True,
+                        }
+                    },
+                }
+            ),
+            "",
+        )
+
+    def start_human_goal(self, **kwargs: object) -> CommandResult:
+        self.starts.append(dict(kwargs))
+        if not self.queue_id:
+            return CommandResult(("local-goal", "enqueue"), 0, "queued\n", "")
+        request_binding = dict(kwargs["request_binding"])  # type: ignore[arg-type]
+        if not self.bind_request:
+            request_binding["request_id"] = "unrelated-request"
+        binding_json = json.dumps(request_binding, sort_keys=True, separators=(",", ":"))
+        queue_path = Path(self.doc_root) / "queue.json"
+        queue_path.write_text(
+            json.dumps(
+                {
+                    "contract": "local_node1_goal_queue.v1",
+                    "items": [
+                        {
+                            "id": self.queue_id,
+                            "queue_id": self.queue_id,
+                            "goal": (
+                                "Create my exact queued canary\n\n"
+                                "Agentic Harness managed start binding "
+                                "(agentic_harness_start_request.v1):\n"
+                                f"{binding_json}"
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        stdout = f"queued_id={self.queue_id}\nqueue_json={queue_path.resolve()}\n"
+        return CommandResult(("local-goal", "enqueue"), 0, stdout, "")
 
 
 def test_managed_start_refuses_to_bind_another_tasks_run(tmp_path: Path) -> None:
@@ -876,6 +960,161 @@ def test_managed_start_binds_matching_harness_ticket(tmp_path: Path) -> None:
 
     assert task["status"] == "starting"
     assert enriched["metadata"]["start_accepted"] is True
+
+
+def test_guided_start_binds_matching_harness_ticket(tmp_path: Path) -> None:
+    body = {
+        "route": "guided",
+        "effort": "quick",
+        "objective": "Create my exact canary",
+    }
+    task = gui_api.start_task(
+        TicketBoundRaceBridge(tmp_path, ticket_objective=body["objective"]),
+        body,
+    )
+    enriched = GuiSession().enrich(task, body)
+
+    assert task["status"] == "starting"
+    assert enriched["metadata"]["start_accepted"] is True
+
+
+def test_guided_start_rejects_another_tasks_ticket(tmp_path: Path) -> None:
+    body = {
+        "route": "guided",
+        "effort": "quick",
+        "objective": "Create my exact canary",
+    }
+    task = gui_api.start_task(
+        TicketBoundRaceBridge(tmp_path, ticket_objective="Another guided task"),
+        body,
+    )
+
+    assert task["status"] == "blocked"
+    assert task["advanced_details"]["error"] == "start_identity_mismatch"
+
+
+@pytest.mark.parametrize("route", ["legacy-cloud", "mode3a", "mode4"])
+def test_nonmode1_managed_start_requires_authoritative_queue_identity(
+    tmp_path: Path,
+    route: str,
+) -> None:
+    body: dict[str, object] = {
+        "route": route,
+        "effort": "quick",
+        "objective": "Create my exact queued canary",
+    }
+    if route in {"legacy-cloud", "mode3a"}:
+        body["safe_areas"] = ["reports/canary.md"]
+
+    task = gui_api.start_task(QueueReceiptBridge(tmp_path, queue_id=""), body)
+    enriched = GuiSession().enrich(task, body)
+
+    assert task["status"] == "blocked"
+    assert task["advanced_details"]["error"] == "start_identity_mismatch"
+    assert enriched["metadata"]["start_accepted"] is False
+
+
+@pytest.mark.parametrize("route", ["legacy-cloud", "mode3a", "mode4"])
+def test_nonmode1_managed_start_rejects_queue_bound_to_another_request(
+    tmp_path: Path,
+    route: str,
+) -> None:
+    body: dict[str, object] = {
+        "route": route,
+        "effort": "quick",
+        "objective": "Create my exact queued canary",
+    }
+    if route in {"legacy-cloud", "mode3a"}:
+        body["safe_areas"] = ["reports/canary.md"]
+
+    task = gui_api.start_task(
+        QueueReceiptBridge(
+            tmp_path,
+            queue_id=f"{route}-unrelated",
+            bind_request=False,
+        ),
+        body,
+    )
+
+    assert task["status"] == "blocked"
+    assert task["advanced_details"]["error"] == "start_identity_mismatch"
+
+
+@pytest.mark.parametrize("route", ["legacy-cloud", "mode3a", "mode4"])
+def test_nonmode1_managed_start_binds_exact_queue_identity(
+    tmp_path: Path,
+    route: str,
+) -> None:
+    body: dict[str, object] = {
+        "route": route,
+        "effort": "quick",
+        "objective": "Create my exact queued canary",
+    }
+    if route in {"legacy-cloud", "mode3a"}:
+        body["safe_areas"] = ["reports/canary.md"]
+
+    bridge = QueueReceiptBridge(tmp_path, queue_id=f"{route}-request-a")
+    task = gui_api.start_task(bridge, body)
+    session = GuiSession()
+    enriched = session.enrich(task, body)
+    wrong_task = session.record(
+        {
+            "id": f"{route}-request-b",
+            "status": "working",
+            "summary": "unrelated task",
+            "metadata": {},
+        }
+    )
+
+    assert enriched["metadata"]["start_accepted"] is True
+    assert enriched["advanced_details"]["stdout"].startswith(
+        f"queued_id={route}-request-a\nqueue_json="
+    )
+    assert wrong_task["summary"] == "unrelated task"
+    assert wrong_task.get("objective") != body["objective"]
+
+
+def test_queued_start_follows_run_only_when_run_meta_receipt_has_same_queue_id() -> None:
+    source = {
+        "objective": "Keep this exact queued task",
+        "route": "mode3a",
+        "effort": "standard",
+        "safe_areas": ["reports/canary.md"],
+    }
+    session = GuiSession()
+    started = session.enrich(
+        {
+            "status": "starting",
+            "summary": "queued",
+            "metadata": {},
+            "advanced_details": {"returncode": 0, "stdout": "queued_id=queue-a\n"},
+        },
+        source,
+    )
+    session.record(started)
+
+    matching = session.record(
+        {
+            "id": "run-directory-name",
+            "status": "working",
+            "summary": "working",
+            "metadata": {
+                "route_receipt": {
+                    "contract": "agentic_harness.managed_route_receipt.v1",
+                    "queue_id": "queue-a",
+                }
+            },
+            "advanced_details": {
+                "payload": {
+                    "active_goal": {
+                        "run_dir": "/tmp/runs/run-directory-name",
+                    }
+                }
+            },
+        }
+    )
+
+    assert matching["objective"] == source["objective"]
 
 
 def test_managed_modes_endpoint_exposes_only_proven_local_profiles() -> None:
@@ -1599,6 +1838,144 @@ def test_managed_session_uses_operator_state_root_not_worker_workspace(
     assert state_path.suffix == ".json"
     assert project.resolve() not in state_path.parents
     assert state_path != project.resolve() / ".agentic-harness" / "gui-session.v1.json"
+
+
+def test_managed_session_identity_separates_controller_workspaces(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "local-goal"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    project = tmp_path / "same-project"
+    project.mkdir()
+    first_root = tmp_path / "docs-a"
+    second_root = tmp_path / "docs-b"
+    first_root.mkdir()
+    second_root.mkdir()
+    first = LocalGoalBridge(doc_root=first_root, local_goal=executable)
+    second = LocalGoalBridge(doc_root=second_root, local_goal=executable)
+
+    first_identity = _managed_workspace_identity(first)
+    second_identity = _managed_workspace_identity(second)
+
+    assert first_identity != second_identity
+    assert _managed_session_path(
+        project, workspace_identity=first_identity
+    ) != _managed_session_path(project, workspace_identity=second_identity)
+
+
+def test_managed_session_identity_separates_projects_on_one_controller(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "local-goal"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    docs = tmp_path / "docs"
+    project_a = tmp_path / "project-a"
+    project_b = tmp_path / "project-b"
+    docs.mkdir()
+    project_a.mkdir()
+    project_b.mkdir()
+    bridge = LocalGoalBridge(doc_root=docs, local_goal=executable)
+
+    identity_a = _managed_workspace_identity(bridge, project_dir=project_a)
+    identity_b = _managed_workspace_identity(bridge, project_dir=project_b)
+
+    assert identity_a["project_dir"] == str(project_a.resolve())
+    assert identity_b["project_dir"] == str(project_b.resolve())
+    assert _managed_session_path(
+        project_a, workspace_identity=identity_a
+    ) != _managed_session_path(project_b, workspace_identity=identity_b)
+
+
+def test_managed_session_rejects_persisted_workspace_identity_mismatch(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    first = GuiSession(
+        state_path,
+        workspace_identity={
+            "doc_root": "/srv/docs-a",
+            "local_goal": "/srv/docs-a/scripts/local-goal",
+            "os_user": "operator",
+        },
+    )
+    first.record(
+        {
+            "id": "run-a",
+            "status": "done",
+            "objective": "Workspace A result",
+            "metadata": {},
+        }
+    )
+
+    second = GuiSession(
+        state_path,
+        workspace_identity={
+            "doc_root": "/srv/docs-b",
+            "local_goal": "/srv/docs-b/scripts/local-goal",
+            "os_user": "operator",
+        },
+    )
+
+    assert second.history() == []
+    assert second.persistence_status()["status"] == "degraded"
+    assert "workspace identity" in second.persistence_status()["warning"]
+
+
+def test_model_profile_attachment_without_run_identity_fails_closed() -> None:
+    result = CommandResult(
+        ("local-goal", "model-profile-status", "--json"),
+        0,
+        _profile_status("ornith-text", attached=True),
+        "",
+    )
+
+    assert not __import__(
+        "agentic_harness.core.local_goal_bridge",
+        fromlist=["_model_profile_attachment_matches"],
+    )._model_profile_attachment_matches(result, "/tmp/runs/expected")
+
+
+def test_ornith_identityless_start_does_not_issue_unbound_attachment(
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+    active_profile = "qwen-primary"
+
+    def runner(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        nonlocal active_profile
+        command = list(args[0])
+        calls.append(command)
+        if command[-2:] == ["capabilities", "--json"]:
+            stdout = _capabilities()
+        elif "model-profile-status" in command:
+            stdout = _profile_status(active_profile)
+        elif "model-profile-activate" in command:
+            active_profile = "ornith-text"
+            stdout = _profile_status(active_profile)
+        elif "quick-start" in command:
+            stdout = "started local-node1-goal\n"
+        else:
+            stdout = "{}"
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=runner,
+    )
+
+    result = bridge.start_human_goal(
+        mode_key="mode1",
+        objective="Require exact run identity",
+        execution_profile="ornith-text",
+    )
+
+    assert result.returncode == 0
+    assert result.metadata["profile_attachment"] == "reconciliation_required"
+    assert result.metadata["run_dir"] == ""
+    assert not any("model-profile-attach" in command for command in calls)
 
 
 def test_identityless_start_is_not_rebound_after_restart(tmp_path: Path) -> None:

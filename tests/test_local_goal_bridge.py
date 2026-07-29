@@ -148,7 +148,14 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
     local_goal = doc_root / "scripts/local-goal"
     bridge = LocalGoalBridge(doc_root=doc_root, local_goal=local_goal, runner=fake_runner)
 
-    result = bridge.enqueue_mode3a(Mode3AGoalOptions(objective="fix one thing"))
+    request_binding = {
+        "contract": "agentic_harness_start_request.v1",
+        "request_id": "request-mode3a",
+    }
+    result = bridge.enqueue_mode3a(
+        Mode3AGoalOptions(objective="fix one thing"),
+        request_binding=request_binding,
+    )
 
     assert result.returncode == 0
     assert calls
@@ -169,6 +176,8 @@ def test_local_goal_bridge_enqueue_mode3a_calls_local_goal(tmp_path) -> None:
     ]
     assert "--goal" in command
     assert "fix one thing" in command[-1]
+    assert "agentic_harness_start_request.v1" in command[-1]
+    assert '"request_id":"request-mode3a"' in command[-1]
 
 
 def test_mode4_audit_uses_distinct_contract_and_pinned_worker(tmp_path) -> None:
@@ -204,7 +213,11 @@ def test_mode4_audit_uses_distinct_contract_and_pinned_worker(tmp_path) -> None:
         runner=fake_runner,
     )
     result = bridge.enqueue_mode4_audit(
-        Mode3AGoalOptions(objective="Audit this bounded component without editing source")
+        Mode3AGoalOptions(objective="Audit this bounded component without editing source"),
+        request_binding={
+            "contract": "agentic_harness_start_request.v1",
+            "request_id": "request-mode4",
+        },
     )
 
     assert result.returncode == 0
@@ -216,6 +229,7 @@ def test_mode4_audit_uses_distinct_contract_and_pinned_worker(tmp_path) -> None:
     assert command[command.index("--executor-worker") + 1] == "glm52-direct"
     assert command[command.index("--planner") + 1] == "none"
     assert command[command.index("--executor") + 1] == "opencode"
+    assert '"request_id":"request-mode4"' in command[command.index("--goal") + 1]
 
 
 def test_local_build_can_start_and_verify_glm_advisory_supervision(tmp_path) -> None:
@@ -435,6 +449,47 @@ def test_human_modes_use_routes_advertised_by_external_backend(tmp_path) -> None
     assert starts[2][starts[2].index("--harness-contract") + 1] == (
         "agentic_harness.external_candidate.v1"
     )
+
+
+def test_guided_start_carries_request_binding_and_title(tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        command = list(args[0])
+        calls.append(command)
+        if command[-2:] == ["capabilities", "--json"]:
+            stdout = """{
+              "lanes": {
+                "local": {"executor": "mini-swe"},
+                "premium_planner_local_builder": {"planners": ["thinkmax"]}
+              }
+            }"""
+        else:
+            stdout = "run_dir=/tmp/controlled-run\n"
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    bridge = LocalGoalBridge(
+        doc_root=tmp_path,
+        local_goal=tmp_path / "local-goal",
+        runner=fake_runner,
+    )
+    bridge.start_human_goal(
+        mode_key="guided",
+        objective="Plan and build this",
+        request_binding={
+            "contract": "agentic_harness_start_request.v1",
+            "request_id": "guided-request-a",
+        },
+    )
+
+    command = next(call for call in calls if len(call) > 1 and call[1] == "premium-start")
+    assert command[command.index("--title") + 1] == (
+        "Agentic Harness GUI request guided-request-a"
+    )
+    dispatched_goal = command[command.index("--goal") + 1]
+    assert dispatched_goal.startswith("Plan and build this")
+    assert "agentic_harness_start_request.v1" in dispatched_goal
+    assert '"request_id":"guided-request-a"' in dispatched_goal
 
 
 def test_starting_a_human_goal_invalidates_previous_status_and_last_run(tmp_path) -> None:

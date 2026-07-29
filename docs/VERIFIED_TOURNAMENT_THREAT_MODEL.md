@@ -11,7 +11,7 @@ A candidate may be selected only when all of these invariants hold:
 
 1. Every candidate starts from the same commit and immutable GoalSpec.
 2. Repository-controlled verifier executables, test definitions, runner
-   configuration, protected directory membership, paths required to remain
+configuration, explicit .NET/MSBuild input closure, protected directory membership, paths required to remain
    absent, and explicit custom assets are frozen before workers start.
 3. A candidate that changes, adds, removes, or symlink-replaces any protected
    verifier input is ineligible even when its check exits successfully.
@@ -26,8 +26,14 @@ A candidate may be selected only when all of these invariants hold:
 ## Verifier boundary
 
 The manifest includes repository-local command arguments, including argument
-zero, plus known definitions for Python, JavaScript, Rust, Go, Maven, Gradle,
-.NET, and RSpec. It records both file hashes and protected path-set membership,
+zero, plus known definitions for Python, Rust, Go, Maven, Gradle, and RSpec.
+Package-manager test scripts are opaque and require explicit
+`review.assets`; freezing only `package.json` is not treated as freezing the
+script it delegates to. `dotnet test` also requires explicit `review.assets`
+because filename conventions cannot represent the evaluated MSBuild input
+closure. Standard Maven and Gradle test trees and repository directories named
+directly in a verifier command have protected membership. The manifest records
+both file hashes and protected path-set membership,
 including sensitive paths that were absent at tournament start. Lexical
 symlinks, symlinked parent components, Windows reparse points, and parent
 traversal are rejected before hashing and on every drift check. Python
