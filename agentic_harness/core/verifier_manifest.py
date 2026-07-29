@@ -460,6 +460,19 @@ _GRADLE_TEST_ALIAS = re.compile(
     )
     """
 )
+_GRADLE_GAP_TOKEN = re.compile(
+    r"(?:\s+|//[^\n]*(?:\n|$)|/\*(?:[^*]|\*(?!/))*\*/)"
+)
+_GRADLE_GAP = r"(?:\s|//[^\n]*(?:\n|$)|/\*(?:[^*]|\*(?!/))*\*/)*"
+_GRADLE_ALIAS_CLOSURE_SUFFIX = re.compile(
+    rf"{_GRADLE_GAP}"
+    rf"(?:\.{_GRADLE_GAP}get{_GRADLE_GAP}"
+    rf"\({_GRADLE_GAP}\){_GRADLE_GAP})?"
+    rf"\.{_GRADLE_GAP}"
+    r"(?P<method>[A-Za-z_][A-Za-z0-9_]*)"
+    rf"{_GRADLE_GAP}(?:\([^{{}};]*\){_GRADLE_GAP})?"
+    r"(?P<opening>\{)"
+)
 _QUOTED_PATH = re.compile(r"""(?P<quote>['"])(?P<path>[^'"]+)(?P=quote)""")
 
 
@@ -578,29 +591,19 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
                 != len(source_matches)
             )
         for alias_match in _GRADLE_TEST_ALIAS.finditer(text):
-            alias = re.escape(alias_match.group("name"))
-            gradle_gap = (
-                r"(?:\s|//[^\n]*(?:\n|$)|/\*(?:[^*]|\*(?!/))*\*/)*"
-            )
+            alias_name = alias_match.group("name")
+            alias = re.escape(alias_name)
             direct_alias = re.compile(
                 rf"\b{alias}\s*(?:\.\s*get\s*\(\s*\))?\s*\.\s*"
                 r"(?:java|kotlin|resources)\s*\.\s*"
                 r"(?:srcDirs?|setSrcDirs)\b(?P<expression>[^\n;}]*)"
             )
-            alias_closure = re.compile(
-                rf"\b{alias}\b{gradle_gap}"
-                rf"(?:\.{gradle_gap}get{gradle_gap}"
-                rf"\({gradle_gap}\){gradle_gap})?"
-                rf"\.{gradle_gap}"
-                r"(?P<method>[A-Za-z_][A-Za-z0-9_]*)"
-                rf"{gradle_gap}(?:\([^{{}};]*\){gradle_gap})?\{{"
-            )
             for direct_match in direct_alias.finditer(text):
                 expressions.append(direct_match.group("expression"))
-            for closure_match in alias_closure.finditer(text):
-                block = _balanced_brace_body(text, closure_match.end() - 1)
+            for method, opening in _gradle_alias_closures(text, alias_name):
+                block = _balanced_brace_body(text, opening)
                 source_matches = list(_GRADLE_SOURCE_ROOT_CALL.finditer(block))
-                if closure_match.group("method") in {"configure", "apply"}:
+                if method in {"configure", "apply"}:
                     expressions.extend(
                         source_match.group("expression")
                         for source_match in source_matches
@@ -642,6 +645,52 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
                     )
                 )
     return configured
+
+
+def _gradle_alias_closures(text: str, alias: str) -> list[tuple[str, int]]:
+    receivers: set[int] = {
+        match.end()
+        for match in re.finditer(rf"\b{re.escape(alias)}\b", text)
+    }
+    for opening_match in re.finditer(r"\(", text):
+        opening = opening_match.start()
+        closing = _balanced_parenthesis_end(text, opening)
+        if closing is None:
+            continue
+        compact = _GRADLE_GAP_TOKEN.sub("", text[opening + 1 : closing])
+        while (
+            compact.startswith("(")
+            and compact.endswith(")")
+            and _balanced_parenthesis_end(compact, 0) == len(compact) - 1
+        ):
+            compact = compact[1:-1]
+        if compact != alias:
+            continue
+        line_start = text.rfind("\n", 0, opening) + 1
+        prefix = _GRADLE_GAP_TOKEN.sub("", text[line_start:opening])
+        if prefix and (prefix[-1].isalnum() or prefix[-1] in "_$.)]"):
+            continue
+        receivers.add(closing + 1)
+
+    closures: set[tuple[str, int]] = set()
+    for receiver_end in receivers:
+        suffix = _GRADLE_ALIAS_CLOSURE_SUFFIX.match(text, receiver_end)
+        if suffix is not None:
+            closures.add((suffix.group("method"), suffix.start("opening")))
+    return sorted(closures, key=lambda item: item[1])
+
+
+def _balanced_parenthesis_end(text: str, opening: int) -> int | None:
+    depth = 0
+    for index in range(opening, len(text)):
+        character = text[index]
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
 
 
 def _literal_gradle_test_paths(expression: str) -> list[str] | None:
