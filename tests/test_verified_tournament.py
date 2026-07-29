@@ -661,6 +661,24 @@ def test_supported_ecosystem_verifier_assets_are_frozen(
                 "}\n"
             ),
         ),
+        (
+            ["gradle", "test"],
+            "build.gradle.kts",
+            (
+                "sourceSets {\n"
+                '    test { kotlin.srcDir("verification") }\n'
+                "}\n"
+            ),
+        ),
+        (
+            ["gradle", "test"],
+            "build.gradle",
+            (
+                "sourceSets {\n"
+                "    test { java { srcDir('verification') } }\n"
+                "}\n"
+            ),
+        ),
     ],
 )
 def test_custom_jvm_test_roots_are_frozen(
@@ -696,6 +714,25 @@ def test_dynamic_gradle_test_root_requires_explicit_assets(tmp_path: Path) -> No
     _git(root, "commit", "-m", "add dynamic test root")
 
     with pytest.raises(ConfigError, match="dynamic Gradle test source root"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
+def test_unrecognized_gradle_test_root_syntax_fails_closed(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle.kts").write_text(
+        (
+            "sourceSets {\n"
+            "    test {\n"
+            '        kotlin.configure { srcDir("verification") }\n'
+            "    }\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add unsupported test root syntax")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
         tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
 
 

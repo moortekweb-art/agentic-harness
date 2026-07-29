@@ -21,6 +21,7 @@ from urllib.parse import quote
 import pytest
 
 from agentic_harness.core.local_goal_bridge import CommandResult, LocalGoalBridge
+from agentic_harness.core.redaction import redact_json_value, sensitive_json_key
 from agentic_harness.gui import server as gui_server_module
 from agentic_harness.gui.api import (
     _managed_route_receipt,
@@ -1437,6 +1438,10 @@ def test_managed_preview_redacts_structured_secret_before_http_serialization(
                 "api_key": synthetic_secret,
                 "session_cookie": "synthetic-session-cookie-R4Q8M2",
                 "set-cookie": "synthetic-set-cookie-R4Q8M2",
+                "sessionToken": "synthetic-session-token-R4Q8M2",
+                "upstreamBearer": "synthetic-upstream-bearer-R4Q8M2",
+                "upstream_bearer": "synthetic-upstream-bearer-snake-R4Q8M2",
+                "tokenCount": 37,
                 "cookie_preferences": "keep-safe",
                 "refresh_token": refresh_marker,
                 "private_key": (
@@ -1466,12 +1471,88 @@ def test_managed_preview_redacts_structured_secret_before_http_serialization(
     assert synthetic_secret not in preview["content"]
     assert "synthetic-session-cookie-R4Q8M2" not in preview["content"]
     assert "synthetic-set-cookie-R4Q8M2" not in preview["content"]
+    assert "synthetic-session-token-R4Q8M2" not in preview["content"]
+    assert "synthetic-upstream-bearer-R4Q8M2" not in preview["content"]
+    assert "synthetic-upstream-bearer-snake-R4Q8M2" not in preview["content"]
+    assert '"tokenCount": 37' in preview["content"]
     assert '"cookie_preferences": "keep-safe"' in preview["content"]
     assert refresh_marker not in preview["content"]
     assert private_key_marker not in preview["content"]
     assert "nested-client-secret-R4Q8M2" not in preview["content"]
     assert "<redacted>" in preview["content"]
     assert '"finding": "safe"' in preview["content"]
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "authToken",
+        "sessionToken",
+        "upstreamBearer",
+        "upstream_bearer",
+    ],
+)
+def test_structured_redaction_recognizes_compound_credential_keys(key: str) -> None:
+    marker = "opaque-compound-credential-Z7Q4M9"
+
+    assert sensitive_json_key(key)
+    assert redact_json_value({key: marker}) == {key: "<redacted>"}
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "inputTokens",
+        "maxTokens",
+        "outputTokens",
+        "tokenBudget",
+        "tokenCount",
+        "tokenLimit",
+        "tokenUsage",
+        "totalTokens",
+    ],
+)
+def test_structured_redaction_preserves_benign_token_metadata(key: str) -> None:
+    assert not sensitive_json_key(key)
+    assert redact_json_value({key: 37}) == {key: 37}
+
+
+def test_gui_http_and_websocket_redact_compound_credential_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    markers = {
+        "authToken": "opaque-auth-token-Z7Q4M9",
+        "sessionToken": "opaque-session-token-Z7Q4M9",
+        "upstreamBearer": "opaque-upstream-bearer-Z7Q4M9",
+        "upstream_bearer": "opaque-upstream-bearer-snake-Z7Q4M9",
+    }
+    payload = {"status": "working", **markers, "tokenCount": 37}
+    monkeypatch.setattr(gui_server_module, "status_task", lambda _bridge: dict(payload))
+
+    with gui_server(FakeBridge()) as base_url:
+        current = get_json(base_url, "/api/tasks/current")
+        host, port = base_url.removeprefix("http://").split(":")
+        with socket.create_connection((host, int(port)), timeout=3) as client:
+            client.sendall(
+                (
+                    "GET /api/tasks/stream HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            response = client.recv(8192)
+            response += client.recv(8192)
+
+    assert current["tokenCount"] == 37
+    assert b"101 Switching Protocols" in response
+    assert b'"tokenCount": 37' in response
+    for key, marker in markers.items():
+        assert current[key] == "<redacted>"
+        assert marker.encode() not in response
 
 
 def test_gui_server_unknown_api_route_returns_json_404() -> None:

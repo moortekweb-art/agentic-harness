@@ -29,6 +29,19 @@ _SENSITIVE_JSON_KEYS = frozenset(
         "token",
     }
 )
+_NON_SECRET_TOKEN_METADATA_KEYS = frozenset(
+    {
+        "inputtokens",
+        "maxtokens",
+        "outputtokens",
+        "tokenbudget",
+        "tokencount",
+        "tokenlimit",
+        "tokenusage",
+        "totaltokens",
+    }
+)
+_CAMEL_CASE_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _PRIVATE_KEY_BLOCK = re.compile(
     r"-----BEGIN (?P<label>[A-Z0-9 ]*PRIVATE KEY)-----"
     r".*?"
@@ -72,18 +85,22 @@ def sensitive_json_key(key: str) -> bool:
 
     lowered = key.strip().lower()
     compact = "".join(character for character in lowered if character.isalnum())
+    if compact in _NON_SECRET_TOKEN_METADATA_KEYS:
+        return False
     if compact in _SENSITIVE_JSON_KEYS:
         return True
+    separated = _CAMEL_CASE_BOUNDARY.sub(" ", key.strip())
     pieces = {
-        piece
+        piece.lower()
         for piece in "".join(
-            character if character.isalnum() else " " for character in lowered
+            character if character.isalnum() else " " for character in separated
         ).split()
         if piece
     }
     if pieces.intersection(
         {
             "authorization",
+            "bearer",
             "credential",
             "credentials",
             "password",

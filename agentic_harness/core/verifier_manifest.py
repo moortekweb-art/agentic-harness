@@ -432,8 +432,11 @@ _GRADLE_DIRECT_TEST_CONFIG = re.compile(
     """
 )
 _GRADLE_SOURCE_ROOT_CALL = re.compile(
-    r"\b(?:java|resources)\s*\.\s*(?:srcDirs?|setSrcDirs)\b(?P<expression>[^\n;}]*)"
+    r"\b(?:java|kotlin|resources)\s*"
+    r"(?:\.\s*|\{\s*)"
+    r"(?:srcDirs?|setSrcDirs)\b(?P<expression>[^\n;}]*)"
 )
+_GRADLE_SOURCE_ROOT_NAME = re.compile(r"\b(?:srcDirs?|setSrcDirs)\b")
 _QUOTED_PATH = re.compile(r"""(?P<quote>['"])(?P<path>[^'"]+)(?P=quote)""")
 
 
@@ -530,17 +533,32 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
         except (OSError, UnicodeDecodeError) as exc:
             raise ConfigError(f"unable to inspect Gradle verifier inputs: {build_file}") from exc
         expressions: list[str] = []
+        unresolved_source_root = False
         for match in _GRADLE_TEST_BLOCK.finditer(text):
             block = _balanced_brace_body(text, match.end() - 1)
+            source_matches = list(_GRADLE_SOURCE_ROOT_CALL.finditer(block))
             expressions.extend(
                 item.group("expression")
-                for item in _GRADLE_SOURCE_ROOT_CALL.finditer(block)
+                for item in source_matches
             )
-        expressions.extend(
-            source_match.group("expression")
-            for item in _GRADLE_DIRECT_TEST_CONFIG.finditer(text)
-            if (source_match := _GRADLE_SOURCE_ROOT_CALL.search(item.group(0)))
-        )
+            unresolved_source_root = unresolved_source_root or (
+                len(_GRADLE_SOURCE_ROOT_NAME.findall(block)) != len(source_matches)
+            )
+        for item in _GRADLE_DIRECT_TEST_CONFIG.finditer(text):
+            direct_config = item.group(0)
+            source_matches = list(_GRADLE_SOURCE_ROOT_CALL.finditer(direct_config))
+            expressions.extend(
+                source_match.group("expression") for source_match in source_matches
+            )
+            unresolved_source_root = unresolved_source_root or (
+                len(_GRADLE_SOURCE_ROOT_NAME.findall(direct_config))
+                != len(source_matches)
+            )
+        if unresolved_source_root and not allow_dynamic:
+            raise ConfigError(
+                "verified best-of-N cannot infer a Gradle test source root syntax; "
+                "configure review_assets with every selected test directory"
+            )
         for expression in expressions:
             paths = _literal_gradle_test_paths(expression)
             if paths is None and not allow_dynamic:
