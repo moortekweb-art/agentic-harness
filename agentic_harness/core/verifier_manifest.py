@@ -415,6 +415,7 @@ _GRADLE_TEST_BLOCK = re.compile(
         |
         \b(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)
     )
+    (?:\s*\.\s*get\s*\(\s*\))?
     (?:\s*\.\s*(?:configure|apply))?
     \s*\{
     """
@@ -427,7 +428,7 @@ _GRADLE_DIRECT_TEST_CONFIG = re.compile(
         |
         \[\s*["']test["']\s*\]
         |
-        \.\s*(?:getByName|named)\(\s*["']test["']\s*\)
+        \.\s*(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)
     )
     [^\n;]*
     """
@@ -440,15 +441,22 @@ _GRADLE_SOURCE_ROOT_CALL = re.compile(
 _GRADLE_SOURCE_ROOT_NAME = re.compile(r"\b(?:srcDirs?|setSrcDirs)\b")
 _GRADLE_TEST_ALIAS = re.compile(
     r"""(?x)
-    \b(?:val|var|def)\s+
-    (?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*
+    (?:
+        \b(?:val|var|def)\s+
+        |
+        (?<![A-Za-z0-9_$.])
+        (?:[A-Za-z_][A-Za-z0-9_$.<>,?]*\s+)+
+    )
+    (?P<name>[A-Za-z_][A-Za-z0-9_]*)
+    (?:\s*:\s*[A-Za-z_][A-Za-z0-9_$.<>,?\s]*)?
+    \s*=\s*
     \bsourceSets\s*
     (?:
         \.\s*test
         |
         \[\s*["']test["']\s*\]
         |
-        \.\s*(?:getByName|named)\(\s*["']test["']\s*\)
+        \.\s*(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)
     )
     """
 )
@@ -572,16 +580,22 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
         for alias_match in _GRADLE_TEST_ALIAS.finditer(text):
             alias = re.escape(alias_match.group("name"))
             direct_alias = re.compile(
-                rf"\b{alias}\s*\.\s*"
+                rf"\b{alias}\s*(?:\.\s*get\s*\(\s*\))?\s*\.\s*"
                 r"(?:java|kotlin|resources)\s*\.\s*"
                 r"(?:srcDirs?|setSrcDirs)\b(?P<expression>[^\n;}]*)"
             )
             alias_config = re.compile(
-                rf"\b{alias}\s*\.\s*(?:configure|apply)\s*\{{"
+                rf"\b{alias}\s*(?:\.\s*get\s*\(\s*\))?\s*"
+                r"\.\s*(?:configure|apply)\s*\{"
             )
+            alias_block_candidate = re.compile(
+                rf"\b{alias}\b[^\n;{{]*\{{"
+            )
+            recognized_alias_blocks: set[int] = set()
             for direct_match in direct_alias.finditer(text):
                 expressions.append(direct_match.group("expression"))
             for config_match in alias_config.finditer(text):
+                recognized_alias_blocks.add(config_match.start())
                 block = _balanced_brace_body(text, config_match.end() - 1)
                 source_matches = list(_GRADLE_SOURCE_ROOT_CALL.finditer(block))
                 expressions.extend(
@@ -592,6 +606,12 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
                     len(_GRADLE_SOURCE_ROOT_NAME.findall(block))
                     != len(source_matches)
                 )
+            for candidate_match in alias_block_candidate.finditer(text):
+                if candidate_match.start() in recognized_alias_blocks:
+                    continue
+                block = _balanced_brace_body(text, candidate_match.end() - 1)
+                if _GRADLE_SOURCE_ROOT_NAME.search(block):
+                    unresolved_source_root = True
             for line in text.splitlines():
                 if not re.search(rf"\b{alias}\b", line):
                     continue

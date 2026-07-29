@@ -128,6 +128,7 @@ def sensitive_json_key(key: str) -> bool:
             "bearer",
             "credential",
             "credentials",
+            "githubpat",
             "password",
             "passwd",
             "pwd",

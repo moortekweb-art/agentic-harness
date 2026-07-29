@@ -1501,6 +1501,11 @@ def test_managed_preview_redacts_structured_secret_before_http_serialization(
         "IDTOKEN",
         "MFASECRET",
         "HTTPAUTHORIZATION",
+        "upstreamGithubPat",
+        "repositoryGitHubPAT",
+        "backupGITHUBPAT",
+        "upstream_github_pat",
+        "upstream-github-pat",
     ],
 )
 def test_structured_redaction_recognizes_compound_credential_keys(key: str) -> None:
@@ -1536,6 +1541,8 @@ def test_gui_http_and_websocket_redact_compound_credential_keys(
         "sessionToken": "opaque-session-token-Z7Q4M9",
         "upstreamBearer": "opaque-upstream-bearer-Z7Q4M9",
         "upstream_bearer": "opaque-upstream-bearer-snake-Z7Q4M9",
+        "upstreamGithubPat": "opaque-upstream-github-pat-Z7Q4M9",
+        "repositoryGitHubPAT": "opaque-repository-github-pat-Z7Q4M9",
     }
     payload = {"status": "working", **markers, "tokenCount": 37}
     monkeypatch.setattr(gui_server_module, "status_task", lambda _bridge: dict(payload))
