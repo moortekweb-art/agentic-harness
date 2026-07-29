@@ -415,6 +415,7 @@ _GRADLE_TEST_BLOCK = re.compile(
         |
         \b(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)
     )
+    (?:\s*\.\s*(?:configure|apply))?
     \s*\{
     """
 )
@@ -437,6 +438,20 @@ _GRADLE_SOURCE_ROOT_CALL = re.compile(
     r"(?:srcDirs?|setSrcDirs)\b(?P<expression>[^\n;}]*)"
 )
 _GRADLE_SOURCE_ROOT_NAME = re.compile(r"\b(?:srcDirs?|setSrcDirs)\b")
+_GRADLE_TEST_ALIAS = re.compile(
+    r"""(?x)
+    \b(?:val|var|def)\s+
+    (?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*
+    \bsourceSets\s*
+    (?:
+        \.\s*test
+        |
+        \[\s*["']test["']\s*\]
+        |
+        \.\s*(?:getByName|named)\(\s*["']test["']\s*\)
+    )
+    """
+)
 _QUOTED_PATH = re.compile(r"""(?P<quote>['"])(?P<path>[^'"]+)(?P=quote)""")
 
 
@@ -554,6 +569,37 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
                 len(_GRADLE_SOURCE_ROOT_NAME.findall(direct_config))
                 != len(source_matches)
             )
+        for alias_match in _GRADLE_TEST_ALIAS.finditer(text):
+            alias = re.escape(alias_match.group("name"))
+            direct_alias = re.compile(
+                rf"\b{alias}\s*\.\s*"
+                r"(?:java|kotlin|resources)\s*\.\s*"
+                r"(?:srcDirs?|setSrcDirs)\b(?P<expression>[^\n;}]*)"
+            )
+            alias_config = re.compile(
+                rf"\b{alias}\s*\.\s*(?:configure|apply)\s*\{{"
+            )
+            for direct_match in direct_alias.finditer(text):
+                expressions.append(direct_match.group("expression"))
+            for config_match in alias_config.finditer(text):
+                block = _balanced_brace_body(text, config_match.end() - 1)
+                source_matches = list(_GRADLE_SOURCE_ROOT_CALL.finditer(block))
+                expressions.extend(
+                    source_match.group("expression")
+                    for source_match in source_matches
+                )
+                unresolved_source_root = unresolved_source_root or (
+                    len(_GRADLE_SOURCE_ROOT_NAME.findall(block))
+                    != len(source_matches)
+                )
+            for line in text.splitlines():
+                if not re.search(rf"\b{alias}\b", line):
+                    continue
+                alias_source_matches = list(direct_alias.finditer(line))
+                unresolved_source_root = unresolved_source_root or (
+                    len(_GRADLE_SOURCE_ROOT_NAME.findall(line))
+                    != len(alias_source_matches)
+                )
         if unresolved_source_root and not allow_dynamic:
             raise ConfigError(
                 "verified best-of-N cannot infer a Gradle test source root syntax; "

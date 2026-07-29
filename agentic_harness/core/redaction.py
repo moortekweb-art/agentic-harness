@@ -41,7 +41,9 @@ _NON_SECRET_TOKEN_METADATA_KEYS = frozenset(
         "totaltokens",
     }
 )
-_CAMEL_CASE_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_IDENTIFIER_WORD_BOUNDARY = re.compile(
+    r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
+)
 _PRIVATE_KEY_BLOCK = re.compile(
     r"-----BEGIN (?P<label>[A-Z0-9 ]*PRIVATE KEY)-----"
     r".*?"
@@ -89,7 +91,7 @@ def sensitive_json_key(key: str) -> bool:
         return False
     if compact in _SENSITIVE_JSON_KEYS:
         return True
-    separated = _CAMEL_CASE_BOUNDARY.sub(" ", key.strip())
+    separated = _IDENTIFIER_WORD_BOUNDARY.sub(" ", key.strip())
     pieces = {
         piece.lower()
         for piece in "".join(
@@ -119,6 +121,18 @@ def sensitive_json_key(key: str) -> bool:
             "clientsecret",
             "privatekey",
             "refreshtoken",
+        )
+    ) or compact.endswith(
+        (
+            "authorization",
+            "bearer",
+            "credential",
+            "credentials",
+            "password",
+            "passwd",
+            "pwd",
+            "secret",
+            "token",
         )
     ) or compact.endswith("cookie") or compact.startswith("setcookie")
 

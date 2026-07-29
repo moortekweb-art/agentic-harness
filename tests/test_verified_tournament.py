@@ -665,6 +665,24 @@ def test_supported_ecosystem_verifier_assets_are_frozen(
             ["gradle", "test"],
             "build.gradle.kts",
             (
+                'sourceSets.named("test").configure {\n'
+                '    java.srcDir("verification")\n'
+                "}\n"
+            ),
+        ),
+        (
+            ["gradle", "test"],
+            "build.gradle.kts",
+            (
+                'sourceSets.named("test").apply {\n'
+                '    resources.srcDir("verification")\n'
+                "}\n"
+            ),
+        ),
+        (
+            ["gradle", "test"],
+            "build.gradle.kts",
+            (
                 "sourceSets {\n"
                 '    test { kotlin.srcDir("verification") }\n'
                 "}\n"
@@ -696,6 +714,54 @@ def test_custom_jvm_test_roots_are_frozen(
     _git(root, "commit", "-m", "add custom verifier root")
 
     assets = tournament_module._freeze_verifier_assets(root, [command])
+    custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
+
+    assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(
+        root, assets
+    )
+
+
+def test_detached_gradle_test_source_alias_is_frozen(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    custom_test = root / "verification" / "BoundaryTest.java"
+    custom_test.parent.mkdir()
+    custom_test.write_text("class BoundaryTest {}\n", encoding="utf-8")
+    (root / "build.gradle.kts").write_text(
+        (
+            'val testSources = sourceSets["test"]\n'
+            'testSources.java.srcDir("verification")\n'
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add detached test source alias")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+    custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
+
+    assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(
+        root, assets
+    )
+
+
+def test_detached_gradle_test_source_alias_closure_is_frozen(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    custom_test = root / "verification" / "BoundaryTest.java"
+    custom_test.parent.mkdir()
+    custom_test.write_text("class BoundaryTest {}\n", encoding="utf-8")
+    (root / "build.gradle.kts").write_text(
+        (
+            'val testSources = sourceSets.named("test")\n'
+            "testSources.configure {\n"
+            '    kotlin.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add detached test source alias closure")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
     custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
 
     assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(

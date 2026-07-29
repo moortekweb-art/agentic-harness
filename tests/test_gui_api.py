@@ -1490,6 +1490,17 @@ def test_managed_preview_redacts_structured_secret_before_http_serialization(
         "sessionToken",
         "upstreamBearer",
         "upstream_bearer",
+        "IDToken",
+        "JWTToken",
+        "OIDCToken",
+        "SSOToken",
+        "MFASecret",
+        "TOTPSecret",
+        "APISecret",
+        "HTTPAuthorization",
+        "IDTOKEN",
+        "MFASECRET",
+        "HTTPAUTHORIZATION",
     ],
 )
 def test_structured_redaction_recognizes_compound_credential_keys(key: str) -> None:
