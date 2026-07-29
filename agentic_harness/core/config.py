@@ -39,6 +39,8 @@ ALLOWED_KEYS = {
     "llm_credential_source",
     "llm_remote_data_confirmed",
     "llm_max_steps",
+    "llm_max_output_tokens",
+    "llm_disable_thinking",
     "llm_timeout",
     "llm_retries",
     "llm_retry_delay",
@@ -80,6 +82,8 @@ ALLOWED_WORKER_DICT_KEYS = {
     "llm_credential_source",
     "llm_remote_data_confirmed",
     "llm_max_steps",
+    "llm_max_output_tokens",
+    "llm_disable_thinking",
     "llm_timeout",
     "llm_retries",
     "llm_retry_delay",
@@ -115,6 +119,8 @@ ALLOWED_LLM_DICT_KEYS = {
     "credential_source",
     "remote_data_confirmed",
     "max_steps",
+    "max_output_tokens",
+    "disable_thinking",
     "timeout",
 }
 ALLOWED_REVIEW_DICT_KEYS = {
@@ -171,6 +177,8 @@ class HarnessConfig:
     llm_credential_source: str = "none"
     llm_remote_data_confirmed: bool = False
     llm_max_steps: int = 8
+    llm_max_output_tokens: int = 4_096
+    llm_disable_thinking: bool = False
     llm_timeout: int = 120
     llm_retries: int = 2
     llm_retry_delay: float = 1.0
@@ -603,13 +611,19 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
             config.allow_noop_success = _parse_bool(value, key)
         elif key in LIST_KEYS:
             setattr(config, key, _parse_list(value, key))
-        elif key in {"github_wait", "review_git_clean", "llm_remote_data_confirmed"}:
+        elif key in {
+            "github_wait",
+            "review_git_clean",
+            "llm_remote_data_confirmed",
+            "llm_disable_thinking",
+        }:
             setattr(config, key, _parse_bool(value, key))
         elif key in {
             "coding_agent_timeout",
             "llm_timeout",
             "llm_retries",
             "llm_max_steps",
+            "llm_max_output_tokens",
             "github_timeout",
             "review_command_timeout",
             "goal_max_cycles",
@@ -686,6 +700,8 @@ def load_config(project_dir: str | Path = ".") -> HarnessConfig:
         raise ConfigError("review_covers contains duplicate requirement ids")
     if any(not requirement_id.strip() for requirement_id in config.review_covers):
         raise ConfigError("review_covers contains an empty requirement id")
+    if config.llm_max_output_tokens < 1:
+        raise ConfigError("llm_max_output_tokens must be at least 1")
     for key in (
         "goal_max_cycles",
         "goal_max_elapsed_seconds",

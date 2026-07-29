@@ -778,6 +778,8 @@ llm:
   model: chosen-model
   api_key_env: EXAMPLE_MODEL_KEY
   max_steps: 12
+  max_output_tokens: 512
+  disable_thinking: true
   remote_data_confirmed: true
 """,
         encoding="utf-8",
@@ -789,6 +791,8 @@ llm:
     assert config.worker == "model_agent"
     assert config.llm_api_key_env == "EXAMPLE_MODEL_KEY"
     assert config.llm_max_steps == 12
+    assert config.llm_max_output_tokens == 512
+    assert config.llm_disable_thinking is True
     assert resolve_api_key(config.llm_api_key_env) == "test-secret-value"
     assert "test-secret-value" not in config.config_path.read_text(encoding="utf-8")
 
@@ -970,6 +974,16 @@ def test_provider_profile_reports_accurate_network_scope(endpoint, scope, locati
     assert profile.to_public_dict()["network_scope"] == scope
 
 
+def test_provider_profile_allows_private_overlay_http_for_cluster_models(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTIC_HARNESS_TRUST_CGNAT_OVERLAY", "1")
+    profile = ProviderProfile(
+        endpoint="http://100.64.0.10:8009/v1/chat/completions",
+        model="overflow-model",
+    )
+
+    assert profile.data_location == "local"
+
+
 class FakeHTTPResponse:
     def __init__(self, payload: dict[str, Any]) -> None:
         self.payload = payload
@@ -1014,6 +1028,8 @@ def test_openai_compatible_provider_uses_user_model_and_bearer_key(monkeypatch) 
         model="arbitrary-user-model",
         api_key="secret-value",
         timeout=17,
+        max_output_tokens=512,
+        disable_thinking=True,
     )
 
     response = provider.complete([{"role": "user", "content": "work"}])
@@ -1021,6 +1037,8 @@ def test_openai_compatible_provider_uses_user_model_and_bearer_key(monkeypatch) 
     assert response.content == {"action": "git_status", "arguments": {}}
     assert response.usage["total_tokens"] == 7
     assert captured["payload"]["model"] == "arbitrary-user-model"
+    assert captured["payload"]["max_tokens"] == 512
+    assert captured["payload"]["chat_template_kwargs"] == {"enable_thinking": False}
     assert captured["request"].headers["Authorization"] == "Bearer secret-value"
     assert captured["timeout"] == 17
 
@@ -1031,7 +1049,10 @@ def test_openai_compatible_provider_omits_authorization_for_keyless_local_model(
     captured: dict[str, Any] = {}
 
     def fake_urlopen(request, *, timeout):
+        import json
+
         captured["request"] = request
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
         return FakeHTTPResponse(
             {"choices": [{"message": {"content": '{"action":"git_status"}'}}]}
         )
@@ -1045,6 +1066,7 @@ def test_openai_compatible_provider_omits_authorization_for_keyless_local_model(
     provider.complete([{"role": "user", "content": "work"}])
 
     assert "Authorization" not in captured["request"].headers
+    assert "chat_template_kwargs" not in captured["payload"]
 
 
 def test_openai_compatible_provider_refuses_redirects_before_credentials_can_leak() -> None:

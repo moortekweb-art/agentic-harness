@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote
@@ -30,19 +30,47 @@ from agentic_harness.gui.api import (
     status_task,
     task_from_command_result,
 )
+from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.gui.server import (
     GuiPortUnavailable,
     GuiSecurityError,
     create_gui_server,
     make_handler,
 )
-from agentic_harness.gui.backend import EmbeddedExecutionBackend
-
 
 MAX_REQUEST_BYTES = 1_048_576
 
 
 GUI_TOKEN_ENV = "AGENTIC_HARNESS_GUI_TOKEN"
+
+
+@pytest.fixture(autouse=True)
+def configured_integration_routes(monkeypatch) -> None:
+    routes = {
+        "PRIMARY": {
+            "ENDPOINT": "http://127.0.0.1:8008/v1/chat/completions",
+            "HEALTH_URL": "http://127.0.0.1:8008/ready",
+            "MODEL_ID": "primary-model",
+            "API_KEY_ENV": "LOCAL_MODEL_API_KEY",
+            "RUNTIME": "vllm",
+            "LABEL": "Primary GPU",
+            "CAPABILITIES": "chat,tools,vision",
+            "MAX_CONTEXT_TOKENS": "65536",
+        },
+        "OVERFLOW": {
+            "ENDPOINT": "http://100.64.0.10:8009/v1/chat/completions",
+            "HEALTH_URL": "http://100.64.0.10:8009/health",
+            "MODEL_ID": "overflow-model",
+            "API_KEY_ENV": "LOCAL_MODEL_API_KEY",
+            "RUNTIME": "vllm",
+            "LABEL": "Overflow GPU",
+            "CAPABILITIES": "chat,tools",
+            "MAX_CONTEXT_TOKENS": "32768",
+        },
+    }
+    for slot, values in routes.items():
+        for suffix, value in values.items():
+            monkeypatch.setenv(f"AGENTIC_HARNESS_ROUTE_{slot}_{suffix}", value)
 
 
 def test_gui_modes_use_human_labels() -> None:
@@ -68,6 +96,7 @@ def test_default_gui_surface_has_no_manual_babysitting_control() -> None:
     assert "Move forward" not in html
     assert "Ctrl M" not in html
     assert "watchButton.addEventListener" not in javascript
+    assert "task_id: taskId" in javascript
     assert 'id="startButton" title="Start this verified task" disabled' in html
     assert 'id="continueButton" hidden' in html
     assert 'id="acceptButton" hidden' in html
@@ -167,7 +196,7 @@ def test_managed_acceptance_becomes_verified_gui_result_only_with_matching_last_
         "review_status": "accepted",
         "run_dir": run_dir,
         "prompt_path": f"{run_dir}/prompt.md",
-        "complete_source": "global",
+        "complete_source": "run-local",
         "summary": "Installed capability: created the requested note.",
         "owned_file_count": 1,
         "owned_files_sample": ["reports/quick-task-test.md"],
@@ -1532,6 +1561,29 @@ def test_gui_rejects_session_key_on_connection_test_from_non_loopback_client(tmp
     assert "loopback" in str(result.payload["error"]).lower()
 
 
+def test_gui_honors_authenticated_proxy_remote_client_scope(tmp_path) -> None:
+    with gui_server(EmbeddedExecutionBackend(tmp_path)) as base_url:  # type: ignore[arg-type]
+        result = post_error(
+            base_url,
+            "/api/setup/test",
+            json.dumps(
+                {
+                    "endpoint": "https://api.example.test/v1/chat/completions",
+                    "model": "chosen-model",
+                    "api_key": "must-not-be-forwarded",
+                    "confirm_remote_data": True,
+                }
+            ).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Agentic-Harness-Client-Scope": "remote",
+            },
+        )
+
+    assert result.code == 400
+    assert "loopback" in str(result.payload["error"]).lower()
+
+
 @pytest.mark.parametrize(
     ("payload", "error_text"),
     [
@@ -1547,6 +1599,7 @@ def test_gui_rejects_session_key_on_connection_test_from_non_loopback_client(tmp
                 "endpoint": "https://api.example.test/v1/chat/completions",
                 "model": "chosen-model",
                 "api_key_env": "AGENTIC_HARNESS_MISSING_TEST_KEY",
+                "confirm_remote_data": True,
             },
             "not set",
         ),
@@ -1559,6 +1612,10 @@ def test_setup_connection_test_returns_json_400_for_configuration_errors(
     error_text,
 ) -> None:
     monkeypatch.delenv("AGENTIC_HARNESS_MISSING_TEST_KEY", raising=False)
+    monkeypatch.setenv(
+        "AGENTIC_HARNESS_ALLOWED_API_KEY_ENVS",
+        "AGENTIC_HARNESS_MISSING_TEST_KEY",
+    )
     with gui_server(EmbeddedExecutionBackend(tmp_path)) as base_url:  # type: ignore[arg-type]
         result = post_error(
             base_url,
@@ -1592,6 +1649,35 @@ def test_setup_returns_json_400_for_malformed_numeric_setting(tmp_path) -> None:
     assert "whole number" in str(result.payload["error"]).lower()
 
 
+def test_gui_connection_test_returns_json_error_for_invalid_provider_url(tmp_path) -> None:
+    handler = make_handler(EmbeddedExecutionBackend(tmp_path))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        result = post_error(
+            base_url,
+            "/api/setup/test",
+            json.dumps(
+                {
+                    "execution": "local_model",
+                    "endpoint": "file:///etc/passwd",
+                    "model": "chosen-model",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert result.code == 400
+    assert result.payload["ok"] is False
+    assert "http" in str(result.payload["error"]).lower()
+
+
 def test_embedded_gui_exposes_safe_demo_and_local_model_detection_routes(tmp_path) -> None:
     backend = EmbeddedExecutionBackend(tmp_path)
 
@@ -1612,6 +1698,539 @@ def test_embedded_gui_exposes_safe_demo_and_local_model_detection_routes(tmp_pat
     assert started["metadata"]["demo"]["model_used"] is False  # type: ignore[index]
     assert finished["status"] == "done"
     assert finished["result_category"] == "verified_done"
+
+
+def _registry_with_routes(*routes: dict[str, object]) -> dict[str, object]:
+    return {
+        "api_version": "1",
+        "registry_version": 1,
+        "owner": "agentic-harness",
+        "generated_at": "2026-01-01T00:00:00Z",
+        "selection": {"policy": "harness_decides", "operator_hint": ""},
+        "routes": list(routes),
+    }
+
+
+def test_route_registry_has_no_machine_specific_defaults(monkeypatch) -> None:
+    from agentic_harness.gui.integration import integration_health_payload, route_registry_payload
+
+    for slot in ("PRIMARY", "OVERFLOW"):
+        for suffix in (
+            "ENDPOINT",
+            "HEALTH_URL",
+            "MODEL_ID",
+            "API_KEY_ENV",
+            "RUNTIME",
+            "LABEL",
+            "CAPABILITIES",
+            "MAX_CONTEXT_TOKENS",
+        ):
+            monkeypatch.delenv(f"AGENTIC_HARNESS_ROUTE_{slot}_{suffix}", raising=False)
+
+    assert route_registry_payload()["routes"] == []
+    health = integration_health_payload()
+    assert health["route_count"] == 0
+    assert health["routes_status"] == "degraded"
+
+
+def test_read_only_analysis_requested_route_not_ready_returns_client_error(
+    monkeypatch,
+) -> None:
+    registry = _registry_with_routes(
+        {
+            "id": "primary",
+            "model_id": "primary-model",
+            "node": "Primary GPU",
+            "runtime": "vllm",
+            "role": "primary",
+            "status": "unavailable",
+            "status_reason": "TimeoutError",
+        }
+    )
+    monkeypatch.setattr(gui_server_module, "route_registry_payload", lambda: registry)
+
+    with gui_server(FakeBridge()) as base_url:
+        result = post_error(
+            base_url,
+            "/v1/tasks",
+            json.dumps(
+                {
+                    "kind": "read_only_analysis",
+                    "objective": "inspect the cluster",
+                    "route_id": "primary",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 400
+    assert result.payload["ok"] is False
+    assert "not ready" in str(result.payload["error"])
+
+
+def test_read_only_analysis_unknown_route_returns_client_error(monkeypatch) -> None:
+    registry = _registry_with_routes(
+        {
+            "id": "primary",
+            "model_id": "primary-model",
+            "node": "Primary GPU",
+            "runtime": "vllm",
+            "role": "primary",
+            "status": "ready",
+            "status_reason": "health endpoint passed",
+        }
+    )
+    monkeypatch.setattr(gui_server_module, "route_registry_payload", lambda: registry)
+
+    with gui_server(FakeBridge()) as base_url:
+        result = post_error(
+            base_url,
+            "/v1/tasks",
+            json.dumps(
+                {
+                    "kind": "read_only_analysis",
+                    "objective": "inspect the cluster",
+                    "route_id": "does-not-exist",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 400
+    assert result.payload["ok"] is False
+    assert "unknown route" in str(result.payload["error"])
+
+
+def test_read_only_analysis_no_ready_route_returns_client_error(monkeypatch) -> None:
+    registry = _registry_with_routes(
+        {
+            "id": "primary",
+            "model_id": "primary-model",
+            "node": "Primary GPU",
+            "runtime": "vllm",
+            "role": "primary",
+            "status": "unavailable",
+            "status_reason": "TimeoutError",
+        },
+        {
+            "id": "overflow",
+            "model_id": "overflow-model",
+            "node": "Overflow GPU",
+            "runtime": "vllm",
+            "role": "overflow",
+            "status": "unavailable",
+            "status_reason": "TimeoutError",
+        },
+    )
+    monkeypatch.setattr(gui_server_module, "route_registry_payload", lambda: registry)
+
+    with gui_server(FakeBridge()) as base_url:
+        result = post_error(
+            base_url,
+            "/v1/tasks",
+            json.dumps(
+                {
+                    "kind": "read_only_analysis",
+                    "objective": "inspect the cluster",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 400
+    assert result.payload["ok"] is False
+    assert "no ready" in str(result.payload["error"])
+
+
+def test_read_only_analysis_blocked_start_is_not_reported_as_accepted(
+    monkeypatch,
+) -> None:
+    registry = _registry_with_routes(
+        {
+            "id": "primary",
+            "model_id": "primary-model",
+            "node": "Primary GPU",
+            "runtime": "vllm",
+            "role": "primary",
+            "status": "ready",
+            "status_reason": "health endpoint passed",
+        }
+    )
+    monkeypatch.setattr(gui_server_module, "route_registry_payload", lambda: registry)
+    monkeypatch.setattr(
+        gui_server_module,
+        "route_execution_config",
+        lambda _route: {
+            "endpoint": "http://127.0.0.1:8008/v1/chat/completions",
+            "model": "primary-model",
+            "api_key_env": "LOCAL_MODEL_API_KEY",
+        },
+    )
+    monkeypatch.setattr(
+        EmbeddedExecutionBackend,
+        "test_connection",
+        lambda _self, _body: {"structured_actions": True},
+    )
+    monkeypatch.setattr(
+        EmbeddedExecutionBackend,
+        "start",
+        lambda _self, _body, *, frozen_spec=None, trusted_integration=False: {
+            "id": "blocked-analysis",
+            "status": "blocked",
+            "summary": "Provider credential is unavailable.",
+            "metadata": {},
+        },
+    )
+
+    with gui_server(FakeBridge()) as base_url:
+        result = post_error(
+            base_url,
+            "/v1/tasks",
+            json.dumps(
+                {
+                    "kind": "read_only_analysis",
+                    "objective": "inspect the cluster",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert result.code == 409
+    assert result.payload["accepted"] is False
+    assert result.payload["safety"]["model_used"] is True
+    assert result.payload["task"]["status"] == "blocked"
+
+
+def test_read_only_analysis_validates_structured_actions_before_start(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENTIC_HARNESS_TRUST_CGNAT_OVERLAY", "1")
+    registry = _registry_with_routes(
+        {
+            "id": "overflow",
+            "model_id": "overflow-model",
+            "node": "Overflow GPU",
+            "runtime": "vllm",
+            "role": "overflow",
+            "status": "ready",
+            "status_reason": "health endpoint passed",
+        }
+    )
+    monkeypatch.setattr(gui_server_module, "route_registry_payload", lambda: registry)
+    monkeypatch.setattr(
+        gui_server_module,
+        "route_execution_config",
+        lambda _route: {
+            "endpoint": "http://100.64.0.10:8009/v1/chat/completions",
+            "model": "overflow-model",
+            "api_key_env": "LOCAL_MODEL_API_KEY",
+        },
+    )
+    calls: list[str] = []
+    objective = "inspect the cluster\n" + ("preserve all context " * 260) + "FINAL-SENTINEL"
+
+    def test_connection(
+        backend: EmbeddedExecutionBackend,
+        body: dict[str, object],
+    ) -> dict[str, object]:
+        calls.append("test_connection")
+        assert body["endpoint"] == "http://100.64.0.10:8009/v1/chat/completions"
+        assert body["model"] == "overflow-model"
+        assert body["api_key_env"] == "LOCAL_MODEL_API_KEY"
+        assert body["disable_thinking"] is True
+        assert body["max_output_tokens"] == 256
+        backend._execution_validation = {
+            "verified": True,
+            "kind": "model_agent",
+        }
+        return {"structured_actions": True}
+
+    def start(
+        backend: EmbeddedExecutionBackend,
+        body: dict[str, object],
+        *,
+        frozen_spec=None,
+        trusted_integration=False,
+    ) -> dict[str, object]:
+        calls.append("start")
+        assert backend._execution_validation["verified"] is True
+        config = backend._config()
+        assert config.allow_noop_success is False
+        assert config.review_covers == ["R1"]
+        assert config.llm_disable_thinking is True
+        assert config.llm_retries == 1
+        assert frozen_spec is not None
+        assert trusted_integration is True
+        assert [item.id for item in frozen_spec.requirements] == ["R1"]
+        assert frozen_spec.objective == body["objective"]
+        assert str(body["objective"]).endswith("FINAL-SENTINEL")
+        assert objective in str(body["objective"])
+        assert "independently verifies workspace isolation only" in str(body["objective"])
+        assert "contains no files outside Harness-managed state" in (
+            frozen_spec.requirements[0].text
+        )
+        integration = body["integration_metadata"]
+        assert isinstance(integration, dict)
+        assert integration["route_id"] == "overflow"
+        assert integration["structured_actions_verified"] is True
+        assert integration["model_used"] is True
+        return {
+            "id": "overflow-analysis",
+            "status": "starting",
+            "summary": "Overflow analysis started.",
+            "metadata": {"integration": integration},
+        }
+
+    monkeypatch.setattr(EmbeddedExecutionBackend, "test_connection", test_connection)
+    monkeypatch.setattr(EmbeddedExecutionBackend, "start", start)
+
+    with gui_server(FakeBridge()) as base_url:
+        started = post_json(
+            base_url,
+            "/v1/tasks",
+            {
+                "kind": "read_only_analysis",
+                "objective": objective,
+                "route_id": "overflow",
+            },
+        )
+
+    assert calls == ["test_connection", "start"]
+    assert started["accepted"] is True
+    assert started["safety"]["model_used"] is True
+    assert started["route_decision"]["structured_actions_verified"] is True
+
+
+def test_read_only_analysis_rejects_a_distinct_request_while_active(
+    monkeypatch,
+) -> None:
+    registry = _registry_with_routes(
+        {
+            "id": "primary",
+            "model_id": "primary-model",
+            "node": "Primary GPU",
+            "runtime": "vllm",
+            "role": "primary",
+            "status": "ready",
+            "status_reason": "health endpoint passed",
+        }
+    )
+    monkeypatch.setattr(gui_server_module, "route_registry_payload", lambda: registry)
+    monkeypatch.setattr(
+        gui_server_module,
+        "route_execution_config",
+        lambda _route: {
+            "endpoint": "http://127.0.0.1:8008/v1/chat/completions",
+            "model": "primary-model",
+            "api_key_env": "LOCAL_MODEL_API_KEY",
+        },
+    )
+    monkeypatch.setattr(
+        EmbeddedExecutionBackend,
+        "test_connection",
+        lambda _self, _body: {"structured_actions": True},
+    )
+    starts: list[str] = []
+
+    def start(
+        _backend: EmbeddedExecutionBackend,
+        body: dict[str, object],
+        *,
+        frozen_spec=None,
+        trusted_integration=False,
+    ) -> dict[str, object]:
+        assert trusted_integration is True
+        starts.append(str(body["objective"]))
+        return {
+            "id": "first-analysis",
+            "status": "starting",
+            "summary": "First analysis started.",
+            "metadata": {"integration": body["integration_metadata"]},
+        }
+
+    monkeypatch.setattr(EmbeddedExecutionBackend, "start", start)
+    monkeypatch.setattr(
+        EmbeddedExecutionBackend,
+        "status",
+        lambda _self: {
+            "id": "first-analysis",
+            "status": "starting",
+            "summary": "First analysis started.",
+            "metadata": {},
+        },
+    )
+
+    with gui_server(FakeBridge()) as base_url:
+        first = post_json(
+            base_url,
+            "/v1/tasks",
+            {"kind": "read_only_analysis", "objective": "analyze request A"},
+        )
+        second = post_error(
+            base_url,
+            "/v1/tasks",
+            json.dumps(
+                {"kind": "read_only_analysis", "objective": "analyze request B"}
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert first["accepted"] is True
+    assert second.code == 409
+    assert second.payload["accepted"] is False
+    assert second.payload["task"]["id"] == "first-analysis"
+    assert len(starts) == 1
+
+
+def test_read_only_analysis_config_omits_thinking_extension_for_other_runtimes(
+    monkeypatch,
+) -> None:
+    from agentic_harness.gui.integration import read_only_analysis_config
+
+    monkeypatch.setenv("AGENTIC_HARNESS_TRUST_CGNAT_OVERLAY", "1")
+    config = read_only_analysis_config(
+        {
+            "id": "overflow",
+            "model_id": "overflow-model",
+            "runtime": "llama.cpp",
+        }
+    )
+
+    assert config["llm"]["disable_thinking"] is False
+    assert "allow_noop_success" not in config
+
+
+def test_route_execution_config_fails_closed_for_unknown_route_id() -> None:
+    from agentic_harness.gui.integration import route_execution_config
+
+    with pytest.raises(ValueError, match="unknown route id"):
+        route_execution_config({"id": "primary-shadow", "node": "Primary GPU"})
+    with pytest.raises(ValueError, match="unknown route id"):
+        route_execution_config({})
+
+
+def test_route_execution_config_requires_known_route_id(monkeypatch) -> None:
+    from agentic_harness.gui.integration import route_execution_config
+
+    assert route_execution_config({"id": "primary"})["model"] == "primary-model"
+    with pytest.raises(ValueError, match="public cloud model endpoints must use HTTPS"):
+        route_execution_config({"id": "overflow"})
+    monkeypatch.setenv("AGENTIC_HARNESS_TRUST_CGNAT_OVERLAY", "1")
+    assert route_execution_config({"id": "overflow"})["model"] == "overflow-model"
+
+
+def test_route_probe_and_execution_must_share_one_origin(monkeypatch) -> None:
+    from agentic_harness.gui.integration import route_execution_config, route_registry_payload
+
+    monkeypatch.setenv(
+        "AGENTIC_HARNESS_ROUTE_PRIMARY_ENDPOINT",
+        "http://127.0.0.1:8008/v1/chat/completions",
+    )
+    monkeypatch.setenv(
+        "AGENTIC_HARNESS_ROUTE_PRIMARY_HEALTH_URL",
+        "http://127.0.0.1:9999/ready",
+    )
+
+    routes = route_registry_payload()["routes"]
+    primary = next(route for route in routes if route["id"] == "primary")
+
+    assert primary["status"] == "unavailable"
+    assert "same origin" in primary["status_reason"]
+    with pytest.raises(ValueError, match="same origin"):
+        route_execution_config(primary)
+
+
+@pytest.mark.parametrize("invalid_value", ["not-a-number", "-1", "0"])
+def test_route_registry_degrades_malformed_max_context_without_crashing(
+    monkeypatch,
+    invalid_value,
+) -> None:
+    from agentic_harness.gui.integration import route_registry_payload
+
+    monkeypatch.setenv(
+        "AGENTIC_HARNESS_ROUTE_PRIMARY_MAX_CONTEXT_TOKENS",
+        invalid_value,
+    )
+
+    payload = route_registry_payload()
+    primary = next(route for route in payload["routes"] if route["id"] == "primary")
+
+    assert primary["status"] == "unavailable"
+    assert "max context" in primary["status_reason"]
+    assert primary["max_context_tokens"] == 0
+
+
+def test_route_health_probe_does_not_follow_redirects() -> None:
+    from agentic_harness.gui.integration import _probe
+
+    target_hits: list[str] = []
+
+    class TargetHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            target_hits.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ready":true}')
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), TargetHandler)
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    target_thread.start()
+
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(302)
+            self.send_header(
+                "Location",
+                f"http://127.0.0.1:{target.server_port}/internal-only",
+            )
+            self.end_headers()
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    redirect = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    redirect_thread = threading.Thread(target=redirect.serve_forever, daemon=True)
+    redirect_thread.start()
+    try:
+        state, reason = _probe(f"http://127.0.0.1:{redirect.server_port}/ready")
+    finally:
+        redirect.shutdown()
+        redirect.server_close()
+        redirect_thread.join(timeout=2)
+        target.shutdown()
+        target.server_close()
+        target_thread.join(timeout=2)
+
+    assert state == "unavailable"
+    assert reason == "URLError"
+    assert target_hits == []
+
+
+def test_overflow_route_requires_explicit_cgnat_overlay_trust(monkeypatch) -> None:
+    from agentic_harness.gui import integration
+
+    monkeypatch.setattr(integration, "_probe", lambda _url: ("ready", "health endpoint passed"))
+    monkeypatch.delenv("AGENTIC_HARNESS_TRUST_CGNAT_OVERLAY", raising=False)
+
+    untrusted = next(
+        route
+        for route in integration.route_registry_payload()["routes"]
+        if route["id"] == "overflow"
+    )
+    assert untrusted["status"] == "unavailable"
+    assert "HTTPS" in untrusted["status_reason"]
+
+    monkeypatch.setenv("AGENTIC_HARNESS_TRUST_CGNAT_OVERLAY", "1")
+    trusted = next(
+        route
+        for route in integration.route_registry_payload()["routes"]
+        if route["id"] == "overflow"
+    )
+    assert trusted["status"] == "ready"
 
 
 def test_managed_gui_runs_and_dismisses_isolated_demo_without_changing_real_task() -> None:
@@ -1852,6 +2471,37 @@ def test_serve_gui_browser_open_failure_does_not_stop_server(monkeypatch, capsys
     assert events == ["open:http://127.0.0.1:43210/", "served", "closed"]
 
 
+def test_gui_rejects_action_for_stale_current_task() -> None:
+    bridge = FakeBridge()
+    with gui_server(bridge) as base_url:
+        result = post_error(
+            base_url,
+            "/api/tasks/current/stop",
+            json.dumps({"task_id": "stale-task-id"}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Origin": base_url},
+        )
+
+    assert result.code == 409
+    assert "no longer current" in str(result.payload["error"])
+    assert bridge.commands == []
+
+
+def test_gui_requires_task_id_for_current_task_actions() -> None:
+    bridge = FakeBridge()
+    with gui_server(bridge) as base_url:
+        for action in ("accept", "continue", "stop"):
+            result = post_error(
+                base_url,
+                f"/api/tasks/current/{action}",
+                b"{}",
+                headers={"Content-Type": "application/json", "Origin": base_url},
+            )
+            assert result.code == 400
+            assert "task_id is required" in str(result.payload["error"])
+
+    assert bridge.commands == []
+
+
 def test_gui_server_post_task_workflow_routes() -> None:
     bridge = FakeBridge()
     with gui_server(bridge) as base_url:
@@ -1861,9 +2511,22 @@ def test_gui_server_post_task_workflow_routes() -> None:
             {"mode": "cloud", "objective": "test task", "safe_areas": ["tests"]},
         )
         watched = post_json(base_url, "/api/tasks/current/watch", {})
-        continued = post_json(base_url, "/api/tasks/current/continue", {"feedback": "keep going"})
-        accepted = post_json(base_url, "/api/tasks/current/accept", {})
-        stopped = post_json(base_url, "/api/tasks/current/stop", {})
+        task_id = str(watched["id"])
+        continued = post_json(
+            base_url,
+            "/api/tasks/current/continue",
+            {"task_id": task_id, "feedback": "keep going"},
+        )
+        accepted = post_json(
+            base_url,
+            "/api/tasks/current/accept",
+            {"task_id": task_id},
+        )
+        stopped = post_json(
+            base_url,
+            "/api/tasks/current/stop",
+            {"task_id": task_id},
+        )
 
     assert created["status"] == "starting"
     assert created["objective"] == "test task"
@@ -1891,6 +2554,36 @@ def test_gui_server_post_task_workflow_routes() -> None:
         ["accept"],
         ["stop"],
     ]
+
+
+def test_gui_connection_test_redacts_secrets_from_error_response(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    secret = "connection-test-secret-value"
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    def fail_connection_test(body: dict[str, object]) -> dict[str, object]:
+        raise RuntimeError(f"upstream rejected api_key={secret}")
+
+    monkeypatch.setattr(backend, "test_connection", fail_connection_test)
+    with gui_server(backend) as base_url:  # type: ignore[arg-type]
+        result = post_error(
+            base_url,
+            "/api/setup/test",
+            json.dumps(
+                {
+                    "execution": "local_model",
+                    "endpoint": "http://127.0.0.1:8008/v1/chat/completions",
+                    "model": "example-model",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Origin": base_url},
+        )
+
+    assert result.code == 400
+    assert secret not in json.dumps(result.payload)
+    assert "<redacted>" in str(result.payload["error"])
 
 
 def test_gui_supervised_messages_are_revisioned_and_cumulative() -> None:

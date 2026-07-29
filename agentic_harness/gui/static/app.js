@@ -272,6 +272,7 @@ const els = {
   providerEndpoint: byId("providerEndpoint"),
   providerModel: byId("providerModel"),
   providerApiKeyEnv: byId("providerApiKeyEnv"),
+  providerApiKeyEnvRow: byId("providerApiKeyEnvRow"),
   providerApiKey: byId("providerApiKey"),
   manualConnectionDetails: byId("manualConnectionDetails"),
   connectionResult: byId("connectionResult"),
@@ -1394,7 +1395,7 @@ function receiptContext(task) {
   return {
     category,
     final,
-    terminal: ["verified_done", "blocked", "failed"].includes(category),
+    terminal: ["verified_done", "model_response", "blocked", "failed"].includes(category),
   };
 }
 
@@ -1567,7 +1568,7 @@ function renderTask(task) {
   const rawDoneUnverified = status === "done" && !receipt.terminal;
   const visualStatus = rawDoneUnverified
     ? "checking"
-    : receipt.category === "verified_done"
+    : ["verified_done", "model_response"].includes(receipt.category)
     ? "done"
     : receipt.category === "failed"
       ? "stopped"
@@ -1858,6 +1859,8 @@ function renderHistory(tasks) {
     const receipt = receiptContext(task);
     const category = receipt.category === "verified_done"
       ? "verified"
+      : receipt.category === "model_response"
+        ? "completed"
       : receipt.category === "failed"
         ? "failed"
         : receipt.category === "blocked" || ["blocked", "needs_attention"].includes(task.status)
@@ -1886,6 +1889,8 @@ function renderHistory(tasks) {
         : task.status_label || task.status;
     const category = receipt.category === "verified_done"
       ? "verified"
+      : receipt.category === "model_response"
+        ? "completed"
       : receipt.category === "failed"
         ? "failed"
         : receipt.category === "blocked" || ["blocked", "needs_attention"].includes(task.status)
@@ -2161,6 +2166,25 @@ function renderProviderTemplates(setup) {
       : template;
   });
   state.providerTemplates = templates;
+  const allowedApiKeyEnvs = Array.isArray(setup.allowed_api_key_envs)
+    ? setup.allowed_api_key_envs.filter((name) => typeof name === "string" && name.trim())
+    : [];
+  const previousApiKeyEnv = els.providerApiKeyEnv.value;
+  els.providerApiKeyEnv.replaceChildren();
+  const noEnvironmentCredential = document.createElement("option");
+  noEnvironmentCredential.value = "";
+  noEnvironmentCredential.textContent = "Use no environment credential";
+  els.providerApiKeyEnv.append(noEnvironmentCredential);
+  allowedApiKeyEnvs.forEach((name) => {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    els.providerApiKeyEnv.append(option);
+  });
+  els.providerApiKeyEnvRow.hidden = allowedApiKeyEnvs.length === 0;
+  els.providerApiKeyEnv.value = allowedApiKeyEnvs.includes(previousApiKeyEnv)
+    ? previousApiKeyEnv
+    : "";
   refreshProviderPresets();
 }
 
@@ -2201,7 +2225,12 @@ function applyProviderTemplate() {
   if (!template || template.key === "custom") return;
   els.providerEndpoint.value = template.endpoint || "";
   els.providerModel.value = template.model || "";
-  els.providerApiKeyEnv.value = template.api_key_env || "";
+  const templateApiKeyEnv = template.api_key_env || "";
+  const allowedApiKeyEnvs = Array.from(els.providerApiKeyEnv.children || [])
+    .map((option) => option.value);
+  els.providerApiKeyEnv.value = allowedApiKeyEnvs.includes(templateApiKeyEnv)
+    ? templateApiKeyEnv
+    : "";
   els.connectionResult.textContent = template.entitlement_note || template.description || "";
   updateSetupFields();
 }
@@ -2576,7 +2605,14 @@ async function startWork() {
 
 async function postAction(path, body = {}) {
   await runAction(async () => {
-    const task = await api(path, { method: "POST", body: JSON.stringify(body) });
+    const taskId = state.liveTask?.id || state.currentTask?.id;
+    if (!taskId) {
+      throw new Error("The current task changed. Refresh before trying that action again.");
+    }
+    const task = await api(path, {
+      method: "POST",
+      body: JSON.stringify({ ...body, task_id: taskId }),
+    });
     rememberForegroundTask(task);
     state.viewingHistoryId = "";
     state.liveTask = task;
@@ -2639,6 +2675,7 @@ async function saveSetup(event) {
           model: payload.model,
           api_key_env: payload.api_key_env,
           api_key: payload.api_key,
+          confirm_remote_data: payload.confirm_remote_data,
         }),
       }, true, START_TIMEOUT_MS);
       if (tested.structured_actions !== true) {

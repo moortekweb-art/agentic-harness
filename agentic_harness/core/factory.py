@@ -83,6 +83,8 @@ def build_supervisor(
                 timeout=config.llm_timeout,
                 retries=config.llm_retries,
                 retry_delay=config.llm_retry_delay,
+                max_output_tokens=config.llm_max_output_tokens,
+                disable_thinking=config.llm_disable_thinking,
             ),
             model=config.llm_model,
             max_steps=config.llm_max_steps,

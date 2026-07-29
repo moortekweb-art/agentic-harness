@@ -2,34 +2,34 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib.resources import files
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Any, cast
-from urllib.parse import parse_qs, urlparse
 import base64
-import hmac
+from datetime import UTC, datetime
 import hashlib
+import hmac
 import json
 import mimetypes
 import os
 import secrets
 import stat
-from threading import Lock, RLock
 import time
 import webbrowser
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Lock, RLock
+from typing import Any, cast
+from urllib.parse import parse_qs, urlparse
 
-from agentic_harness.core.local_goal_bridge import LocalGoalBridge, resolve_doc_root
 from agentic_harness.core.errors import HarnessError
+from agentic_harness.core.goal_spec import GoalRequirement, GoalSpec
+from agentic_harness.core.local_goal_bridge import LocalGoalBridge, resolve_doc_root
 from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.strategies import (
     DEFAULT_PUBLIC_STRATEGY,
     PUBLIC_STRATEGIES,
 )
-from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.gui.api import (
     command_task,
     details_payload,
@@ -46,7 +46,14 @@ from agentic_harness.gui.api import (
     tasks_payload,
     watch_task,
 )
-
+from agentic_harness.gui.backend import EmbeddedExecutionBackend
+from agentic_harness.gui.integration import (
+    integration_health_payload,
+    read_only_analysis_config,
+    route_execution_config,
+    route_registry_payload,
+    select_route,
+)
 
 MAX_REQUEST_BYTES = 1_048_576
 MAX_CONVERSATION_BYTES = 64 * 1024
@@ -124,6 +131,33 @@ class GuiSecurityError(RuntimeError):
     """Raised when GUI network exposure is missing a required guardrail."""
 
 
+class ReadOnlyAnalysisConflict(RuntimeError):
+    """Raised when a distinct analysis request arrives while one is active."""
+
+    def __init__(self, current: dict[str, Any]) -> None:
+        super().__init__("finish the active model analysis before starting another")
+        self.current = current
+
+
+def _read_only_analysis_spec(objective: str) -> GoalSpec:
+    """Freeze the analysis objective while limiting verification to isolation."""
+
+    return GoalSpec(
+        objective=objective,
+        requirements=(
+            GoalRequirement(
+                id="R1",
+                text=(
+                    "The isolated analysis workspace contains no files outside "
+                    "Harness-managed state after the model response."
+                ),
+            ),
+        ),
+        derivation="harness_derived",
+        approval="automatic",
+    )
+
+
 def create_gui_server(
     host: str,
     port: int,
@@ -172,8 +206,13 @@ def make_handler(
     else:
         managed_demo_workspace = TemporaryDirectory(prefix="agentic-harness-managed-demo-host-")
         demo_service = EmbeddedExecutionBackend(managed_demo_workspace.name)
+    analysis_workspace: TemporaryDirectory[str] | None = None
+    analysis_service: EmbeddedExecutionBackend | None = None
+    analysis_integration: dict[str, Any] = {}
+    analysis_lock = RLock()
     auth_token = os.environ.get("AGENTIC_HARNESS_GUI_TOKEN", "").strip()
     rate_limiter = RateLimiter(limit=240, window_seconds=60)
+    task_action_lock = Lock()
     trusted_hosts = allowed_hosts or {"127.0.0.1", "localhost", "::1"}
 
     def demo_task() -> dict[str, Any] | None:
@@ -183,6 +222,130 @@ def make_handler(
         if embedded_service is not None:
             return embedded_service
         return demo_service if demo_task() is not None else None
+
+    def integration_active_service(
+        active: EmbeddedExecutionBackend | None,
+    ) -> EmbeddedExecutionBackend | None:
+        with analysis_lock:
+            return analysis_service if analysis_service is not None else active
+
+    def dispose_analysis() -> None:
+        nonlocal analysis_workspace, analysis_service, analysis_integration
+        with analysis_lock:
+            workspace = analysis_workspace
+            analysis_service = None
+            analysis_integration = {}
+            analysis_workspace = None
+            if workspace is not None:
+                workspace.cleanup()
+
+    def start_read_only_analysis(body: dict[str, Any]) -> dict[str, Any]:
+        nonlocal analysis_workspace, analysis_service, analysis_integration
+        objective = str(body.get("objective") or "").strip()
+        if not objective:
+            raise ValueError("objective must not be empty")
+        with analysis_lock:
+            if analysis_service is not None:
+                current = analysis_service.status()
+                if str(current.get("status")) in {
+                    "starting",
+                    "working",
+                    "checking",
+                    "stopping",
+                    "needs_review",
+                }:
+                    raise ReadOnlyAnalysisConflict(current)
+                dispose_analysis()
+            active = active_embedded_service()
+            if active is not None:
+                current = active.status()
+                if str(current.get("status")) in {
+                    "starting",
+                    "working",
+                    "checking",
+                    "stopping",
+                    "needs_review",
+                }:
+                    raise ValueError("finish the active safe canary before starting model analysis")
+                demo_service.clear_demo()
+
+            registry = route_registry_payload()
+            requested_route = str(body.get("route_id") or body.get("route_hint") or "")
+            route, reason = select_route(registry, requested_route)
+            provider = route_execution_config(route)
+            next_workspace = TemporaryDirectory(prefix="agentic-harness-read-only-analysis-")
+            try:
+                workspace = Path(next_workspace.name).resolve()
+                workspace.chmod(0o700)
+                next_service = EmbeddedExecutionBackend(workspace)
+                next_service._write_config(read_only_analysis_config(route))
+                next_integration = {
+                    "kind": "read_only_analysis",
+                    "route_id": route["id"],
+                    "model_id": route["model_id"],
+                    "node": route["node"],
+                    "runtime": route["runtime"],
+                    "decision_reason": reason,
+                    "connected_workspace_mutated": False,
+                    "model_used": False,
+                }
+                validation = next_service.test_connection(
+                    {
+                        "execution": "local_model",
+                        "endpoint": provider["endpoint"],
+                        "model": provider["model"],
+                        "api_key_env": provider["api_key_env"],
+                        "confirm_remote_data": False,
+                        "disable_thinking": str(route.get("runtime") or "").lower()
+                        in {"vllm", "sglang"},
+                        "max_output_tokens": 256,
+                        "timeout": 30,
+                    }
+                )
+                if validation.get("structured_actions") is not True:
+                    raise ValueError(
+                        "The selected model route did not pass the structured-action test."
+                    )
+                next_integration["structured_actions_verified"] = True
+                next_integration["model_used"] = True
+                analysis_objective = (
+                    "Return one concise read-only cluster analysis through Agentic Harness "
+                    f"using route {route['id']} and model {provider['model']} that answers "
+                    "the request exactly as written without file changes. The Harness "
+                    "independently verifies workspace isolation only; it does not "
+                    "independently judge the answer's meaning. End in report_outcome "
+                    f"status complete.\nRequest:\n{objective}"
+                )
+                task = next_service.start(
+                    {
+                        "objective": analysis_objective,
+                        "strategy": "quick",
+                        "safe_areas": [],
+                        "read_only": True,
+                        "integration_metadata": next_integration,
+                    },
+                    frozen_spec=_read_only_analysis_spec(analysis_objective),
+                    trusted_integration=True,
+                )
+                task_metadata = task.setdefault("metadata", {})
+                if isinstance(task_metadata, dict):
+                    task_metadata.setdefault("integration", dict(next_integration))
+                if str(task.get("status") or "") not in {
+                    "starting",
+                    "working",
+                    "checking",
+                    "needs_review",
+                    "done",
+                }:
+                    next_workspace.cleanup()
+                    return task
+                analysis_workspace = next_workspace
+                analysis_service = next_service
+                analysis_integration = next_integration
+                return task
+            except Exception:
+                next_workspace.cleanup()
+                raise
 
     def public_setup() -> dict[str, Any]:
         if embedded_service is not None:
@@ -261,7 +424,7 @@ def make_handler(
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             route = parsed.path
-            if route.startswith("/api/") and not self._trusted_host():
+            if (route.startswith("/api/") or route.startswith("/v1/")) and not self._trusted_host():
                 return
             if route == "/api/tasks/stream":
                 if not self._same_origin():
@@ -270,10 +433,21 @@ def make_handler(
                     return
                 self._websocket_status()
                 return
-            if route.startswith("/api/") and not self._allowed(parsed.query):
+            if (route.startswith("/api/") or route.startswith("/v1/")) and not self._allowed(parsed.query):
                 return
             active = active_embedded_service()
-            if route in {"/api/health", "/api/status"}:
+            integration_active = integration_active_service(active)
+            if route == "/v1/health":
+                self._json(integration_health_payload())
+            elif route == "/v1/routes":
+                self._json(route_registry_payload())
+            elif route == "/v1/tasks":
+                self._json(self._integration_tasks(integration_active))
+            elif route == "/v1/tasks/current":
+                self._json(self._integration_current_task(integration_active))
+            elif route.startswith("/v1/tasks/"):
+                self._integration_task_get(route, parsed, integration_active)
+            elif route in {"/api/health", "/api/status"}:
                 self._json(public_health())
             elif route == "/api/modes":
                 if embedded:
@@ -402,7 +576,7 @@ def make_handler(
                     if active is not None
                     else session.export()
                 )
-            elif route.startswith("/api/"):
+            elif route.startswith("/api/") or route.startswith("/v1/"):
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
             else:
                 self._static(route)
@@ -410,17 +584,121 @@ def make_handler(
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             route = parsed.path
-            if route.startswith("/api/") and not self._trusted_host():
+            if (route.startswith("/api/") or route.startswith("/v1/")) and not self._trusted_host():
                 return
             if not self._same_origin():
                 return
-            if route.startswith("/api/") and not self._allowed(parsed.query):
+            if (route.startswith("/api/") or route.startswith("/v1/")) and not self._allowed(parsed.query):
                 return
             body = self._read_json()
             if body is None:
                 return
             active = active_embedded_service()
-            if route == "/api/demo":
+            if route == "/v1/tasks":
+                kind = str(body.get("kind") or "").strip().lower()
+                if kind not in {"safe_demo", "read_only_canary", "read_only_analysis"}:
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "unsupported task kind",
+                            "supported_kinds": ["read_only_canary", "read_only_analysis"],
+                            "detail": (
+                                "Read-only tasks run in an isolated Harness workspace. "
+                                "Managed mutating tasks remain on /api/tasks."
+                            ),
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                try:
+                    if kind == "read_only_analysis":
+                        task = start_read_only_analysis(body)
+                        integration = task.get("metadata", {}).get("integration", {})
+                        accepted = str(task.get("status") or "") in {
+                            "starting",
+                            "working",
+                            "checking",
+                            "needs_review",
+                            "done",
+                        }
+                        model_used = bool(
+                            isinstance(integration, dict) and integration.get("model_used") is True
+                        )
+                        self._json(
+                            {
+                                "api_version": "1",
+                                "accepted": accepted,
+                                "id": task.get("id"),
+                                "task": task,
+                                "ownership": {
+                                    "executor": "agentic-harness",
+                                    "operator": "local-studio",
+                                },
+                                "safety": {
+                                    "kind": "read_only_analysis",
+                                    "connected_workspace_mutated": False,
+                                    "model_used": model_used,
+                                    "write_tools": "disabled",
+                                },
+                                "route_decision": integration,
+                            },
+                            status=HTTPStatus.ACCEPTED if accepted else HTTPStatus.CONFLICT,
+                        )
+                        return
+                    with analysis_lock:
+                        if analysis_service is not None:
+                            current = analysis_service.status()
+                            if str(current.get("status")) in {
+                                "starting",
+                                "working",
+                                "checking",
+                                "stopping",
+                                "needs_review",
+                            }:
+                                raise ValueError(
+                                    "finish the active model analysis before starting a safe canary"
+                                )
+                            dispose_analysis()
+                    task = demo_service.start_demo()
+                    self._json(
+                        {
+                            "api_version": "1",
+                            "accepted": True,
+                            "id": task.get("id"),
+                            "task": task,
+                            "ownership": {
+                                "executor": "agentic-harness",
+                                "operator": "local-studio",
+                            },
+                            "safety": {
+                                "kind": "read_only_canary",
+                                "connected_workspace_mutated": False,
+                                "model_used": False,
+                            },
+                            "route_decision": {
+                                "route_id": "safe-demo",
+                                "reason": "credential-free isolated Harness canary",
+                            },
+                        },
+                        status=HTTPStatus.ACCEPTED,
+                    )
+                except ReadOnlyAnalysisConflict as exc:
+                    self._json(
+                        {
+                            "api_version": "1",
+                            "accepted": False,
+                            "ok": False,
+                            "error": str(exc),
+                            "task": exc.current,
+                        },
+                        status=HTTPStatus.CONFLICT,
+                    )
+                except (ValueError, RuntimeError, OSError, HarnessError) as exc:
+                    self._json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+            elif route == "/api/demo":
                 try:
                     self._json(demo_service.start_demo())
                 except (ValueError, OSError, HarnessError) as exc:
@@ -452,7 +730,7 @@ def make_handler(
                             )
                             return
                     task = session.enrich(start_task(bridge, body), body)
-                    session.record(task)
+                    task = session.record(task)
                     self._json(task)
             elif route == "/api/setup" and embedded:
                 if body.get("api_key") and not self._client_is_loopback():
@@ -531,34 +809,9 @@ def make_handler(
                     task = session.record(task)
                     self._json(task)
             elif route == "/api/tasks/current/accept":
-                if active is not None:
-                    self._json(active.accept())
-                else:
-                    task = command_task(bridge, "accept", body)
-                    task = session.record(task)
-                    self._json(task)
+                self._current_task_action("accept", body, active)
             elif route == "/api/tasks/current/continue":
-                if active is not None:
-                    self._json(active.continue_task(str(body.get("feedback") or "")))
-                else:
-                    current = session.record(status_task(bridge))
-                    try:
-                        session.expect_continuation(current)
-                    except GuiSecurityError as exc:
-                        self._json(
-                            {"ok": False, "error": str(exc)},
-                            status=HTTPStatus.CONFLICT,
-                        )
-                        return
-                    continuation_body = dict(body)
-                    continuation_body["feedback"] = session.continuation_feedback(
-                        str(body.get("feedback") or "")
-                    )
-                    task = command_task(bridge, "continue", continuation_body)
-                    if str(task.get("status") or "") == "blocked":
-                        session.cancel_continuation()
-                    task = session.record(task)
-                    self._json(task)
+                self._current_task_action("continue", body, active)
             elif route == "/api/tasks/current/message":
                 if active is not None:
                     self._json(
@@ -668,12 +921,7 @@ def make_handler(
                         status=HTTPStatus.BAD_REQUEST,
                     )
             elif route == "/api/tasks/current/stop":
-                if active is not None:
-                    self._json(active.stop())
-                else:
-                    task = command_task(bridge, "stop", body)
-                    task = session.record(task)
-                    self._json(task)
+                self._current_task_action("stop", body, active)
             elif route == "/api/session/import":
                 if active is not None:
                     self._json(
@@ -688,6 +936,151 @@ def make_handler(
                     self._json({"ok": True, "tasks": session.history()})
             else:
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
+
+        def _current_task_action(
+            self,
+            action: str,
+            body: dict[str, Any],
+            active: EmbeddedExecutionBackend | None,
+        ) -> None:
+            task_id = body.get("task_id")
+            if not isinstance(task_id, str) or not task_id.strip():
+                self._json(
+                    {"ok": False, "error": "task_id is required for current-task actions."},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            with task_action_lock:
+                current = (
+                    active.status()
+                    if active is not None
+                    else session.record(status_task(bridge))
+                )
+                if task_id != current.get("id"):
+                    self._json(
+                        {"ok": False, "error": "The requested task is no longer current."},
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
+                if active is not None:
+                    if action == "accept":
+                        task = active.accept()
+                    elif action == "continue":
+                        task = active.continue_task(str(body.get("feedback") or ""))
+                    else:
+                        task = active.stop()
+                elif action == "continue":
+                    try:
+                        session.expect_continuation(current)
+                    except GuiSecurityError as exc:
+                        self._json(
+                            {"ok": False, "error": str(exc)},
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
+                    continuation_body = dict(body)
+                    continuation_body["feedback"] = session.continuation_feedback(
+                        str(body.get("feedback") or "")
+                    )
+                    task = command_task(bridge, action, continuation_body)
+                    if str(task.get("status") or "") == "blocked":
+                        session.cancel_continuation()
+                    task = session.record(task)
+                else:
+                    task = session.record(command_task(bridge, action, body))
+                self._json(task)
+
+        def _integration_current_task(
+            self, active: EmbeddedExecutionBackend | None
+        ) -> dict[str, Any]:
+            if active is not None:
+                return active.status()
+            return session.record(status_task(bridge))
+
+        def _integration_tasks(self, active: EmbeddedExecutionBackend | None) -> dict[str, Any]:
+            if active is not None:
+                current = active.status()
+                return {
+                    "api_version": "1",
+                    "current": current,
+                    "tasks": active.history(),
+                    "owner": "agentic-harness",
+                }
+            payload = tasks_payload(bridge)
+            current = session.record(payload["current"])
+            return {
+                "api_version": "1",
+                "current": current,
+                "tasks": session.history() or payload["tasks"],
+                "owner": "agentic-harness",
+            }
+
+        def _integration_task_get(
+            self,
+            route: str,
+            parsed: Any,
+            active: EmbeddedExecutionBackend | None,
+        ) -> None:
+            suffix = route.removeprefix("/v1/tasks/").strip("/")
+            parts = suffix.split("/") if suffix else []
+            task_id = parts[0] if parts else ""
+            if not task_id or task_id == "current":
+                self._json({"ok": False, "error": "task id required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            tasks = active.history() if active is not None else session.history()
+            task = next((item for item in tasks if str(item.get("id")) == task_id), None)
+            if task is None and active is not None:
+                current = active.status()
+                if str(current.get("id")) == task_id:
+                    task = current
+            if task is None:
+                self._json({"ok": False, "error": "task not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            if len(parts) == 1:
+                self._json({"api_version": "1", "task": task, "owner": "agentic-harness"})
+                return
+            if parts[1] == "events":
+                after_raw = parse_qs(parsed.query).get("after", ["0"])[0]
+                try:
+                    after = max(0, int(after_raw))
+                except ValueError:
+                    after = 0
+                if active is not None:
+                    current = active.status()
+                    if str(current.get("id")) == task_id:
+                        self._json(
+                            {
+                                "api_version": "1",
+                                "task_id": task_id,
+                                "events": active.events(after=after),
+                            }
+                        )
+                        return
+                task_events = task.get("events")
+                events = (
+                    [
+                        event
+                        for event in task_events
+                        if isinstance(event, dict)
+                        and isinstance(event.get("seq"), int)
+                        and int(event["seq"]) > after
+                    ]
+                    if isinstance(task_events, list)
+                    else []
+                )
+                self._json({"api_version": "1", "task_id": task_id, "events": events})
+                return
+            if parts[1] == "artifacts":
+                artifacts = task.get("artifacts")
+                self._json(
+                    {
+                        "api_version": "1",
+                        "task_id": task_id,
+                        "artifacts": artifacts if isinstance(artifacts, list) else [],
+                    }
+                )
+                return
+            self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -799,6 +1192,8 @@ def make_handler(
             return False
 
         def _client_is_loopback(self) -> bool:
+            if self.headers.get("X-Agentic-Harness-Client-Scope", "").strip().lower() == "remote":
+                return False
             if not self.client_address:
                 return False
             client = str(self.client_address[0]).strip().lower()
@@ -1149,8 +1544,27 @@ class GuiSession:
             entry = dict(task)
             identity = _task_identity(entry)
             if not entry.get("id"):
-                entry["id"] = f"task-{self._next_id}"
-                self._next_id += 1
+                prior = next(
+                    (
+                        item
+                        for item in self._history
+                        if (
+                            _has_identity(identity)
+                            and _identities_match(identity, _task_identity(item))
+                        )
+                        or (
+                            not _has_identity(identity)
+                            and item.get("summary") == entry.get("summary")
+                            and item.get("id")
+                        )
+                    ),
+                    None,
+                )
+                if prior is not None:
+                    entry["id"] = prior["id"]
+                else:
+                    entry["id"] = f"task-{self._next_id}"
+                    self._next_id += 1
             if _has_identity(identity):
                 self._history = [
                     item
@@ -1167,7 +1581,7 @@ class GuiSession:
             self._history.insert(0, entry)
             self._history = self._history[:MAX_GUI_HISTORY]
             self._save_locked()
-            return task
+            return entry
 
     def append_user_message(self, task: dict[str, Any], text: str, *, action: str) -> int:
         """Persist a revisioned user amendment bound to the active managed run."""

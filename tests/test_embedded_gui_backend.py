@@ -12,9 +12,11 @@ from pathlib import Path
 import pytest
 
 from agentic_harness.gui import backend as gui_backend_module
+from agentic_harness.gui.backend import _normalize_integration_metadata
 from agentic_harness.cli import write_goal_report
 from agentic_harness.core.artifacts import ArtifactStore
 from agentic_harness.core.autonomy import AUTONOMY_CONTRACT, AutonomousRunner
+from agentic_harness.core.errors import StateLockError
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.core.factory import build_supervisor
 from agentic_harness.core.goal_spec import GoalRequirement, GoalSpec
@@ -125,6 +127,127 @@ def test_embedded_backend_runs_public_engine_from_start_to_verified_finish(tmp_p
     assert finished["plan"][0]["status"] == "completed"
     assert finished["requirements"][0]["status"] == "satisfied"
     assert any(row["passed"] is True for row in finished["verification"])
+
+
+def test_read_only_analysis_is_presented_as_a_model_response_not_semantic_verification(
+    tmp_path,
+) -> None:
+    _configure_scripted_agent(tmp_path)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    backend.start(
+        {
+            "objective": "Return a model response in an isolated workspace",
+            "integration_metadata": {
+                "kind": "read_only_analysis",
+                "route_id": "primary",
+                "model_id": "local-model",
+                "model_used": True,
+                "connected_workspace_mutated": False,
+                "structured_actions_verified": True,
+            },
+        },
+        trusted_integration=True,
+    )
+    finished = _wait_for_terminal(backend)
+
+    assert finished["status"] == "done"
+    assert finished["result_category"] == "model_response"
+    assert finished["status_label"] == "Model response ready"
+    assert finished["final_result"]["accepted"] is True
+    assert finished["final_result"]["label"] == "Model response ready"
+    assert "verified workspace isolation only" in finished["summary"]
+    assert "review the response itself" in finished["final_result"]["reason"]
+
+
+def test_public_start_cannot_spoof_trusted_read_only_analysis_metadata(tmp_path) -> None:
+    _configure_scripted_agent(tmp_path)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    backend.start(
+        {
+            "objective": "Create a normal verified result",
+            "integration_metadata": {
+                "kind": "read_only_analysis",
+                "model_used": True,
+                "connected_workspace_mutated": False,
+            },
+        }
+    )
+    finished = _wait_for_terminal(backend)
+
+    assert finished["result_category"] == "verified_done"
+    assert "integration" not in finished["metadata"]
+
+
+def test_embedded_backend_retries_a_transient_driver_lock(tmp_path, monkeypatch) -> None:
+    _configure_scripted_agent(tmp_path)
+    original_step = AutonomousRunner.step
+    calls = 0
+
+    def transient_lock(self, objective=None):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise StateLockError("transient state lock")
+        return original_step(self, objective)
+
+    monkeypatch.setattr(AutonomousRunner, "step", transient_lock)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    backend.start({"objective": "Retry once and complete the real task"})
+    finished = _wait_for_terminal(backend)
+
+    assert calls >= 2
+    assert finished["status"] == "done"
+
+
+def test_embedded_backend_retries_a_transient_driver_setup_lock(tmp_path, monkeypatch) -> None:
+    _configure_scripted_agent(tmp_path)
+    original_build_supervisor = gui_backend_module.build_supervisor
+    calls = 0
+
+    def transient_setup_lock(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise StateLockError("transient setup lock")
+        return original_build_supervisor(*args, **kwargs)
+
+    monkeypatch.setattr(gui_backend_module, "build_supervisor", transient_setup_lock)
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    backend.start({"objective": "Retry setup once and complete the real task"})
+    finished = _wait_for_terminal(backend)
+
+    assert calls >= 3
+    assert finished["status"] == "done"
+
+
+def test_embedded_backend_marks_unowned_persistent_setup_lock_failed(
+    tmp_path, monkeypatch
+) -> None:
+    _configure_scripted_agent(tmp_path)
+    original_build_supervisor = gui_backend_module.build_supervisor
+    calls = 0
+
+    def persistent_setup_lock(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            raise StateLockError("persistent setup lock")
+        return original_build_supervisor(*args, **kwargs)
+
+    monkeypatch.setattr(gui_backend_module, "build_supervisor", persistent_setup_lock)
+    backend = EmbeddedExecutionBackend(tmp_path)
+    monkeypatch.setattr(backend._cancel, "wait", lambda _timeout: False)
+
+    backend.start({"objective": "Fail visibly when no other driver owns the lock"})
+    finished = _wait_for_terminal(backend)
+
+    assert calls >= 20
+    assert finished["status"] == "failed"
+    assert "persistent setup lock" in finished["summary"]
 
 
 def test_embedded_backend_does_not_infer_wildcard_review_coverage(tmp_path) -> None:
@@ -275,6 +398,41 @@ def test_embedded_high_assurance_rejects_stale_review_binding(tmp_path) -> None:
     assert result["status"] == "blocked"
     assert "no longer current" in str(result["summary"])
     assert backend.store.read_current_goal().id == "replacement-task"
+
+
+def test_normalize_integration_metadata_accepts_the_known_route_decision_shape() -> None:
+    value = {
+        "kind": "read_only_analysis",
+        "route_id": "primary",
+        "model_id": "primary-model",
+        "node": "Primary GPU",
+        "runtime": "vllm",
+        "decision_reason": "primary route is ready",
+        "connected_workspace_mutated": False,
+        "model_used": True,
+        "structured_actions_verified": True,
+    }
+
+    assert _normalize_integration_metadata(value) == value
+
+
+def test_normalize_integration_metadata_rejects_non_dict_input() -> None:
+    assert _normalize_integration_metadata("not-a-dict") is None
+    assert _normalize_integration_metadata(["kind", "route_id"]) is None
+    assert _normalize_integration_metadata(None) is None
+
+
+def test_normalize_integration_metadata_rejects_unknown_keys() -> None:
+    value = {"kind": "read_only_analysis", "unexpected": "value"}
+
+    assert _normalize_integration_metadata(value) is None
+
+
+def test_normalize_integration_metadata_rejects_wrong_value_types() -> None:
+    assert _normalize_integration_metadata({"kind": 123}) is None
+    assert _normalize_integration_metadata({"model_used": "true"}) is None
+    assert _normalize_integration_metadata({"structured_actions_verified": "true"}) is None
+    assert _normalize_integration_metadata({"route_id": {"nested": "object"}}) is None
 
 
 def test_embedded_backend_persists_provider_independent_quick_strategy(tmp_path) -> None:

@@ -648,7 +648,7 @@
           </div>
           <div class="history-controls">
             <label><span class="field-label">Search</span><input id="historySearch" type="search" placeholder="Task or result" /></label>
-            <label><span class="field-label">Status</span><select id="historyStatusFilter"><option value="all">All statuses</option><option value="verified">Verified</option><option value="active">Working</option><option value="blocked">Blocked</option><option value="failed">Failed</option></select></label>
+            <label><span class="field-label">Status</span><select id="historyStatusFilter"><option value="all">All statuses</option><option value="verified">Verified</option><option value="completed">Response ready</option><option value="active">Working</option><option value="blocked">Blocked</option><option value="failed">Failed</option></select></label>
             <label><span class="field-label">Run with</span><select id="historyRouteFilter"><option value="all">All routes</option></select></label>
           </div>
           <div class="actions compact history-actions">
@@ -749,8 +749,11 @@
                   <input id="providerEndpoint" type="url" placeholder="http://127.0.0.1:8000/v1/chat/completions" />
                   <label class="field-label" for="providerModel">Model name</label>
                   <input id="providerModel" type="text" placeholder="The model ID reported by your server" />
-                  <label class="field-label" for="providerApiKeyEnv">API key environment variable (optional)</label>
-                  <input id="providerApiKeyEnv" type="text" placeholder="OPENAI_API_KEY" autocomplete="off" />
+                  <div id="providerApiKeyEnvRow" hidden>
+                    <label class="field-label" for="providerApiKeyEnv">API key environment variable (optional)</label>
+                    <select id="providerApiKeyEnv"></select>
+                    <p class="help-text">Only environment variables allowed by this Harness service are shown.</p>
+                  </div>
                 </details>
                 <label class="field-label" for="providerApiKey">API key for this app session (optional)</label>
                 <input id="providerApiKey" type="password" autocomplete="new-password" spellcheck="false" />

@@ -291,7 +291,8 @@ def test_init_agent_grok_uses_official_headless_workspace_contract(tmp_path, cap
     config = load_config(tmp_path)
     assert rc == 0
     assert config.worker == "coding_agent"
-    assert config.coding_agent_command[:3] == ["grok", "-p", "{objective}"]
+    assert Path(config.coding_agent_command[0]).name == "grok"
+    assert config.coding_agent_command[1:3] == ["-p", "{objective}"]
     assert ["--cwd", "."] == config.coding_agent_command[3:5]
     assert ["--output-format", "plain"] == config.coding_agent_command[5:7]
     assert ["--sandbox", "workspace"] == config.coding_agent_command[11:13]

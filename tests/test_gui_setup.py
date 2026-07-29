@@ -13,7 +13,6 @@ import pytest
 import yaml
 
 from agentic_harness.gui import backend as gui_backend_module
-from agentic_harness.gui.backend import EmbeddedExecutionBackend
 from agentic_harness.adapters.model_agent import ProviderResponse
 from agentic_harness.core.config import load_config
 from agentic_harness.core.factory import build_supervisor
@@ -25,6 +24,7 @@ from agentic_harness.core.safety import (
     resolve_command_executable,
     split_command,
 )
+from agentic_harness.gui.backend import EmbeddedExecutionBackend
 
 
 def test_windows_command_split_preserves_backslashes_and_removes_outer_quotes() -> None:
@@ -1014,7 +1014,11 @@ def test_start_waits_for_atomic_provider_and_session_key_reconfiguration(
     assert backend.api_key is None
 
 
-def test_cloud_model_setup_requires_explicit_remote_data_confirmation(tmp_path: Path) -> None:
+def test_cloud_model_setup_requires_explicit_remote_data_confirmation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENTIC_HARNESS_ALLOWED_API_KEY_ENVS", "MODEL_API_KEY")
     backend = EmbeddedExecutionBackend(tmp_path)
 
     with pytest.raises(ValueError, match="leave this computer"):
@@ -1025,6 +1029,54 @@ def test_cloud_model_setup_requires_explicit_remote_data_confirmation(tmp_path: 
                 "model": "my-cloud-model",
                 "api_key_env": "MODEL_API_KEY",
                 "verification_command": "python -m pytest -q",
+            }
+        )
+
+
+def test_gui_setup_rejects_api_key_env_outside_operator_allowlist(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENTIC_HARNESS_ALLOWED_API_KEY_ENVS", "VLLM_API_KEY")
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with pytest.raises(ValueError, match="not allowed"):
+        backend.configure(
+            {
+                "execution": "local_model",
+                "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+                "model": "local-model",
+                "api_key_env": "HOME",
+                "verification_command": f"{sys.executable} -c \"print('verified')\"",
+            }
+        )
+
+
+def test_gui_setup_exposes_allowed_api_key_envs_and_direct_command_contract(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "AGENTIC_HARNESS_ALLOWED_API_KEY_ENVS",
+        "SECOND_KEY,VLLM_API_KEY",
+    )
+
+    setup = EmbeddedExecutionBackend(tmp_path).setup()
+
+    assert setup["allowed_api_key_envs"] == ["SECOND_KEY", "VLLM_API_KEY"]
+    assert setup["verification_contract"]["shell"] is False
+
+
+def test_gui_setup_rejects_implicit_shell_verification(tmp_path: Path) -> None:
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with pytest.raises(ValueError, match="bash -lc"):
+        backend.configure(
+            {
+                "execution": "local_model",
+                "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+                "model": "local-model",
+                "verification_command": "test '$(cat result.txt)' = verified",
             }
         )
 
@@ -1082,6 +1134,7 @@ def test_setup_connection_test_proves_structured_model_response_without_echoing_
             "endpoint": "https://api.example.test/v1/chat/completions",
             "model": "user-model",
             "api_key": "connection-test-secret",
+            "confirm_remote_data": True,
         }
     )
 
@@ -1137,6 +1190,7 @@ def test_setup_connection_test_proves_structured_model_response_without_echoing_
         {
             "endpoint": "https://different-provider.example/v1/chat/completions",
             "model": "different-provider-model",
+            "confirm_remote_data": True,
         }
     )
     assert captured["api_key"] == ""
@@ -1247,6 +1301,10 @@ def test_changing_env_credential_name_or_value_invalidates_model_validation(
         FakeProvider,
     )
     monkeypatch.setenv("MODEL_KEY_A", "tested-secret")
+    monkeypatch.setenv(
+        "AGENTIC_HARNESS_ALLOWED_API_KEY_ENVS",
+        "MODEL_KEY_A,MODEL_KEY_B",
+    )
     backend = EmbeddedExecutionBackend(tmp_path)
     connection = {
         "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
@@ -1278,6 +1336,18 @@ def test_changing_env_credential_name_or_value_invalidates_model_validation(
         }
     )
     assert backend.setup()["execution_validation"]["verified"] is False
+
+
+def test_cloud_connection_test_requires_explicit_remote_data_confirmation(tmp_path: Path) -> None:
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with pytest.raises(ValueError, match="connection test may send"):
+        backend.test_connection(
+            {
+                "endpoint": "https://api.example.test/v1/chat/completions",
+                "model": "user-model",
+            }
+        )
 
 
 def test_codex_connection_test_runs_the_configured_model_in_read_only_mode(

@@ -700,6 +700,7 @@ async function testProviderTemplatePrefillsEditableValues() {
           entitlement_note: "Confirm client eligibility.",
         },
       ],
+      allowed_api_key_envs: ["ZAI_API_KEY"],
     },
   });
   const preset = app.elements.get("providerPreset");
@@ -734,6 +735,7 @@ async function testTypedSessionKeyOverridesTemplateEnvironmentVariable() {
         data_location: "cloud",
       },
     ],
+    allowed_api_key_envs: ["ZAI_API_KEY"],
   };
   const app = await runApp({
     publicAccess: true,
@@ -767,6 +769,7 @@ async function testTypedSessionKeyOverridesTemplateEnvironmentVariable() {
     const body = JSON.parse(call.options.body);
     assert.equal(body.api_key_env, "");
     assert.equal(body.api_key, "typed-session-secret");
+    assert.equal(body.confirm_remote_data, true);
   });
   assert.equal(app.elements.get("providerApiKey").value, "");
 }
@@ -1667,6 +1670,7 @@ async function testHighAssuranceAmendmentShowsEditablePlainLanguageReview() {
     goal_id: "amendment-run",
     goal_spec_sha256: "reviewed-spec-sha256",
     version: 1,
+    task_id: "amendment-run",
   });
 }
 

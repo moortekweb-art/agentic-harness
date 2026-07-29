@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from http.client import HTTPConnection
 import hashlib
 import json
 import math
 import os
-from pathlib import Path
 import stat
 import subprocess
 import sys
+from copy import deepcopy
+from http.client import HTTPConnection
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Lock, RLock, Thread
 from typing import Any
@@ -36,14 +36,12 @@ from agentic_harness.core.errors import ConfigError, HarnessError, StateLockErro
 from agentic_harness.core.events import TaskEventStore
 from agentic_harness.core.factory import autonomy_policy_from_config, build_supervisor
 from agentic_harness.core.goal_spec import GoalSpec, derived_objective_spec
-from agentic_harness.core.state import Goal, GoalStatus
-from agentic_harness.core.specification_amendment import amended_requirements
+from agentic_harness.core.presentation import safe_inline_text
 from agentic_harness.core.providers import (
     PROVIDER_TEMPLATES,
     ProviderProfile,
     resolve_api_key,
 )
-from agentic_harness.core.presentation import safe_inline_text
 from agentic_harness.core.redaction import redact_secrets
 from agentic_harness.core.reporting import RunReceipt, build_run_receipt
 from agentic_harness.core.safety import (
@@ -55,6 +53,8 @@ from agentic_harness.core.safety import (
     split_command,
 )
 from agentic_harness.core.secure_io import write_private_text
+from agentic_harness.core.specification_amendment import amended_requirements
+from agentic_harness.core.state import Goal, GoalStatus
 from agentic_harness.core.strategies import (
     DEFAULT_PUBLIC_STRATEGY,
     ExecutionStrategy,
@@ -70,9 +70,9 @@ from agentic_harness.core.tournament import (
 )
 from agentic_harness.core.workspace import workspace_change_summary
 
-
 GUI_TASK_CONTRACT = "agentic_harness.gui_task.v2"
 TERMINAL_REPORT_CONTRACT = "agentic_harness.terminal_report.v2"
+ALLOWED_API_KEY_ENVS_ENV = "AGENTIC_HARNESS_ALLOWED_API_KEY_ENVS"
 
 _CODING_AGENT_COMMANDS = {
     "codex": ["codex", "exec", "--skip-git-repo-check", "{objective}"],
@@ -185,6 +185,58 @@ outcome = {
 print(summary)
 print("HARNESS_RESULT_JSON=" + json.dumps(outcome, separators=(",", ":")))
 '''
+
+
+def _allowed_api_key_envs() -> tuple[str, ...]:
+    raw = os.environ.get(ALLOWED_API_KEY_ENVS_ENV, "")
+    names = {name for name in raw.replace(",", " ").split() if name}
+    return tuple(sorted(names))
+
+
+def _require_allowed_api_key_env(name: str) -> None:
+    if not name:
+        return
+    allowed = _allowed_api_key_envs()
+    if name in allowed:
+        return
+    if allowed:
+        choices = ", ".join(allowed)
+        raise ValueError(
+            f"API key environment variable {name!r} is not allowed for GUI setup. "
+            f"Choose one of: {choices}."
+        )
+    raise ValueError(
+        "Environment-variable credentials are disabled for GUI setup. "
+        f"Set {ALLOWED_API_KEY_ENVS_ENV} on the service to allow specific names."
+    )
+
+
+def _verification_command(text: str) -> list[str]:
+    command = split_command(text) if text else []
+    if not command:
+        return []
+    executable = Path(command[0]).name.lower()
+    shell_executables = {
+        "bash",
+        "cmd",
+        "cmd.exe",
+        "powershell",
+        "powershell.exe",
+        "pwsh",
+        "pwsh.exe",
+        "sh",
+        "zsh",
+    }
+    shell_tokens = {"|", "||", "&&", ";", ">", ">>", "<", "2>", "2>>"}
+    has_shell_syntax = any(
+        token in shell_tokens or "$(" in token or "`" in token for token in command
+    )
+    if has_shell_syntax and executable not in shell_executables:
+        raise ValueError(
+            "Verification commands run directly without a shell. "
+            "Use an explicit shell command, for example: bash -lc 'your command'."
+        )
+    return command
 
 
 class EmbeddedExecutionBackend:
@@ -403,6 +455,15 @@ class EmbeddedExecutionBackend:
                 "mode": "automatic" if suggested_argv else "setup_needed",
                 "label": _review_command_label(suggested_argv),
                 "technical_command": suggested,
+            },
+            "allowed_api_key_envs": list(_allowed_api_key_envs()),
+            "verification_contract": {
+                "shell": False,
+                "summary": (
+                    "The verification command runs directly without a shell. "
+                    "Use an explicit shell command such as bash -lc for pipes, "
+                    "redirection, or command substitution."
+                ),
             },
             "deployment": {
                 "scope": "local_self_hosted",
@@ -650,7 +711,7 @@ class EmbeddedExecutionBackend:
             or (format_command(existing.review_command) if existing else "")
             or _detect_check(self.project_dir)
         ).strip()
-        verification = split_command(verification_text) if verification_text else []
+        verification = _verification_command(verification_text)
         if not verification:
             raise ValueError("Choose an independent verification command before saving setup.")
         if execution in {"local_model", "cloud_model"}:
@@ -659,6 +720,7 @@ class EmbeddedExecutionBackend:
                 model=str(body.get("model") or ""),
                 api_key_env=str(body.get("api_key_env") or ""),
             )
+            _require_allowed_api_key_env(profile.api_key_env)
             if profile.data_location == "cloud" and body.get("confirm_remote_data") is not True:
                 raise ValueError(
                     "Confirm that selected file excerpts and tool results may leave this computer."
@@ -698,6 +760,21 @@ class EmbeddedExecutionBackend:
                         existing_model.llm_max_steps if existing_model else 8,
                         1,
                         50,
+                    ),
+                    "max_output_tokens": _int_setting(
+                        body.get("max_output_tokens"),
+                        existing_model.llm_max_output_tokens if existing_model else 4_096,
+                        1,
+                        65_536,
+                    ),
+                    "disable_thinking": (
+                        body.get("disable_thinking") is True
+                        if "disable_thinking" in body
+                        else (
+                            existing_model.llm_disable_thinking
+                            if existing_model
+                            else False
+                        )
                     ),
                     "timeout": _int_setting(
                         body.get("timeout"),
@@ -796,6 +873,11 @@ class EmbeddedExecutionBackend:
             model=str(body.get("model") or ""),
             api_key_env=str(body.get("api_key_env") or ""),
         )
+        _require_allowed_api_key_env(profile.api_key_env)
+        if profile.data_location == "cloud" and body.get("confirm_remote_data") is not True:
+            raise ValueError(
+                "Confirm that the connection test may send a test prompt to this cloud endpoint."
+            )
         entered_key = str(body.get("api_key") or "").strip()
         if entered_key and profile.api_key_env:
             raise ValueError(
@@ -824,6 +906,13 @@ class EmbeddedExecutionBackend:
             api_key=api_key,
             timeout=_int_setting(body.get("timeout"), 30, 1, 120),
             retries=0,
+            max_output_tokens=_int_setting(
+                body.get("max_output_tokens"),
+                256,
+                1,
+                4_096,
+            ),
+            disable_thinking=body.get("disable_thinking") is True,
         )
         response = provider.complete(
             [
@@ -1084,11 +1173,27 @@ class EmbeddedExecutionBackend:
             configured = True
         return {"source": source, "configured": configured}
 
-    def start(self, body: dict[str, Any]) -> dict[str, Any]:
+    def start(
+        self,
+        body: dict[str, Any],
+        *,
+        frozen_spec: GoalSpec | None = None,
+        trusted_integration: bool = False,
+    ) -> dict[str, Any]:
         with self._config_lock:
-            return self._start_locked(body)
+            return self._start_locked(
+                body,
+                frozen_spec=frozen_spec,
+                trusted_integration=trusted_integration,
+            )
 
-    def _start_locked(self, body: dict[str, Any]) -> dict[str, Any]:
+    def _start_locked(
+        self,
+        body: dict[str, Any],
+        *,
+        frozen_spec: GoalSpec | None = None,
+        trusted_integration: bool = False,
+    ) -> dict[str, Any]:
         objective = str(body.get("objective") or "").strip()
         if not objective:
             return self._blocked_task(
@@ -1137,16 +1242,32 @@ class EmbeddedExecutionBackend:
                 secret_env_names=[config.llm_api_key_env],
                 interface="gui",
             )
+            safety = metadata.get("safety")
+            if isinstance(safety, dict) and body.get("read_only") is True:
+                safety["read_only"] = True
+            integration_metadata = (
+                _normalize_integration_metadata(body.get("integration_metadata"))
+                if trusted_integration
+                else None
+            )
+            if integration_metadata is not None:
+                metadata["integration"] = deepcopy(integration_metadata)
             metadata["execution_strategy"] = strategy.to_metadata()
-            frozen_spec: GoalSpec | None = None
+            tournament_spec: GoalSpec | None = None
             if candidate_count > 1:
-                frozen_spec = derived_objective_spec(objective)
+                if frozen_spec is not None:
+                    raise ValueError(
+                        "A caller-provided frozen specification cannot be combined "
+                        "with tournament candidates."
+                    )
+                tournament_spec = derived_objective_spec(objective)
+                frozen_spec = tournament_spec
                 metadata["verified_tournament"] = {
                     "contract": "agentic_harness.verified_tournament.v1",
                     "status": "queued",
                     "candidate_count": candidate_count,
                     "completed_candidates": 0,
-                    "goal_spec_sha256": frozen_spec.sha256,
+                    "goal_spec_sha256": tournament_spec.sha256,
                 }
             goal = supervisor.start(
                 objective,
@@ -1160,7 +1281,7 @@ class EmbeddedExecutionBackend:
             return self._blocked_task(str(exc), action="setup")
         self._cancel.clear()
         with self._thread_lock:
-            if frozen_spec is not None:
+            if tournament_spec is not None:
                 self._thread = Thread(
                     target=self._drive_tournament,
                     args=(
@@ -1169,7 +1290,7 @@ class EmbeddedExecutionBackend:
                         candidate_count,
                         review_commands,
                         safe_areas,
-                        frozen_spec,
+                        tournament_spec,
                         policy.repeated_blocker_limit,
                     ),
                     name=f"agentic-harness-tournament-{goal.id[:8]}",
@@ -1473,25 +1594,49 @@ class EmbeddedExecutionBackend:
         policy: AutonomyPolicy | None = None,
     ) -> None:
         try:
-            with self._config_lock:
-                supervisor = build_supervisor(
-                    self.project_dir,
-                    review_commands=review_commands,
-                    api_key=self.api_key,
-                    cancel_requested=self._cancel.is_set,
-                )
-                policy = (
-                    policy
-                    or self.policy
-                    or autonomy_policy_from_config(load_config(self.project_dir))
-                )
+            setup_lock_conflicts = 0
+            while not self._cancel.is_set():
+                try:
+                    with self._config_lock:
+                        supervisor = build_supervisor(
+                            self.project_dir,
+                            review_commands=review_commands,
+                            api_key=self.api_key,
+                            cancel_requested=self._cancel.is_set,
+                        )
+                        policy = (
+                            policy
+                            or self.policy
+                            or autonomy_policy_from_config(load_config(self.project_dir))
+                        )
+                    break
+                except StateLockError as exc:
+                    setup_lock_conflicts += 1
+                    if setup_lock_conflicts >= 20:
+                        self._defer_or_record_lock_error(exc)
+                        return
+                    if self._cancel.wait(0.1):
+                        return
+            else:
+                return
             runner = AutonomousRunner(
                 supervisor,
                 policy=policy,
                 cancel_requested=self._cancel.is_set,
             )
+            lock_conflicts = 0
             while not self._cancel.is_set():
-                goal = runner.step()
+                try:
+                    goal = runner.step()
+                    lock_conflicts = 0
+                except StateLockError as exc:
+                    lock_conflicts += 1
+                    if lock_conflicts < 20:
+                        if self._cancel.wait(0.1):
+                            return
+                        continue
+                    self._defer_or_record_lock_error(exc)
+                    return
                 autonomy = goal.metadata.get("autonomy")
                 intervention = (
                     isinstance(autonomy, dict)
@@ -1500,9 +1645,6 @@ class EmbeddedExecutionBackend:
                 if _durably_terminal(goal) or intervention:
                     self._ensure_terminal_report(goal)
                     return
-        except StateLockError:
-            # Another live driver owns this project. Its durable state remains authoritative.
-            return
         except Exception as exc:
             self._record_driver_error(exc)
         finally:
@@ -1537,8 +1679,17 @@ class EmbeddedExecutionBackend:
                 ),
             )
             self._finish_tournament_goal(goal_id, frozen_spec, result)
+        except StateLockError as exc:
+            self._defer_or_record_lock_error(exc)
         except Exception as exc:
             self._record_driver_error(exc)
+
+    def _defer_or_record_lock_error(self, exc: StateLockError) -> None:
+        try:
+            with self.store.autonomy_locked():
+                self._record_driver_error(exc)
+        except StateLockError:
+            return
 
     def _record_tournament_progress(
         self,
@@ -1892,7 +2043,18 @@ class EmbeddedExecutionBackend:
             status = "checking"
         receipt = build_run_receipt(goal)
         terminal_receipt_ready = terminal and report_ready
-        result_category = receipt.category if terminal_receipt_ready else "in_progress"
+        result_category: str = (
+            receipt.category if terminal_receipt_ready else "in_progress"
+        )
+        integration = goal.metadata.get("integration")
+        model_response_ready = (
+            terminal_receipt_ready
+            and receipt.category == "verified_done"
+            and isinstance(integration, dict)
+            and integration.get("kind") == "read_only_analysis"
+        )
+        if model_response_ready:
+            result_category = "model_response"
         public_status = status
         status_label = _status_label(status)
         if terminal_receipt_ready:
@@ -1902,6 +2064,9 @@ class EmbeddedExecutionBackend:
                 "failed": "failed",
             }.get(receipt.category, status)
             status_label = receipt.label
+        if model_response_ready:
+            public_status = "done"
+            status_label = "Model response ready"
         progress = _progress(public_status, plan, requirements)
         blocker = autonomy.get("blocker")
         blocker_reason = str(blocker.get("reason") or "") if isinstance(blocker, dict) else ""
@@ -1921,6 +2086,44 @@ class EmbeddedExecutionBackend:
             summary = receipt.trusted_reason
         elif terminal and not report_ready:
             summary = "Finalizing the durable terminal report."
+        if model_response_ready:
+            summary = (
+                "The selected model returned a response. Agentic Harness independently "
+                "verified workspace isolation only; review the response itself."
+            )
+        public_metadata = {
+            "created_at": goal.created_at,
+            "updated_at": goal.updated_at,
+            "observed_at": goal.updated_at,
+            "worker": self._public_worker(),
+            "strategy": _public_strategy(goal),
+            "budget": autonomy.get("budget")
+            if isinstance(autonomy.get("budget"), dict)
+            else {},
+        }
+        if isinstance(integration, dict):
+            public_metadata["integration"] = dict(integration)
+        public_metadata["specification_review"] = self._specification_review(goal, autonomy)
+        public_metadata["verified_tournament"] = _public_tournament(goal)
+        final_result = _final_result_payload(
+            goal,
+            receipt,
+            terminal_ready=terminal_receipt_ready,
+            status=public_status,
+            changed_files=changed_files,
+            changed_files_evidence=changed_files_evidence,
+            verification=verification,
+            requirements=requirements,
+        )
+        if model_response_ready:
+            final_result.update(
+                {
+                    "label": "Model response ready",
+                    "accepted": True,
+                    "summary": summary,
+                    "reason": summary,
+                }
+            )
         return {
             "contract": GUI_TASK_CONTRACT,
             "id": goal.id,
@@ -1947,28 +2150,8 @@ class EmbeddedExecutionBackend:
             "artifacts": [{"name": Path(path).name, "path": path} for path in goal.artifacts],
             "allowed_actions": _allowed_actions(public_status),
             "safety": _public_safety(goal),
-            "final_result": _final_result_payload(
-                goal,
-                receipt,
-                terminal_ready=terminal_receipt_ready,
-                status=public_status,
-                changed_files=changed_files,
-                changed_files_evidence=changed_files_evidence,
-                verification=verification,
-                requirements=requirements,
-            ),
-            "metadata": {
-                "created_at": goal.created_at,
-                "updated_at": goal.updated_at,
-                "observed_at": goal.updated_at,
-                "worker": self._public_worker(),
-                "strategy": _public_strategy(goal),
-                "budget": autonomy.get("budget")
-                if isinstance(autonomy.get("budget"), dict)
-                else {},
-                "specification_review": self._specification_review(goal, autonomy),
-                "verified_tournament": _public_tournament(goal),
-            },
+            "final_result": final_result,
+            "metadata": public_metadata,
         }
 
     def _requirement_rows(
@@ -2314,6 +2497,50 @@ def _safe_areas(value: Any, project_dir: Path) -> list[str]:
     return result
 
 
+_INTEGRATION_METADATA_STRING_KEYS = (
+    "kind",
+    "route_id",
+    "model_id",
+    "node",
+    "runtime",
+    "decision_reason",
+)
+_INTEGRATION_METADATA_BOOL_KEYS = (
+    "connected_workspace_mutated",
+    "model_used",
+    "structured_actions_verified",
+)
+
+
+def _normalize_integration_metadata(value: Any) -> dict[str, Any] | None:
+    """Validate and shape-restrict client-supplied integration metadata.
+
+    Only the known scalar fields produced by the route-selection integration
+    payload are copied through; anything else (unexpected keys, nested
+    structures, wrong types) is dropped rather than stored verbatim, since
+    this dict is later republished in public task metadata.
+    """
+
+    if not isinstance(value, dict):
+        return None
+    normalized: dict[str, Any] = {}
+    for key in _INTEGRATION_METADATA_STRING_KEYS:
+        if key in value:
+            raw = value[key]
+            if not isinstance(raw, str):
+                return None
+            normalized[key] = raw
+    for key in _INTEGRATION_METADATA_BOOL_KEYS:
+        if key in value:
+            raw = value[key]
+            if not isinstance(raw, bool):
+                return None
+            normalized[key] = raw
+    if set(value.keys()) - set(normalized.keys()):
+        return None
+    return normalized
+
+
 def _checks(value: Any) -> list[list[str]]:
     if not isinstance(value, list):
         return []
@@ -2583,6 +2810,7 @@ def _public_safety(goal: Goal) -> dict[str, Any]:
             if isinstance(row, dict)
         ],
         "path_enforcement": safety.get("path_enforcement") is True,
+        "read_only": safety.get("read_only") is True,
     }
 
 

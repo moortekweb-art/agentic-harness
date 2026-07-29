@@ -40,6 +40,16 @@ in an owner-readable environment file outside the repository and enter only the
 variable name in Settings. Do not place a plaintext key in
 `.agentic-harness/config.yml`, the unit file, command-line arguments, or a URL.
 
+GUI setup exposes no environment-variable credentials by default. Allow only
+the exact names the service may resolve:
+
+```bash
+AGENTIC_HARNESS_ALLOWED_API_KEY_ENVS=VLLM_API_KEY,OPENAI_API_KEY
+```
+
+The Settings selector is populated from this allowlist. Provider templates do
+not bypass it.
+
 A session key is intentionally memory-only. It disappears on restart and is
 suitable for an interactive loopback launch, not an unattended service.
 Model connection validation is also session-scoped: after a GUI restart,
@@ -54,9 +64,64 @@ refused unless `AGENTIC_HARNESS_GUI_TOKEN` is set. For a reverse proxy:
 - set a strong GUI token and send it as an `Authorization: Bearer` header;
 - add each proxy-facing hostname to `AGENTIC_HARNESS_GUI_ALLOWED_HOSTS`;
 - preserve a trustworthy `Host` header;
+- overwrite `X-Agentic-Harness-Client-Scope` with `remote` before forwarding
+  every remote request, so proxy loopback traffic cannot use local-only
+  credential entry;
 - enforce authentication and transport encryption at the proxy or private
   network; and
 - do not expose the control surface directly to the public internet.
+
+## Local Studio integration
+
+Local Studio connects to two optional loopback Harness services: a managed goal
+service and a provider-neutral goal service. Give each service its own strong
+`AGENTIC_HARNESS_GUI_TOKEN`, then configure the matching URL and token in Local
+Studio:
+
+```bash
+LOCAL_STUDIO_HARNESS_URL=http://127.0.0.1:8771
+LOCAL_STUDIO_HARNESS_TOKEN=<managed-harness-token>
+LOCAL_STUDIO_PROVIDER_HARNESS_URL=http://127.0.0.1:8772
+LOCAL_STUDIO_PROVIDER_HARNESS_TOKEN=<provider-harness-token>
+```
+
+The Local Studio proxy exposes only the task, route, setup, and lifecycle
+endpoints used by its Goals interface. It does not expose Harness file preview,
+artifact preview, bulk-task, credential, or session APIs.
+
+Optional read-only model routes are configured entirely through service
+environment variables. No route, model, host, or credential name is built in.
+The probe and completion endpoint for each route must share one origin:
+
+```bash
+AGENTIC_HARNESS_ROUTE_PRIMARY_ENDPOINT=http://127.0.0.1:8000/v1/chat/completions
+AGENTIC_HARNESS_ROUTE_PRIMARY_HEALTH_URL=http://127.0.0.1:8000/health
+AGENTIC_HARNESS_ROUTE_PRIMARY_MODEL_ID=your-model-id
+AGENTIC_HARNESS_ROUTE_PRIMARY_API_KEY_ENV=LOCAL_MODEL_API_KEY
+AGENTIC_HARNESS_ROUTE_PRIMARY_RUNTIME=vllm
+AGENTIC_HARNESS_ROUTE_PRIMARY_LABEL="Local GPU"
+AGENTIC_HARNESS_ROUTE_PRIMARY_CAPABILITIES=chat,tools
+AGENTIC_HARNESS_ROUTE_PRIMARY_MAX_CONTEXT_TOKENS=32768
+```
+
+If a route sets `AGENTIC_HARNESS_ROUTE_*_API_KEY_ENV`, add that exact variable
+name to `AGENTIC_HARNESS_ALLOWED_API_KEY_ENVS` as well. For the example above:
+
+```bash
+AGENTIC_HARNESS_ALLOWED_API_KEY_ENVS=LOCAL_MODEL_API_KEY
+```
+
+The route task fails closed until the referenced credential name is
+allowlisted. Routes that require no bearer credential may leave
+`AGENTIC_HARNESS_ROUTE_*_API_KEY_ENV` empty.
+
+An optional fallback uses the equivalent
+`AGENTIC_HARNESS_ROUTE_OVERFLOW_*` variables. The runtime may be any
+OpenAI-compatible backend; set it to `vllm` or `sglang` only when that is the
+actual server runtime. HTTP endpoints in the CGNAT range, including many
+Tailscale addresses, remain unavailable unless the operator explicitly sets
+`AGENTIC_HARNESS_TRUST_CGNAT_OVERLAY=1`. Prefer a private DNS name with HTTPS
+when the route crosses machines.
 
 ## Hosted product boundary
 
