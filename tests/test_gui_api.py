@@ -1441,6 +1441,7 @@ def test_managed_preview_redacts_structured_secret_before_http_serialization(
                 "sessionToken": "synthetic-session-token-R4Q8M2",
                 "upstreamBearer": "synthetic-upstream-bearer-R4Q8M2",
                 "upstream_bearer": "synthetic-upstream-bearer-snake-R4Q8M2",
+                "repositoryGitHubPATValue": "synthetic-github-pat-value-R4Q8M2",
                 "tokenCount": 37,
                 "cookie_preferences": "keep-safe",
                 "refresh_token": refresh_marker,
@@ -1474,6 +1475,7 @@ def test_managed_preview_redacts_structured_secret_before_http_serialization(
     assert "synthetic-session-token-R4Q8M2" not in preview["content"]
     assert "synthetic-upstream-bearer-R4Q8M2" not in preview["content"]
     assert "synthetic-upstream-bearer-snake-R4Q8M2" not in preview["content"]
+    assert "synthetic-github-pat-value-R4Q8M2" not in preview["content"]
     assert '"tokenCount": 37' in preview["content"]
     assert '"cookie_preferences": "keep-safe"' in preview["content"]
     assert refresh_marker not in preview["content"]
@@ -1506,6 +1508,10 @@ def test_managed_preview_redacts_structured_secret_before_http_serialization(
         "backupGITHUBPAT",
         "upstream_github_pat",
         "upstream-github-pat",
+        "repositoryGitHubPATValue",
+        "github_pat_value",
+        "upstream-github-pat-value",
+        "repositoryGitHubPATRawValue",
     ],
 )
 def test_structured_redaction_recognizes_compound_credential_keys(key: str) -> None:
@@ -1526,6 +1532,8 @@ def test_structured_redaction_recognizes_compound_credential_keys(key: str) -> N
         "tokenLimit",
         "tokenUsage",
         "totalTokens",
+        "githubPattern",
+        "repositoryValue",
     ],
 )
 def test_structured_redaction_preserves_benign_token_metadata(key: str) -> None:
@@ -1543,6 +1551,7 @@ def test_gui_http_and_websocket_redact_compound_credential_keys(
         "upstream_bearer": "opaque-upstream-bearer-snake-Z7Q4M9",
         "upstreamGithubPat": "opaque-upstream-github-pat-Z7Q4M9",
         "repositoryGitHubPAT": "opaque-repository-github-pat-Z7Q4M9",
+        "repositoryGitHubPATValue": "opaque-repository-github-pat-value-Z7Q4M9",
     }
     payload = {"status": "working", **markers, "tokenCount": 37}
     monkeypatch.setattr(gui_server_module, "status_task", lambda _bridge: dict(payload))

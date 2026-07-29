@@ -2062,6 +2062,7 @@ def test_persisted_managed_session_redacts_values_under_sensitive_nested_keys(
                         "client_secret_value": opaque_secret,
                         "upstreamGithubPat": opaque_secret,
                         "repositoryGitHubPAT": opaque_secret,
+                        "repositoryGitHubPATValue": opaque_secret,
                         "monkey": "safe value",
                     }
                 }
@@ -2072,7 +2073,7 @@ def test_persisted_managed_session_redacts_values_under_sensitive_nested_keys(
     persisted = state_path.read_text(encoding="utf-8")
 
     assert opaque_secret not in persisted
-    assert persisted.count("<redacted>") >= 4
+    assert persisted.count("<redacted>") >= 5
     assert '"monkey":"safe value"' in persisted
 
 

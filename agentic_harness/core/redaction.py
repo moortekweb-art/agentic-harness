@@ -41,6 +41,7 @@ _NON_SECRET_TOKEN_METADATA_KEYS = frozenset(
         "totaltokens",
     }
 )
+_SENSITIVE_JSON_PRESENTATION_WRAPPERS = ("value",)
 _IDENTIFIER_WORD_BOUNDARY = re.compile(
     r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
 )
@@ -89,16 +90,22 @@ def sensitive_json_key(key: str) -> bool:
     compact = "".join(character for character in lowered if character.isalnum())
     if compact in _NON_SECRET_TOKEN_METADATA_KEYS:
         return False
-    if compact in _SENSITIVE_JSON_KEYS:
+    semantic_compact = compact
+    for wrapper in _SENSITIVE_JSON_PRESENTATION_WRAPPERS:
+        if semantic_compact.endswith(wrapper) and len(semantic_compact) > len(wrapper):
+            semantic_compact = semantic_compact[: -len(wrapper)]
+            break
+    if semantic_compact in _SENSITIVE_JSON_KEYS:
         return True
     separated = _IDENTIFIER_WORD_BOUNDARY.sub(" ", key.strip())
-    pieces = {
+    piece_sequence = [
         piece.lower()
         for piece in "".join(
             character if character.isalnum() else " " for character in separated
         ).split()
         if piece
-    }
+    ]
+    pieces = set(piece_sequence)
     if pieces.intersection(
         {
             "authorization",
@@ -113,8 +120,14 @@ def sensitive_json_key(key: str) -> bool:
         }
     ):
         return True
+    if any(
+        piece_sequence[index : index + len(phrase)] == phrase
+        for phrase in (["github", "pat"], ["git", "hub", "pat"])
+        for index in range(len(piece_sequence) - len(phrase) + 1)
+    ):
+        return True
     return any(
-        marker in compact
+        marker in semantic_compact
         for marker in (
             "accesskey",
             "apikey",
@@ -122,7 +135,7 @@ def sensitive_json_key(key: str) -> bool:
             "privatekey",
             "refreshtoken",
         )
-    ) or compact.endswith(
+    ) or semantic_compact.endswith(
         (
             "authorization",
             "bearer",
@@ -135,7 +148,7 @@ def sensitive_json_key(key: str) -> bool:
             "secret",
             "token",
         )
-    ) or compact.endswith("cookie") or compact.startswith("setcookie")
+    ) or semantic_compact.endswith("cookie") or semantic_compact.startswith("setcookie")
 
 
 def redact_json_value(value: Any, *, depth: int = 0) -> Any:

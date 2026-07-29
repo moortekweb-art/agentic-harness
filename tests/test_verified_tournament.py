@@ -848,6 +848,71 @@ def test_unrecognized_gradle_test_alias_closure_fails_closed(tmp_path: Path) -> 
         tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
 
 
+@pytest.mark.parametrize(
+    "alias_expression",
+    [
+        (
+            "testSources\n"
+            "    .also {\n"
+            '        it.java.srcDir("verification")\n'
+            "    }\n"
+        ),
+        (
+            "testSources\n"
+            "    /* keep the call chain readable */\n"
+            "    .withConvention(JavaPluginConvention::class) {\n"
+            '        java.srcDir("verification")\n'
+            "    }\n"
+        ),
+    ],
+)
+def test_multiline_unrecognized_gradle_test_alias_closure_fails_closed(
+    tmp_path: Path,
+    alias_expression: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle.kts").write_text(
+        'val testSources = sourceSets["test"]\n' + alias_expression,
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add multiline unsupported test alias closure")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
+@pytest.mark.parametrize("method", ["configure", "apply"])
+def test_multiline_recognized_gradle_test_alias_closure_is_frozen(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    custom_test = root / "verification" / "BoundaryTest.java"
+    custom_test.parent.mkdir()
+    custom_test.write_text("class BoundaryTest {}\n", encoding="utf-8")
+    (root / "build.gradle.kts").write_text(
+        (
+            'val testSources = sourceSets.named("test")\n'
+            "testSources\n"
+            "    /* multiline alias closure */\n"
+            f"    .{method} {{\n"
+            '        java.srcDir("verification")\n'
+            "    }\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add multiline recognized test alias closure")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+    custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
+
+    assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(
+        root, assets
+    )
+
+
 def test_dynamic_gradle_test_root_requires_explicit_assets(tmp_path: Path) -> None:
     root, _ = _project(tmp_path)
     (root / "build.gradle").write_text(
