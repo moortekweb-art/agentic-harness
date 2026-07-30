@@ -46,6 +46,24 @@ agentic-harness selftest
 agentic-harness run-demo fix-tests /tmp/agentic-harness-demo --force
 ```
 
+## Human Mode
+
+On the Pop-OS machine that has the local-goal/Mode 3A backend installed, you do
+not need to write goal packets or remember planner names:
+
+```bash
+agentic-harness setup
+agentic-harness do "make Jarvis voice startup more reliable"
+agentic-harness check
+agentic-harness watch
+```
+
+`do` accepts plain English, wraps it in the safe Mode 3A GLM cloud-lane format,
+queues it, and prints a work ticket. `check` shows what is happening. `watch`
+asks the harness to move the current work forward once. Advanced commands such
+as `mode3a-run`, `mode3a-status`, and `mode3a-monitor` remain available when
+you need the underlying details.
+
 To inspect the demo files instead of running them immediately:
 
 ```bash
