@@ -590,6 +590,7 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
                 len(_GRADLE_SOURCE_ROOT_NAME.findall(direct_config))
                 != len(source_matches)
             )
+        lexical_text = _gradle_lexical_mask(text)
         for alias_match in _GRADLE_TEST_ALIAS.finditer(text):
             alias_name = alias_match.group("name")
             alias = re.escape(alias_name)
@@ -600,10 +601,12 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
             )
             for direct_match in direct_alias.finditer(text):
                 expressions.append(direct_match.group("expression"))
-            for method, opening in _gradle_alias_closures(text, alias_name):
+            for method, opening, receiver_supported in _gradle_alias_closures(
+                text, alias_name, lexical_text=lexical_text
+            ):
                 block = _balanced_brace_body(text, opening)
                 source_matches = list(_GRADLE_SOURCE_ROOT_CALL.finditer(block))
-                if method in {"configure", "apply"}:
+                if receiver_supported and method in {"configure", "apply"}:
                     expressions.extend(
                         source_match.group("expression")
                         for source_match in source_matches
@@ -647,43 +650,79 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
     return configured
 
 
-def _gradle_alias_closures(text: str, alias: str) -> list[tuple[str, int]]:
-    receivers: set[int] = {
-        match.end()
-        for match in re.finditer(rf"\b{re.escape(alias)}\b", text)
+def _gradle_alias_closures(
+    text: str,
+    alias: str,
+    *,
+    lexical_text: str | None = None,
+) -> list[tuple[str, int, bool]]:
+    if lexical_text is None:
+        lexical_text = _gradle_lexical_mask(text)
+    receivers: dict[int, bool] = {
+        match.end(): True
+        for match in re.finditer(rf"\b{re.escape(alias)}\b", lexical_text)
     }
-    for opening_match in re.finditer(r"\(", text):
+    for opening_match in re.finditer(r"\(", lexical_text):
         opening = opening_match.start()
-        closing = _balanced_parenthesis_end(text, opening)
+        closing = _balanced_parenthesis_end(
+            text, opening, lexical_text=lexical_text
+        )
         if closing is None:
             continue
-        compact = _GRADLE_GAP_TOKEN.sub("", text[opening + 1 : closing])
-        while (
-            compact.startswith("(")
-            and compact.endswith(")")
-            and _balanced_parenthesis_end(compact, 0) == len(compact) - 1
+        receiver_body = text[opening + 1 : closing]
+        if not re.search(
+            rf"\b{re.escape(alias)}\b",
+            lexical_text[opening + 1 : closing],
         ):
-            compact = compact[1:-1]
-        if compact != alias:
             continue
         line_start = text.rfind("\n", 0, opening) + 1
         prefix = _GRADLE_GAP_TOKEN.sub("", text[line_start:opening])
         if prefix and (prefix[-1].isalnum() or prefix[-1] in "_$.)]"):
             continue
-        receivers.add(closing + 1)
+        receivers[closing + 1] = _supported_gradle_alias_receiver(
+            receiver_body, alias
+        )
 
-    closures: set[tuple[str, int]] = set()
-    for receiver_end in receivers:
+    closures: set[tuple[str, int, bool]] = set()
+    for receiver_end, receiver_supported in receivers.items():
         suffix = _GRADLE_ALIAS_CLOSURE_SUFFIX.match(text, receiver_end)
         if suffix is not None:
-            closures.add((suffix.group("method"), suffix.start("opening")))
+            closures.add(
+                (
+                    suffix.group("method"),
+                    suffix.start("opening"),
+                    receiver_supported,
+                )
+            )
     return sorted(closures, key=lambda item: item[1])
 
 
-def _balanced_parenthesis_end(text: str, opening: int) -> int | None:
+def _supported_gradle_alias_receiver(receiver_body: str, alias: str) -> bool:
+    compact = _GRADLE_GAP_TOKEN.sub("", receiver_body)
+    while (
+        compact.startswith("(")
+        and compact.endswith(")")
+        and _balanced_parenthesis_end(compact, 0) == len(compact) - 1
+    ):
+        compact = compact[1:-1]
+    return compact == alias or bool(
+        re.fullmatch(rf"{re.escape(alias)}\.get\(\)", compact)
+    )
+
+
+def _balanced_parenthesis_end(
+    text: str,
+    opening: int,
+    *,
+    lexical_text: str | None = None,
+) -> int | None:
+    if lexical_text is None:
+        lexical_text = _gradle_lexical_mask(text)
+    if opening >= len(lexical_text) or lexical_text[opening] != "(":
+        return None
     depth = 0
-    for index in range(opening, len(text)):
-        character = text[index]
+    for index in range(opening, len(lexical_text)):
+        character = lexical_text[index]
         if character == "(":
             depth += 1
         elif character == ")":
@@ -691,6 +730,100 @@ def _balanced_parenthesis_end(text: str, opening: int) -> int | None:
             if depth == 0:
                 return index
     return None
+
+
+def _gradle_lexical_mask(text: str) -> str:
+    """Preserve structural offsets while masking Gradle comments and strings."""
+
+    masked = list(text)
+    index = 0
+    state = "code"
+    quote = ""
+    block_depth = 0
+    while index < len(text):
+        if state == "code":
+            if text.startswith("//", index):
+                masked[index : index + 2] = "  "
+                index += 2
+                state = "line_comment"
+                continue
+            if text.startswith("/*", index):
+                masked[index : index + 2] = "  "
+                index += 2
+                state = "block_comment"
+                block_depth = 1
+                continue
+            if text.startswith('"""', index) or text.startswith("'''", index):
+                quote = text[index : index + 3]
+                masked[index : index + 3] = "   "
+                index += 3
+                state = "triple_string"
+                continue
+            if text[index] in {'"', "'"}:
+                quote = text[index]
+                masked[index] = " "
+                index += 1
+                state = "string"
+                continue
+            index += 1
+            continue
+
+        if state == "line_comment":
+            if text[index] == "\n":
+                state = "code"
+            else:
+                masked[index] = " "
+            index += 1
+            continue
+
+        if state == "block_comment":
+            if text.startswith("/*", index):
+                masked[index : index + 2] = "  "
+                index += 2
+                block_depth += 1
+                continue
+            if text.startswith("*/", index):
+                masked[index : index + 2] = "  "
+                index += 2
+                block_depth -= 1
+                if block_depth == 0:
+                    state = "code"
+                continue
+            if text[index] != "\n":
+                masked[index] = " "
+            index += 1
+            continue
+
+        if state == "string":
+            if text[index] == "\\":
+                masked[index] = " "
+                if index + 1 < len(text):
+                    if text[index + 1] != "\n":
+                        masked[index + 1] = " "
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if text[index] == quote:
+                masked[index] = " "
+                index += 1
+                state = "code"
+                continue
+            if text[index] != "\n":
+                masked[index] = " "
+            index += 1
+            continue
+
+        if text.startswith(quote, index):
+            masked[index : index + 3] = "   "
+            index += 3
+            state = "code"
+            continue
+        if text[index] != "\n":
+            masked[index] = " "
+        index += 1
+
+    return "".join(masked)
 
 
 def _literal_gradle_test_paths(expression: str) -> list[str] | None:

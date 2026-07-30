@@ -920,6 +920,8 @@ def test_multiline_recognized_gradle_test_alias_closure_is_frozen(
         ("(testSources)", "apply"),
         ("((testSources))", "configure"),
         ("( /* receiver */ (testSources) )", "apply"),
+        ("( /* ) */ testSources )", "configure"),
+        ("(testSources.get())", "apply"),
     ],
 )
 def test_parenthesized_gradle_test_alias_closure_is_frozen(
@@ -967,6 +969,34 @@ def test_parenthesized_unrecognized_gradle_test_alias_closure_fails_closed(
     )
     _git(root, "add", ".")
     _git(root, "commit", "-m", "add unsupported parenthesized test alias closure")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
+@pytest.mark.parametrize(
+    "receiver",
+    [
+        '(run { ")" ; testSources })',
+        "(testSources.map { it })",
+    ],
+)
+def test_ambiguous_parenthesized_gradle_test_alias_closure_fails_closed(
+    tmp_path: Path,
+    receiver: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle.kts").write_text(
+        (
+            'val testSources = sourceSets.named("test")\n'
+            f"{receiver}.apply {{\n"
+            '    java.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add ambiguous parenthesized test alias closure")
 
     with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
         tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
