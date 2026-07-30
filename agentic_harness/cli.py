@@ -35,6 +35,7 @@ from agentic_harness.core.factory import (
 from agentic_harness.core.local_goal_bridge import (
     CommandResult,
     DOC_ROOT_ENV,
+    EXECUTION_PROFILES,
     LocalGoalBridge,
     Mode3AGoalOptions,
     format_command_result,
@@ -125,6 +126,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="Independent command to run before accepting done; repeat for multiple checks.",
     )
     easy_do.add_argument("--json", action="store_true", help="Print final goal JSON.")
+    external_do = sub.add_parser(
+        "external-do",
+        help="Start a free-form goal through the optional managed external backend",
+    )
+    external_do.add_argument("objective")
+    external_do.add_argument(
+        "--mode",
+        default="local",
+        help="External mode: local, guided, cloud, or experimental. Default: local.",
+    )
+    external_do.add_argument("--safe-area", action="append", default=[])
+    external_do.add_argument(
+        "--check",
+        "--verify",
+        dest="check",
+        action="append",
+        default=[],
+        metavar="COMMAND",
+        help="Verification command to carry with the goal; repeat for multiple checks.",
+    )
+    external_do.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    external_do.add_argument(
+        "--execution-profile",
+        choices=sorted(EXECUTION_PROFILES),
+        default="automatic",
+        help="Optional managed model profile; default lets the backend choose safely.",
+    )
+    external_do.add_argument(
+        "--supervision",
+        choices=("none", "glm-5.2"),
+        default="none",
+        help="Optional advisory reviewer for a local Mode 1 goal.",
+    )
+    external_do.add_argument(
+        "--monitor",
+        action="store_true",
+        help="Run one external monitor pass after a successful start.",
+    )
+    external_do.add_argument("--json", action="store_true", help="Print a safe JSON receipt.")
     work = sub.add_parser("work", help="Interactive no-jargon mode picker")
     work.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
     gui = sub.add_parser("gui", help="Open the local browser app")
@@ -181,6 +221,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mode3a_monitor.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
     mode3a_monitor.add_argument("--json", action="store_true")
+    external_status = sub.add_parser(
+        "external-status",
+        help="Show status from the optional managed external backend",
+    )
+    external_status.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    external_status.add_argument("--json", action="store_true")
+    external_watch = sub.add_parser(
+        "external-watch",
+        help="Run one monitor pass on the optional managed external backend",
+    )
+    external_watch.add_argument("--doc-root", default=None, help=DOC_ROOT_HELP)
+    external_watch.add_argument("--json", action="store_true")
     sub.add_parser("agents", help="Show supported backend tools found on PATH")
     create_demo_cmd = sub.add_parser("create-demo", help="Create a runnable example project")
     create_demo_cmd.add_argument("demo", choices=demo_names())
@@ -407,6 +459,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_server_from_args(args)
     if args.command == "do":
         return run_easy_do_command(args, project_dir)
+    if args.command == "external-do":
+        return run_external_goal_command(args)
     if args.command == "check":
         return run_easy_check_command(args, project_dir)
     if args.command == "watch":
@@ -417,6 +471,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_mode3a_status(args)
     if args.command == "mode3a-monitor":
         return run_mode3a_monitor(args)
+    if args.command == "external-status":
+        return run_external_status_command(args)
+    if args.command == "external-watch":
+        return run_external_watch_command(args)
     if args.command == "create-demo":
         try:
             demo_path = create_demo(args.demo, args.path, force=args.force)
@@ -1087,6 +1145,104 @@ def run_mode3a_status(args: argparse.Namespace) -> int:
 
 
 def run_mode3a_monitor(args: argparse.Namespace) -> int:
+    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
+    if not bridge.available():
+        print(f"local-goal backend not found or not executable: {bridge.local_goal}")
+        print(f"Next: {local_goal_setup_hint()}")
+        return 2
+    result = bridge.monitor(json_output=args.json)
+    print(format_command_result(result))
+    return result.returncode
+
+
+def _safe_external_payload(mode_key: str, result: CommandResult) -> dict[str, object]:
+    return {
+        "ok": result.returncode == 0,
+        "mode": mode_key,
+        "returncode": result.returncode,
+        "output": format_command_result(result),
+    }
+
+
+def run_external_goal_command(args: argparse.Namespace) -> int:
+    objective = args.objective.strip()
+    if not objective:
+        print("No goal entered. Nothing started.")
+        return 2
+
+    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
+    if not bridge.available():
+        payload = {
+            "ok": False,
+            "error": "local-goal backend not found or not executable",
+            "path": str(bridge.local_goal),
+            "next": local_goal_setup_hint(),
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(payload["error"])
+            print(f"Expected: {payload['path']}")
+            print(f"Next: {payload['next']}")
+        return 2
+
+    try:
+        mode = human_mode_by_key(args.mode)
+        result = bridge.start_human_goal(
+            mode_key=mode.key,
+            objective=objective,
+            safe_areas=tuple(args.safe_area),
+            checks=tuple(args.check),
+            execution_profile=args.execution_profile,
+            supervision=args.supervision,
+        )
+    except ValueError as exc:
+        payload = {"ok": False, "error": str(exc)}
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"Could not start external goal: {exc}")
+        return 2
+
+    monitor_result: CommandResult | None = None
+    if args.monitor and result.returncode == 0:
+        monitor_result = bridge.monitor(json_output=args.json)
+
+    if args.json:
+        payload = _safe_external_payload(mode.key, result)
+        if monitor_result is not None:
+            payload["monitor"] = _safe_external_payload(mode.key, monitor_result)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        if result.returncode == 0:
+            print("Started external goal.")
+            print(f"Mode: {mode.key} — {mode.title}")
+            print(_friendly_queue_summary(result.stdout))
+            print("Check it: agentic-harness external-status")
+            print("Move it forward: agentic-harness external-watch")
+            if monitor_result is not None:
+                print(format_command_result(monitor_result))
+        else:
+            print("The managed external backend did not start the goal.")
+            print(format_command_result(result))
+
+    if monitor_result is not None:
+        return monitor_result.returncode
+    return result.returncode
+
+
+def run_external_status_command(args: argparse.Namespace) -> int:
+    bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
+    if not bridge.available():
+        print(f"local-goal backend not found or not executable: {bridge.local_goal}")
+        print(f"Next: {local_goal_setup_hint()}")
+        return 2
+    result = bridge.status(json_output=args.json)
+    print(format_command_result(result))
+    return result.returncode
+
+
+def run_external_watch_command(args: argparse.Namespace) -> int:
     bridge = LocalGoalBridge(doc_root=resolve_doc_root(args.doc_root))
     if not bridge.available():
         print(f"local-goal backend not found or not executable: {bridge.local_goal}")
