@@ -94,6 +94,15 @@ agentic-harness check
 agentic-harness report
 ```
 
+To use a free-form managed workflow (kept separate from the verified `do` path):
+
+```bash
+cd /path/to/your/project
+agentic-harness external-do "prepare release notes" --mode cloud
+agentic-harness external-status
+agentic-harness external-watch
+```
+
 `--check` is the independent completion gate. A worker saying “done” cannot
 replace it. The durable report is written to
 `.agentic-harness/runs/{goal-id}/report.md`.
