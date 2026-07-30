@@ -857,6 +857,29 @@ def test_unrecognized_gradle_test_alias_closure_fails_closed(tmp_path: Path) -> 
         tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
 
 
+def test_sourceSets_named_with_convention_fails_closed(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "verification").mkdir()
+    (root / "build.gradle.kts").write_text(
+        (
+            'plugins { java }\n'
+            'sourceSets.named("test").withConvention {\n'
+            '    java.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    (root / "verification" / "BoundaryTest.java").write_text(
+        "class BoundaryTest {}\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add unsupported direct sourceSets closure")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
 @pytest.mark.parametrize(
     "alias_expression",
     [

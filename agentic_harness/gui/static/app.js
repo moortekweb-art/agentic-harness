@@ -1166,11 +1166,19 @@ function renderRecovery() {
   const task = state.liveTask || state.currentTask || {};
   const blockingForegroundReview = isBlockingForegroundReview(task);
   const visibleState = blockingForegroundReview ? "needs_review" : readinessState;
+  const setupStates = [
+    "setup_required",
+    "credential_required",
+    "verification_required",
+    "connection_test_required",
+  ];
+  const needsSetup = setupStates.includes(readinessState);
   const canContinue = hasAction(task, "continue");
   const canStop = hasAction(task, "stop");
   const hasTask = Boolean(task?.id);
   const show = blockingForegroundReview || state.readiness?.can_start === false
-    && ["needs_review", "needs_attention", "blocked", "configuration_error"].includes(readinessState);
+    && ["needs_review", "needs_attention", "blocked", "configuration_error", ...setupStates].includes(readinessState);
+  const canOpenSettings = needsSetup || readinessState === "configuration_error";
 
   els.recoveryCard.hidden = !show;
   if (!show) {
@@ -1186,6 +1194,8 @@ function renderRecovery() {
     ? guide.title || "Your result is ready"
     : visibleState === "configuration_error"
       ? "Configuration needs repair"
+      : needsSetup
+        ? "Setup needed before continuing"
       : "Current task needs attention";
   els.recoverySummary.textContent = visibleState === "needs_review"
     ? guide.explanation || "The assistant finished and stopped safely for your review."
@@ -1200,21 +1210,42 @@ function renderRecovery() {
     : "Stop task";
   els.recoveryOpenTaskButton.textContent = visibleState === "needs_review"
     ? "Review result"
-    : "Open current task";
+    : canOpenSettings
+      ? "Open settings"
+      : "Open current task";
   els.recoveryContinueButton.hidden = !hasTask || !canContinue;
   els.recoveryStopButton.hidden = !hasTask || !canStop;
-  els.recoveryOpenTaskButton.hidden = !hasTask;
+  els.recoveryOpenTaskButton.hidden = !hasTask && !canOpenSettings;
   els.recoveryStatus.textContent = hasTask
     ? canContinue || canStop
       ? "Use a button here, or open the task to review its details and result."
-      : "Open the current task to see the exact blocker and available decision."
-    : "Refresh once. If this remains blocked, the installation owner must repair the configuration.";
+      : canOpenSettings
+        ? "Open Settings to resolve this setup step, then return to this screen."
+        : "Open the current task to see the exact blocker and available decision."
+    : canOpenSettings
+      ? "Open Settings, complete this setup step, then come back."
+      : "Refresh once. If this remains blocked, the installation owner must repair the configuration.";
 }
 
 function openCurrentTaskFromRecovery() {
+  const readinessState = String(state.readiness?.state || "");
+  if (
+    [
+      "setup_required",
+      "credential_required",
+      "verification_required",
+      "connection_test_required",
+      "configuration_error",
+    ].includes(readinessState)
+  ) {
+    showView("settings", { focus: true });
+    return;
+  }
   if (state.liveTask) {
     state.viewingHistoryId = "";
     renderTask(state.liveTask);
+    showView("tasks", { focus: true });
+    return;
   }
   showView("tasks", { focus: true });
 }
@@ -2022,9 +2053,11 @@ function updateDemoCallout(task = null) {
   }
   els.demoButton.disabled = state.busy || active;
   els.setupDemoButton.disabled = state.busy || active;
-  els.demoSetupButton.hidden = managedOverlay ? !isDemo || active : false;
+  els.demoSetupButton.hidden = active;
   els.demoSetupButton.textContent = managedOverlay
-    ? "Return to real workspace"
+    ? isDemo
+      ? "Return to real workspace"
+      : "Open settings"
     : "Connect real work";
   els.setupDemoButton.textContent = verified
     ? "Run safe demo again"
