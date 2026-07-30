@@ -479,7 +479,6 @@ _GRADLE_POTENTIAL_CLOSURE = re.compile(
     rf"{_GRADLE_GAP}(?:\([^{{}};]*\){_GRADLE_GAP})?"
     r"(?P<opening>\{)"
 )
-_GRADLE_ALIAS_LOOKAHEAD_LIMIT = 4096
 _QUOTED_PATH = re.compile(r"""(?P<quote>['"])(?P<path>[^'"]+)(?P=quote)""")
 
 
@@ -688,14 +687,9 @@ def _gradle_unrecognized_alias_closure_openings(
         if alias_match.start() == declaration_name_start:
             continue
         search_start = alias_match.end()
-        search_end = min(
-            len(text),
-            search_start + _GRADLE_ALIAS_LOOKAHEAD_LIMIT,
-        )
         for suffix in _GRADLE_POTENTIAL_CLOSURE.finditer(
             text,
             search_start,
-            search_end,
         ):
             opening = suffix.start("opening")
             if opening not in recognized_openings:
