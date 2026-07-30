@@ -1002,6 +1002,63 @@ def test_ambiguous_parenthesized_gradle_test_alias_closure_fails_closed(
         tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
 
 
+@pytest.mark.parametrize(
+    "receiver",
+    [
+        "([/)/, testSources][1])",
+        "([$/)/$, testSources][1])",
+        "([testSources, /)/][0])",
+    ],
+)
+def test_slashy_gradle_test_alias_closure_fails_closed(
+    tmp_path: Path,
+    receiver: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle").write_text(
+        (
+            'def testSources = sourceSets.named("test")\n'
+            f"{receiver}.configure {{\n"
+            '    java.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add slashy test alias closure")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
+def test_gradle_division_does_not_block_recognized_test_alias_closure(
+    tmp_path: Path,
+) -> None:
+    root, _ = _project(tmp_path)
+    custom_test = root / "verification" / "BoundaryTest.java"
+    custom_test.parent.mkdir()
+    custom_test.write_text("class BoundaryTest {}\n", encoding="utf-8")
+    (root / "build.gradle").write_text(
+        (
+            "def ratio = 4 / 2\n"
+            'def testSources = sourceSets.named("test")\n'
+            "(testSources).configure {\n"
+            '    java.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add divided recognized test alias closure")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+    custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
+
+    assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(
+        root, assets
+    )
+
+
 def test_dynamic_gradle_test_root_requires_explicit_assets(tmp_path: Path) -> None:
     root, _ = _project(tmp_path)
     (root / "build.gradle").write_text(

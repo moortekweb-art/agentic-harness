@@ -473,6 +473,13 @@ _GRADLE_ALIAS_CLOSURE_SUFFIX = re.compile(
     rf"{_GRADLE_GAP}(?:\([^{{}};]*\){_GRADLE_GAP})?"
     r"(?P<opening>\{)"
 )
+_GRADLE_POTENTIAL_CLOSURE = re.compile(
+    rf"\.{_GRADLE_GAP}"
+    r"[A-Za-z_][A-Za-z0-9_]*"
+    rf"{_GRADLE_GAP}(?:\([^{{}};]*\){_GRADLE_GAP})?"
+    r"(?P<opening>\{)"
+)
+_GRADLE_ALIAS_LOOKAHEAD_LIMIT = 4096
 _QUOTED_PATH = re.compile(r"""(?P<quote>['"])(?P<path>[^'"]+)(?P=quote)""")
 
 
@@ -601,9 +608,13 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
             )
             for direct_match in direct_alias.finditer(text):
                 expressions.append(direct_match.group("expression"))
-            for method, opening, receiver_supported in _gradle_alias_closures(
+            alias_closures = _gradle_alias_closures(
                 text, alias_name, lexical_text=lexical_text
-            ):
+            )
+            recognized_openings = {
+                opening for _, opening, _ in alias_closures
+            }
+            for method, opening, receiver_supported in alias_closures:
                 block = _balanced_brace_body(text, opening)
                 source_matches = list(_GRADLE_SOURCE_ROOT_CALL.finditer(block))
                 if receiver_supported and method in {"configure", "apply"}:
@@ -616,6 +627,17 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
                         != len(source_matches)
                     )
                 elif _GRADLE_SOURCE_ROOT_NAME.search(block):
+                    unresolved_source_root = True
+            for opening in _gradle_unrecognized_alias_closure_openings(
+                text,
+                alias_name,
+                lexical_text=lexical_text,
+                recognized_openings=recognized_openings,
+                declaration_name_start=alias_match.start("name"),
+            ):
+                if _GRADLE_SOURCE_ROOT_NAME.search(
+                    _balanced_brace_body(text, opening)
+                ):
                     unresolved_source_root = True
             for line in text.splitlines():
                 if not re.search(rf"\b{alias}\b", line):
@@ -648,6 +670,37 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
                     )
                 )
     return configured
+
+
+def _gradle_unrecognized_alias_closure_openings(
+    text: str,
+    alias: str,
+    *,
+    lexical_text: str,
+    recognized_openings: set[int],
+    declaration_name_start: int,
+) -> set[int]:
+    openings: set[int] = set()
+    for alias_match in re.finditer(
+        rf"\b{re.escape(alias)}\b",
+        lexical_text,
+    ):
+        if alias_match.start() == declaration_name_start:
+            continue
+        search_start = alias_match.end()
+        search_end = min(
+            len(text),
+            search_start + _GRADLE_ALIAS_LOOKAHEAD_LIMIT,
+        )
+        for suffix in _GRADLE_POTENTIAL_CLOSURE.finditer(
+            text,
+            search_start,
+            search_end,
+        ):
+            opening = suffix.start("opening")
+            if opening not in recognized_openings:
+                openings.add(opening)
+    return openings
 
 
 def _gradle_alias_closures(
