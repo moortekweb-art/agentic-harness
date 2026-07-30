@@ -131,6 +131,7 @@ def sensitive_json_key(key: str) -> bool:
         for marker in (
             "accesskey",
             "apikey",
+            "githubpat",
             "clientsecret",
             "privatekey",
             "refreshtoken",
