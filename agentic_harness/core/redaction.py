@@ -126,12 +126,13 @@ def sensitive_json_key(key: str) -> bool:
         for index in range(len(piece_sequence) - len(phrase) + 1)
     ):
         return True
+    if "githubpat" in semantic_compact and not semantic_compact.endswith("githubpattern"):
+        return True
     return any(
         marker in semantic_compact
         for marker in (
             "accesskey",
             "apikey",
-            "githubpat",
             "clientsecret",
             "privatekey",
             "refreshtoken",
@@ -142,7 +143,6 @@ def sensitive_json_key(key: str) -> bool:
             "bearer",
             "credential",
             "credentials",
-            "githubpat",
             "password",
             "passwd",
             "pwd",
