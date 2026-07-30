@@ -697,6 +697,15 @@ def test_supported_ecosystem_verifier_assets_are_frozen(
                 "}\n"
             ),
         ),
+        (
+            ["gradle", "test"],
+            "build.gradle.kts",
+            (
+                'sourceSets.named<SourceSet>("test").configure {\n'
+                '    java.srcDir("verification")\n'
+                "}\n"
+            ),
+        ),
     ],
 )
 def test_custom_jvm_test_roots_are_frozen(

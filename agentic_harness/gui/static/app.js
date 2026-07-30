@@ -1163,7 +1163,7 @@ function isBlockingForegroundReview(task) {
 
 function renderRecovery() {
   const readinessState = String(state.readiness?.state || "");
-  const task = state.currentTask || state.liveTask || {};
+  const task = state.liveTask || state.currentTask || {};
   const blockingForegroundReview = isBlockingForegroundReview(task);
   const visibleState = blockingForegroundReview ? "needs_review" : readinessState;
   const canContinue = hasAction(task, "continue");
@@ -1212,17 +1212,21 @@ function renderRecovery() {
 }
 
 function openCurrentTaskFromRecovery() {
+  if (state.liveTask) {
+    state.viewingHistoryId = "";
+    renderTask(state.liveTask);
+  }
   showView("tasks", { focus: true });
 }
 
 function continueFromRecovery() {
-  const task = state.currentTask || state.liveTask || {};
+  const task = state.liveTask || state.currentTask || {};
   if (!task.id || !hasAction(task, "continue")) return;
   els.continueDialog.showModal();
 }
 
 function stopFromRecovery() {
-  const task = state.currentTask || state.liveTask || {};
+  const task = state.liveTask || state.currentTask || {};
   if (!task.id || !hasAction(task, "stop")) return;
   if (window.confirm("Stop this task now? Its progress and evidence will be kept.")) {
     postAction("/api/tasks/current/stop");

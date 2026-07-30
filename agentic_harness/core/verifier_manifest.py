@@ -413,7 +413,7 @@ _GRADLE_TEST_BLOCK = re.compile(
     (?:
         \btest
         |
-        \b(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)
+        \b(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)(?:\.\s*configure)?
     )
     (?:\s*\.\s*get\s*\(\s*\))?
     (?:\s*\.\s*(?:configure|apply))?
