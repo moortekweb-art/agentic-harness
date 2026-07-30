@@ -111,6 +111,32 @@ def _started_run_dir(result: CommandResult) -> str:
     return ""
 
 
+def _goal_with_request_binding(
+    goal: str,
+    request_binding: dict[str, str] | None,
+) -> str:
+    """Carry the GUI request identity inside every managed dispatch ticket."""
+
+    if not request_binding:
+        return goal
+    binding_json = json.dumps(
+        request_binding,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return (
+        f"{goal}\n\n"
+        "Agentic Harness managed start binding "
+        f"(agentic_harness_start_request.v1):\n{binding_json}"
+    )
+
+
+def _managed_request_title(request_id: str) -> str:
+    """Keep controller slugs stable while the full binding remains in the goal."""
+
+    return f"Agentic Harness GUI request {request_id[:24]}"
+
+
 @dataclass
 class LocalGoalBridge:
     doc_root: str | Path | None = None
@@ -194,6 +220,7 @@ class LocalGoalBridge:
         capabilities: CommandResult | None = None,
         adapter_matrix: CommandResult | None = None,
         harness_modes: CommandResult | None = None,
+        request_binding: dict[str, str] | None = None,
     ) -> CommandResult:
         capabilities = capabilities or self.capabilities()
         harness_modes = harness_modes or self.harness_modes()
@@ -231,6 +258,7 @@ class LocalGoalBridge:
                 executor="turnstone",
                 contract=EXTERNAL_CANDIDATE_CONTRACT,
                 route_id=TURNSTONE_GLM_LOCAL_BUILD_ROUTE_ID,
+                request_binding=request_binding,
             )
         if not managed_registry and not legacy_contract:
             return CommandResult(
@@ -261,6 +289,7 @@ class LocalGoalBridge:
             executor="opencode",
             contract=EXTERNAL_CANDIDATE_CONTRACT if legacy_contract else "",
             route_id=CLOUD_GLM_BUILD_ROUTE_ID,
+            request_binding=request_binding,
         )
 
     def enqueue_mode4_audit(
@@ -270,6 +299,7 @@ class LocalGoalBridge:
         capabilities: CommandResult | None = None,
         adapter_matrix: CommandResult | None = None,
         harness_modes: CommandResult | None = None,
+        request_binding: dict[str, str] | None = None,
     ) -> CommandResult:
         """Dispatch the direct GLM audit worker through its audit-only contract."""
         capabilities = capabilities or self.capabilities()
@@ -311,6 +341,7 @@ class LocalGoalBridge:
             executor="opencode",
             contract=EXTERNAL_AUDIT_CONTRACT,
             route_id=GLM_READONLY_AUDIT_ROUTE_ID,
+            request_binding=request_binding,
         )
 
     def start_human_goal(
@@ -323,6 +354,7 @@ class LocalGoalBridge:
         execution_profile: str = "automatic",
         route_id: str = "",
         supervision: str = "none",
+        request_binding: dict[str, str] | None = None,
     ) -> CommandResult:
         with self._start_lock:
             return self._start_human_goal_locked(
@@ -333,6 +365,7 @@ class LocalGoalBridge:
                 execution_profile=execution_profile,
                 route_id=route_id,
                 supervision=supervision,
+                request_binding=request_binding,
             )
 
     def _start_human_goal_locked(
@@ -345,6 +378,7 @@ class LocalGoalBridge:
         execution_profile: str = "automatic",
         route_id: str = "",
         supervision: str = "none",
+        request_binding: dict[str, str] | None = None,
     ) -> CommandResult:
         route = managed_route_key(mode_key)
         expected_route_id = canonical_route_id(route, turnstone=_is_turnstone_executable(self))
@@ -464,12 +498,14 @@ class LocalGoalBridge:
                 verification=checks,
                 safe_areas=safe_areas,
                 route_id=route_id,
+                request_binding=request_binding,
             )
         elif route == "legacy-guided":
             result = self.start_guided_goal(
                 objective,
                 planner=routing["planner"],
                 executor=routing["executor"],
+                request_binding=request_binding,
             )
         elif route == "legacy-cloud":
             legacy_contract = _supports_candidate_contract(
@@ -493,6 +529,7 @@ class LocalGoalBridge:
                         verification=checks,
                     ),
                     capabilities=capabilities,
+                    request_binding=request_binding,
                 )
             else:
                 result = self.enqueue_cloud_goal(
@@ -513,6 +550,7 @@ class LocalGoalBridge:
                     ),
                     executor=routing["executor"],
                     contract=EXTERNAL_CANDIDATE_CONTRACT if legacy_contract else "",
+                    request_binding=request_binding,
                 )
         elif route == "mode3a":
             adapter_matrix = self.adapter_matrix()
@@ -526,6 +564,7 @@ class LocalGoalBridge:
                 capabilities=capabilities,
                 adapter_matrix=adapter_matrix,
                 harness_modes=harness_modes,
+                request_binding=request_binding,
             )
         elif route == "mode4":
             adapter_matrix = self.adapter_matrix()
@@ -539,6 +578,7 @@ class LocalGoalBridge:
                 capabilities=capabilities,
                 adapter_matrix=adapter_matrix,
                 harness_modes=harness_modes,
+                request_binding=request_binding,
             )
         else:
             raise ValueError(f"unsupported managed route {route}")
@@ -604,11 +644,31 @@ class LocalGoalBridge:
             result = _with_metadata(result, glm_supervision=supervisor_receipt)
 
         if result.returncode == 0 and execution_profile == "ornith-text":
-            attachment_args = ["model-profile-attach"]
             started_run_dir = _started_run_dir(result)
-            if started_run_dir:
-                attachment_args.extend(["--run-dir", started_run_dir])
-            attachment_args.append("--json")
+            if not started_run_dir:
+                self.invalidate_status_caches()
+                return CommandResult(
+                    result.args,
+                    result.returncode,
+                    result.stdout,
+                    result.stderr,
+                    {
+                        "profile_attachment": "reconciliation_required",
+                        "execution_profile": execution_profile,
+                        "run_dir": "",
+                        "summary": (
+                            "The goal started on Ornith without a durable run identity, so "
+                            "the harness did not attach the model lease. Reconcile the active "
+                            "run before the temporary model window can restore safely."
+                        ),
+                    },
+                )
+            attachment_args = [
+                "model-profile-attach",
+                "--run-dir",
+                started_run_dir,
+                "--json",
+            ]
             attachment = self.run(attachment_args)
             observed = self.model_profile_status()
             if _model_profile_attachment_matches(observed, started_run_dir):
@@ -729,17 +789,20 @@ class LocalGoalBridge:
         verification: tuple[str, ...] = (),
         safe_areas: tuple[str, ...] = (),
         route_id: str = LOCAL_BUILD_ROUTE_ID,
+        request_binding: dict[str, str] | None = None,
     ) -> CommandResult:
+        request_id = str((request_binding or {}).get("request_id") or "")
+        dispatched_goal = _goal_with_request_binding(goal, request_binding)
         args = [
             "quick-start",
             "--route-id",
             route_id,
             "--title",
-            goal,
+            _managed_request_title(request_id) if request_id else goal,
             "--executor",
             _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", executor),
             "--goal",
-            goal,
+            dispatched_goal,
         ]
         if safe_areas:
             for area in safe_areas:
@@ -759,17 +822,22 @@ class LocalGoalBridge:
         *,
         planner: str = "gpt-5.5",
         executor: str = "opencode",
+        request_binding: dict[str, str] | None = None,
     ) -> CommandResult:
+        request_id = str((request_binding or {}).get("request_id") or "")
+        dispatched_goal = _goal_with_request_binding(goal, request_binding)
+        args = [
+            "premium-start",
+            "--planner",
+            _external_setting("AGENTIC_HARNESS_EXTERNAL_PLANNER", planner),
+            "--executor",
+            _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", executor),
+        ]
+        if request_id:
+            args.extend(["--title", _managed_request_title(request_id)])
+        args.extend(["--goal", dispatched_goal])
         return self.run(
-            [
-                "premium-start",
-                "--planner",
-                _external_setting("AGENTIC_HARNESS_EXTERNAL_PLANNER", planner),
-                "--executor",
-                _external_setting("AGENTIC_HARNESS_EXTERNAL_EXECUTOR", executor),
-                "--goal",
-                goal,
-            ]
+            args
         )
 
     def capabilities(self) -> CommandResult:
@@ -806,6 +874,7 @@ class LocalGoalBridge:
         executor: str = "opencode",
         contract: str = "",
         route_id: str = "",
+        request_binding: dict[str, str] | None = None,
     ) -> CommandResult:
         args = ["enqueue"]
         if route_id:
@@ -821,7 +890,7 @@ class LocalGoalBridge:
                 "--executor-worker",
                 worker,
                 "--goal",
-                goal,
+                _goal_with_request_binding(goal, request_binding),
             ]
         )
         return self.run(args)
@@ -1221,7 +1290,7 @@ def _model_profile_attachment_matches(
         return False
     expected = expected_run_dir.strip().rstrip("/")
     if not expected:
-        return True
+        return False
     window = _json_object(result).get("window")
     if not isinstance(window, dict):
         return False
@@ -1231,11 +1300,8 @@ def _model_profile_attachment_matches(
         if isinstance(value, str) and value.strip():
             observed = value.strip().rstrip("/")
             break
-    # Older compatible profile managers advertise only the attached boolean.
-    # Keep that contract usable, but never accept a contradictory identity when
-    # the backend supplies one.
     if not observed:
-        return True
+        return False
     return observed == expected or (
         "/" not in observed and observed == expected.rsplit("/", 1)[-1]
     )

@@ -21,9 +21,11 @@ from urllib.parse import quote
 import pytest
 
 from agentic_harness.core.local_goal_bridge import CommandResult, LocalGoalBridge
+from agentic_harness.core.redaction import redact_json_value, sensitive_json_key
 from agentic_harness.gui import server as gui_server_module
 from agentic_harness.gui.api import (
     _managed_route_receipt,
+    command_task,
     health_payload,
     modes_payload,
     start_task,
@@ -36,6 +38,7 @@ from agentic_harness.gui.server import (
     create_gui_server,
     make_handler,
 )
+from agentic_harness.gui.preview_security import sensitive_preview_path
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
 
 
@@ -915,6 +918,29 @@ def test_pre_execution_ticket_rejection_is_a_permanent_actionable_block() -> Non
     )
 
 
+def test_invalid_verifier_rejection_says_task_never_started() -> None:
+    result = CommandResult(
+        args=("local-goal", "quick-start"),
+        returncode=1,
+        stdout=(
+            "transfer: frozen verification contract is invalid; not starting worker\n"
+            "verification_contract_error: all effective verifiers are invalid\n"
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="starting")
+
+    assert task["status"] == "blocked"
+    assert task["needs_human"] is True
+    assert task["advanced_details"]["permanent_error"] is True
+    assert task["summary"] == (
+        "Your task did not start because its completion check was not safe to run. "
+        "Your request is still saved; choose Automatic completion checks or enter a direct "
+        "test command without shell expansion, then try again."
+    )
+
+
 def test_managed_working_task_exposes_live_iteration_without_fake_percent() -> None:
     run_dir = "/tmp/reports/runs/20260713T075645Z-audit-docs"
     result = CommandResult(
@@ -1105,7 +1131,66 @@ def test_working_task_is_owned_by_background_supervisor_not_startable() -> None:
     assert "Background supervisor" in task["readiness_gate"]["next_action"]
 
 
-def test_start_task_uses_bridge_human_goal() -> None:
+def test_active_managed_queue_is_working_even_before_run_directory_exists() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "idle",
+                "active_goal": None,
+                "queue": {"queued": 0, "running": 1},
+                "capabilities": {
+                    "current_state": {
+                        "classification": "working",
+                        "local_goal_lane_free": False,
+                        "queue_has_active_work": True,
+                    }
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="ready")
+
+    assert task["status"] == "working"
+    assert task["readiness_gate"]["can_start"] is False
+
+
+def test_stale_active_queue_does_not_override_authoritative_free_lane() -> None:
+    result = CommandResult(
+        args=("local-goal", "status", "--json"),
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "classification": "idle",
+                "active_goal": {
+                    "accepted": False,
+                    "run_dir": None,
+                    "tmux_running": False,
+                },
+                "queue": {"queued": 0, "running": 1},
+                "capabilities": {
+                    "current_state": {
+                        "classification": "idle",
+                        "local_goal_lane_free": True,
+                        "queue_has_active_work": True,
+                    }
+                },
+            }
+        ),
+        stderr="",
+    )
+
+    task = task_from_command_result(result, fallback_status="ready")
+
+    assert task["status"] == "ready"
+    assert task["readiness_gate"]["can_start"] is True
+    assert task["summary"] == "No local goal is running. Ready for a new task."
+
+
+def test_start_task_uses_bridge_human_goal(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
     def fake_runner(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -1122,10 +1207,34 @@ def test_start_task_uses_bridge_human_goal() -> None:
                 ),
                 "",
             )
+        if "enqueue" in command:
+            goal = command[command.index("--goal") + 1]
+            queue_path = tmp_path / "queue.json"
+            queue_path.write_text(
+                json.dumps(
+                    {
+                        "contract": "local_node1_goal_queue.v1",
+                        "items": [
+                            {
+                                "id": "abc123",
+                                "queue_id": "abc123",
+                                "goal": goal,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                f"queued_id=abc123\nqueue_json={queue_path.resolve()}\n",
+                "",
+            )
         return subprocess.CompletedProcess(command, 0, "queued_id=abc123\n", "")
 
     bridge = LocalGoalBridge(
-        doc_root=Path("/tmp/docs"),
+        doc_root=tmp_path,
         local_goal=Path(sys.executable),
         runner=fake_runner,
     )
@@ -1286,6 +1395,191 @@ def test_status_compatibility_alias_matches_health_payload() -> None:
     assert status == health
     assert status["ok"] is True
     assert status["readiness"]["agent_loop"]["stage"] == "Act"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".dockercfg",
+        ".vault-token",
+        "application_default_credentials.json",
+        "client_secret.json",
+        "client_secret_desktop.json",
+        "google-credentials.json",
+        "service-account.json",
+        "oauth_token.json",
+        "auth_token.json",
+        "secrets.env",
+        "secrets.json",
+        "secrets.yaml",
+        "_netrc",
+        "credentials",
+    ],
+)
+def test_managed_and_embedded_previews_share_credential_denylist(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    assert sensitive_preview_path(tmp_path / name, tmp_path)
+
+
+def test_managed_preview_redacts_structured_secret_before_http_serialization(
+    tmp_path: Path,
+) -> None:
+    bridge, run_id = _managed_review_bridge(tmp_path)
+    root = Path(bridge.doc_root)  # type: ignore[attr-defined]
+    preview_name = "review-notes.json"
+    synthetic_secret = "synthetic-preview-token-Z7Q4M9"
+    refresh_marker = "synthetic-refresh-token-R4Q8M2"
+    private_key_marker = "SYNTHETICPRIVATEKEYBODYR4Q8M2"
+    (root / preview_name).write_text(
+        json.dumps(
+            {
+                "api_key": synthetic_secret,
+                "session_cookie": "synthetic-session-cookie-R4Q8M2",
+                "set-cookie": "synthetic-set-cookie-R4Q8M2",
+                "sessionToken": "synthetic-session-token-R4Q8M2",
+                "upstreamBearer": "synthetic-upstream-bearer-R4Q8M2",
+                "upstream_bearer": "synthetic-upstream-bearer-snake-R4Q8M2",
+                "repositoryGitHubPATValue": "synthetic-github-pat-value-R4Q8M2",
+                "tokenCount": 37,
+                "cookie_preferences": "keep-safe",
+                "refresh_token": refresh_marker,
+                "private_key": (
+                    "-----BEGIN PRIVATE KEY-----\n"
+                    f"{private_key_marker}\n"
+                    "-----END PRIVATE KEY-----"
+                ),
+                "nested": [{"client_secret": "nested-client-secret-R4Q8M2"}],
+                "finding": "safe",
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_dir = root / "reports" / "local-node1-goal-harness" / "runs" / run_id
+    (run_dir / "owned-files.txt").write_text(
+        f"SYSTEM_AUDIT_2026-07-22.md\n{preview_name}\n",
+        encoding="utf-8",
+    )
+
+    with gui_server(bridge) as base_url:  # type: ignore[arg-type]
+        preview = get_json(
+            base_url,
+            "/api/tasks/current/artifact"
+            f"?path={quote(preview_name)}&goal_id={quote(run_id)}",
+        )
+
+    assert synthetic_secret not in preview["content"]
+    assert "synthetic-session-cookie-R4Q8M2" not in preview["content"]
+    assert "synthetic-set-cookie-R4Q8M2" not in preview["content"]
+    assert "synthetic-session-token-R4Q8M2" not in preview["content"]
+    assert "synthetic-upstream-bearer-R4Q8M2" not in preview["content"]
+    assert "synthetic-upstream-bearer-snake-R4Q8M2" not in preview["content"]
+    assert "synthetic-github-pat-value-R4Q8M2" not in preview["content"]
+    assert '"tokenCount": 37' in preview["content"]
+    assert '"cookie_preferences": "keep-safe"' in preview["content"]
+    assert refresh_marker not in preview["content"]
+    assert private_key_marker not in preview["content"]
+    assert "nested-client-secret-R4Q8M2" not in preview["content"]
+    assert "<redacted>" in preview["content"]
+    assert '"finding": "safe"' in preview["content"]
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "authToken",
+        "sessionToken",
+        "upstreamBearer",
+        "upstream_bearer",
+        "IDToken",
+        "JWTToken",
+        "OIDCToken",
+        "SSOToken",
+        "MFASecret",
+        "TOTPSecret",
+        "APISecret",
+        "HTTPAuthorization",
+        "IDTOKEN",
+        "MFASECRET",
+        "HTTPAUTHORIZATION",
+        "upstreamGithubPat",
+        "repositoryGitHubPAT",
+        "backupGITHUBPAT",
+        "upstream_github_pat",
+        "upstream-github-pat",
+        "repositoryGitHubPATValue",
+        "github_pat_value",
+        "upstream-github-pat-value",
+        "repositoryGitHubPATRawValue",
+    ],
+)
+def test_structured_redaction_recognizes_compound_credential_keys(key: str) -> None:
+    marker = "opaque-compound-credential-Z7Q4M9"
+
+    assert sensitive_json_key(key)
+    assert redact_json_value({key: marker}) == {key: "<redacted>"}
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "inputTokens",
+        "maxTokens",
+        "outputTokens",
+        "tokenBudget",
+        "tokenCount",
+        "tokenLimit",
+        "tokenUsage",
+        "totalTokens",
+        "githubPattern",
+        "repositoryValue",
+    ],
+)
+def test_structured_redaction_preserves_benign_token_metadata(key: str) -> None:
+    assert not sensitive_json_key(key)
+    assert redact_json_value({key: 37}) == {key: 37}
+
+
+def test_gui_http_and_websocket_redact_compound_credential_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    markers = {
+        "authToken": "opaque-auth-token-Z7Q4M9",
+        "sessionToken": "opaque-session-token-Z7Q4M9",
+        "upstreamBearer": "opaque-upstream-bearer-Z7Q4M9",
+        "upstream_bearer": "opaque-upstream-bearer-snake-Z7Q4M9",
+        "upstreamGithubPat": "opaque-upstream-github-pat-Z7Q4M9",
+        "repositoryGitHubPAT": "opaque-repository-github-pat-Z7Q4M9",
+        "repositoryGitHubPATValue": "opaque-repository-github-pat-value-Z7Q4M9",
+    }
+    payload = {"status": "working", **markers, "tokenCount": 37}
+    monkeypatch.setattr(gui_server_module, "status_task", lambda _bridge: dict(payload))
+
+    with gui_server(FakeBridge()) as base_url:
+        current = get_json(base_url, "/api/tasks/current")
+        host, port = base_url.removeprefix("http://").split(":")
+        with socket.create_connection((host, int(port)), timeout=3) as client:
+            client.sendall(
+                (
+                    "GET /api/tasks/stream HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            response = client.recv(8192)
+            response += client.recv(8192)
+
+    assert current["tokenCount"] == 37
+    assert b"101 Switching Protocols" in response
+    assert b'"tokenCount": 37' in response
+    for key, marker in markers.items():
+        assert current[key] == "<redacted>"
+        assert marker.encode() not in response
 
 
 def test_gui_server_unknown_api_route_returns_json_404() -> None:
@@ -1886,11 +2180,50 @@ def test_gui_server_post_task_workflow_routes() -> None:
             "--goal",
             "GOAL_CONTENT",
         ],
-        ["monitor", "--auto-continue", "--auto-dispatch", "--auto-commit-owned", "--json"],
         ["continue", "--feedback", "keep going"],
+        ["review"],
         ["accept"],
         ["stop"],
     ]
+
+
+def test_accept_action_does_not_accept_after_failed_managed_review() -> None:
+    class FailedReviewBridge(FakeBridge):
+        def run(self, args: list[str]) -> CommandResult:
+            self.commands.append(args)
+            if args == ["review"]:
+                return CommandResult(
+                    tuple(args),
+                    1,
+                    "review_status=failed\ncheck=pytest failed\n",
+                    "",
+                )
+            return super().run(args)
+
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(
+                ("local-goal", "status", "--json"),
+                0,
+                json.dumps(
+                    {
+                        "classification": "needs_review",
+                        "active_goal": {
+                            "accepted": False,
+                            "awaiting_review": True,
+                            "objective": "repair failed review",
+                        },
+                    }
+                ),
+                "",
+            )
+
+    bridge = FailedReviewBridge()
+
+    task = command_task(bridge, "accept")
+
+    assert task["status"] == "needs_review"
+    assert ["accept"] not in bridge.commands
+    assert task["advanced_details"]["review_command"]["returncode"] == 1
 
 
 def test_gui_supervised_messages_are_revisioned_and_cumulative() -> None:

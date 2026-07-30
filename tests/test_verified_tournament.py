@@ -573,7 +573,6 @@ def test_candidate_cannot_replace_direct_verifier_executable(tmp_path: Path) -> 
             ["./gradlew", "test"],
             ["gradlew", "build.gradle", "settings.gradle", "gradle/wrapper/gradle-wrapper.properties"],
         ),
-        (["dotnet", "test"], ["project.sln", "src/project.csproj", "Directory.Build.props"]),
         (["bundle", "exec", "rspec"], ["Gemfile", "Gemfile.lock", ".rspec"]),
     ],
 )
@@ -586,7 +585,12 @@ def test_supported_ecosystem_verifier_assets_are_frozen(
     for relative in files:
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("frozen verifier input\n", encoding="utf-8")
+        content = (
+            "<project><modelVersion>4.0.0</modelVersion></project>\n"
+            if relative == "pom.xml"
+            else "frozen verifier input\n"
+        )
+        path.write_text(content, encoding="utf-8")
         if path.name in {"mvnw", "gradlew"}:
             path.chmod(0o755)
     _git(root, "add", ".")
@@ -602,6 +606,513 @@ def test_supported_ecosystem_verifier_assets_are_frozen(
         (root / relative).write_text("candidate weakened verifier input\n", encoding="utf-8")
     drift = tournament_module._verifier_asset_drift(root, assets)
     assert set(files) <= set(drift)
+
+
+@pytest.mark.parametrize(
+    ("command", "build_file", "build_text"),
+    [
+        (
+            ["mvn", "test"],
+            "pom.xml",
+            (
+                "<project><modelVersion>4.0.0</modelVersion><build>"
+                "<testSourceDirectory>verification</testSourceDirectory>"
+                "</build></project>"
+            ),
+        ),
+        (
+            ["mvn", "test"],
+            "pom.xml",
+            (
+                "<project><modelVersion>4.0.0</modelVersion><build><plugins><plugin>"
+                "<artifactId>build-helper-maven-plugin</artifactId><executions><execution>"
+                "<goals><goal>add-test-source</goal></goals><configuration><sources>"
+                "<source>verification</source></sources></configuration>"
+                "</execution></executions></plugin></plugins></build></project>"
+            ),
+        ),
+        (
+            ["gradle", "test"],
+            "build.gradle",
+            (
+                "plugins { id 'java' }\n"
+                "sourceSets { test { java.srcDirs = ['verification'] } }\n"
+            ),
+        ),
+        (
+            ["gradle", "test"],
+            "build.gradle.kts",
+            (
+                "plugins { java }\n"
+                'sourceSets { test { java.setSrcDirs(listOf("verification")) } }\n'
+            ),
+        ),
+        (
+            ["gradle", "test"],
+            "build.gradle.kts",
+            'sourceSets.test.java.srcDir("verification")\n',
+        ),
+        (
+            ["gradle", "test"],
+            "build.gradle.kts",
+            (
+                'sourceSets.named<SourceSet>("test") {\n'
+                '    java.srcDir("verification")\n'
+                "}\n"
+            ),
+        ),
+        (
+            ["gradle", "test"],
+            "build.gradle.kts",
+            (
+                'sourceSets.named("test").configure {\n'
+                '    java.srcDir("verification")\n'
+                "}\n"
+            ),
+        ),
+        (
+            ["gradle", "test"],
+            "build.gradle.kts",
+            (
+                'sourceSets.named("test").apply {\n'
+                '    resources.srcDir("verification")\n'
+                "}\n"
+            ),
+        ),
+        (
+            ["gradle", "test"],
+            "build.gradle.kts",
+            (
+                "sourceSets {\n"
+                '    test { kotlin.srcDir("verification") }\n'
+                "}\n"
+            ),
+        ),
+        (
+            ["gradle", "test"],
+            "build.gradle",
+            (
+                "sourceSets {\n"
+                "    test { java { srcDir('verification') } }\n"
+                "}\n"
+            ),
+        ),
+    ],
+)
+def test_custom_jvm_test_roots_are_frozen(
+    tmp_path: Path,
+    command: list[str],
+    build_file: str,
+    build_text: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    custom_test = root / "verification" / "BoundaryTest.java"
+    custom_test.parent.mkdir()
+    custom_test.write_text("class BoundaryTest {}\n", encoding="utf-8")
+    (root / build_file).write_text(build_text, encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add custom verifier root")
+
+    assets = tournament_module._freeze_verifier_assets(root, [command])
+    custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
+
+    assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(
+        root, assets
+    )
+
+
+def test_detached_gradle_test_source_alias_is_frozen(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    custom_test = root / "verification" / "BoundaryTest.java"
+    custom_test.parent.mkdir()
+    custom_test.write_text("class BoundaryTest {}\n", encoding="utf-8")
+    (root / "build.gradle.kts").write_text(
+        (
+            'val testSources = sourceSets["test"]\n'
+            'testSources.java.srcDir("verification")\n'
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add detached test source alias")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+    custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
+
+    assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(
+        root, assets
+    )
+
+
+def test_detached_gradle_test_source_alias_closure_is_frozen(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    custom_test = root / "verification" / "BoundaryTest.java"
+    custom_test.parent.mkdir()
+    custom_test.write_text("class BoundaryTest {}\n", encoding="utf-8")
+    (root / "build.gradle.kts").write_text(
+        (
+            'val testSources = sourceSets.named("test")\n'
+            "testSources.configure {\n"
+            '    kotlin.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add detached test source alias closure")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+    custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
+
+    assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(
+        root, assets
+    )
+
+
+@pytest.mark.parametrize(
+    ("build_file", "build_text"),
+    [
+        (
+            "build.gradle.kts",
+            (
+                "plugins { java }\n"
+                'val testSources: SourceSet = sourceSets["test"]\n'
+                'testSources.java.srcDir("verification")\n'
+            ),
+        ),
+        (
+            "build.gradle.kts",
+            (
+                "plugins { java }\n"
+                'val testSources = sourceSets.named<SourceSet>("test")\n'
+                "testSources.configure {\n"
+                '    java.srcDir("verification")\n'
+                "}\n"
+            ),
+        ),
+        (
+            "build.gradle.kts",
+            (
+                "plugins { java }\n"
+                'sourceSets.named("test").get().apply {\n'
+                '    java.srcDir("verification")\n'
+                "}\n"
+            ),
+        ),
+        (
+            "build.gradle",
+            (
+                "plugins { id 'java' }\n"
+                "SourceSet testSources = sourceSets.test\n"
+                "testSources.java.srcDir('verification')\n"
+            ),
+        ),
+    ],
+)
+def test_typed_gradle_test_source_aliases_are_frozen(
+    tmp_path: Path,
+    build_file: str,
+    build_text: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    custom_test = root / "verification" / "BoundaryTest.java"
+    custom_test.parent.mkdir()
+    custom_test.write_text("class BoundaryTest {}\n", encoding="utf-8")
+    (root / build_file).write_text(build_text, encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add typed test source alias")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+    custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
+
+    assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(
+        root, assets
+    )
+
+
+def test_unrecognized_gradle_test_alias_closure_fails_closed(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle.kts").write_text(
+        (
+            'val testSources = sourceSets["test"]\n'
+            "testSources.withConvention {\n"
+            '    java.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add unsupported test alias closure")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
+@pytest.mark.parametrize(
+    "alias_expression",
+    [
+        (
+            "testSources\n"
+            "    .also {\n"
+            '        it.java.srcDir("verification")\n'
+            "    }\n"
+        ),
+        (
+            "testSources\n"
+            "    /* keep the call chain readable */\n"
+            "    .withConvention(JavaPluginConvention::class) {\n"
+            '        java.srcDir("verification")\n'
+            "    }\n"
+        ),
+    ],
+)
+def test_multiline_unrecognized_gradle_test_alias_closure_fails_closed(
+    tmp_path: Path,
+    alias_expression: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle.kts").write_text(
+        'val testSources = sourceSets["test"]\n' + alias_expression,
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add multiline unsupported test alias closure")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
+@pytest.mark.parametrize("method", ["configure", "apply"])
+def test_multiline_recognized_gradle_test_alias_closure_is_frozen(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    custom_test = root / "verification" / "BoundaryTest.java"
+    custom_test.parent.mkdir()
+    custom_test.write_text("class BoundaryTest {}\n", encoding="utf-8")
+    (root / "build.gradle.kts").write_text(
+        (
+            'val testSources = sourceSets.named("test")\n'
+            "testSources\n"
+            "    /* multiline alias closure */\n"
+            f"    .{method} {{\n"
+            '        java.srcDir("verification")\n'
+            "    }\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add multiline recognized test alias closure")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+    custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
+
+    assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(
+        root, assets
+    )
+
+
+@pytest.mark.parametrize(
+    ("receiver", "method"),
+    [
+        ("(testSources)", "configure"),
+        ("(testSources)", "apply"),
+        ("((testSources))", "configure"),
+        ("( /* receiver */ (testSources) )", "apply"),
+        ("( /* ) */ testSources )", "configure"),
+        ("(testSources.get())", "apply"),
+    ],
+)
+def test_parenthesized_gradle_test_alias_closure_is_frozen(
+    tmp_path: Path,
+    receiver: str,
+    method: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    custom_test = root / "verification" / "BoundaryTest.java"
+    custom_test.parent.mkdir()
+    custom_test.write_text("class BoundaryTest {}\n", encoding="utf-8")
+    (root / "build.gradle.kts").write_text(
+        (
+            'val testSources = sourceSets.named("test")\n'
+            f"{receiver}\n"
+            f"    .{method} {{\n"
+            '        java.srcDir("verification")\n'
+            "    }\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add parenthesized test alias closure")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+    custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
+
+    assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(
+        root, assets
+    )
+
+
+def test_parenthesized_unrecognized_gradle_test_alias_closure_fails_closed(
+    tmp_path: Path,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle.kts").write_text(
+        (
+            'val testSources = sourceSets.named("test")\n'
+            "(testSources).withConvention {\n"
+            '    java.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add unsupported parenthesized test alias closure")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
+@pytest.mark.parametrize(
+    "receiver",
+    [
+        '(run { ")" ; testSources })',
+        "(testSources.map { it })",
+    ],
+)
+def test_ambiguous_parenthesized_gradle_test_alias_closure_fails_closed(
+    tmp_path: Path,
+    receiver: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle.kts").write_text(
+        (
+            'val testSources = sourceSets.named("test")\n'
+            f"{receiver}.apply {{\n"
+            '    java.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add ambiguous parenthesized test alias closure")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
+@pytest.mark.parametrize(
+    "receiver",
+    [
+        "([/)/, testSources][1])",
+        "([$/)/$, testSources][1])",
+        "([testSources, /)/][0])",
+    ],
+)
+def test_slashy_gradle_test_alias_closure_fails_closed(
+    tmp_path: Path,
+    receiver: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle").write_text(
+        (
+            'def testSources = sourceSets.named("test")\n'
+            f"{receiver}.configure {{\n"
+            '    java.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add slashy test alias closure")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
+@pytest.mark.parametrize("padding_length", [4095, 4096, 4097, 5000])
+def test_long_slashy_gradle_test_alias_closure_fails_closed(
+    tmp_path: Path,
+    padding_length: int,
+) -> None:
+    root, _ = _project(tmp_path)
+    padding = "a" * padding_length
+    (root / "build.gradle").write_text(
+        (
+            'def testSources = sourceSets.named("test")\n'
+            f"([testSources, /){padding}/][0]).configure {{\n"
+            '    java.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add long slashy test alias closure")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
+def test_gradle_division_does_not_block_recognized_test_alias_closure(
+    tmp_path: Path,
+) -> None:
+    root, _ = _project(tmp_path)
+    custom_test = root / "verification" / "BoundaryTest.java"
+    custom_test.parent.mkdir()
+    custom_test.write_text("class BoundaryTest {}\n", encoding="utf-8")
+    (root / "build.gradle").write_text(
+        (
+            "def ratio = 4 / 2\n"
+            'def testSources = sourceSets.named("test")\n'
+            "(testSources).configure {\n"
+            '    java.srcDir("verification")\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add divided recognized test alias closure")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+    custom_test.write_text("class BoundaryTest { /* weakened */ }\n", encoding="utf-8")
+
+    assert "verification/BoundaryTest.java" in tournament_module._verifier_asset_drift(
+        root, assets
+    )
+
+
+def test_dynamic_gradle_test_root_requires_explicit_assets(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle").write_text(
+        "plugins { id 'java' }\n"
+        "sourceSets { test { java.srcDirs = providers.gradleProperty('testRoot') } }\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add dynamic test root")
+
+    with pytest.raises(ConfigError, match="dynamic Gradle test source root"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+
+def test_unrecognized_gradle_test_root_syntax_fails_closed(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle.kts").write_text(
+        (
+            "sourceSets {\n"
+            "    test {\n"
+            '        kotlin.configure { srcDir("verification") }\n'
+            "    }\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add unsupported test root syntax")
+
+    with pytest.raises(ConfigError, match="cannot infer a Gradle test source root syntax"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
 
 
 def test_go_package_selector_is_not_treated_as_a_repository_path(tmp_path: Path) -> None:
@@ -670,6 +1181,52 @@ def test_explicit_review_assets_close_unknown_verifier_boundary(tmp_path: Path) 
 
 
 @pytest.mark.parametrize(
+    "command",
+    [
+        ["npm", "test"],
+        ["pnpm", "test"],
+        ["yarn", "test"],
+        ["bun", "test"],
+    ],
+)
+def test_package_manager_test_scripts_require_explicit_assets(
+    tmp_path: Path,
+    command: list[str],
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / "package.json").write_text(
+        '{"scripts":{"test":"node verify.js"}}\n',
+        encoding="utf-8",
+    )
+    (root / "verify.js").write_text("process.exit(0)\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add package verifier")
+
+    with pytest.raises(ConfigError, match="package-manager test scripts as opaque"):
+        tournament_module._freeze_verifier_assets(root, [command])
+
+
+def test_declared_package_script_asset_cannot_be_modified(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "package.json").write_text(
+        '{"scripts":{"test":"node verify.js"}}\n',
+        encoding="utf-8",
+    )
+    (root / "verify.js").write_text("process.exit(1)\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add package verifier")
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [["npm", "test"]],
+        review_assets=["package.json", "verify.js"],
+    )
+
+    (root / "verify.js").write_text("process.exit(0)\n", encoding="utf-8")
+
+    assert "verify.js" in tournament_module._verifier_asset_drift(root, assets)
+
+
+@pytest.mark.parametrize(
     "relative",
     [
         "pytest.py",
@@ -726,8 +1283,9 @@ def test_candidate_added_python_verifier_symlink_is_detected(tmp_path: Path) -> 
     [
         (["go", "test", "./..."], "newpkg/new_value_test.go"),
         (["./mvnw", "test"], "module/pom.xml"),
+        (["./mvnw", "test"], "src/test/java/BypassTest.java"),
         (["./gradlew", "test"], "module/build.gradle"),
-        (["dotnet", "test"], "src/NewTests.csproj"),
+        (["./gradlew", "test"], "module/src/test/java/BypassTest.java"),
         (["bundle", "exec", "rspec"], "spec/new_value_spec.rb"),
     ],
 )
@@ -759,6 +1317,101 @@ def test_candidate_added_ecosystem_verifier_inputs_are_detected(
     candidate.write_text("candidate controlled verifier input\n", encoding="utf-8")
 
     assert relative in tournament_module._verifier_asset_drift(root, assets)
+
+
+def test_gradle_version_catalog_content_is_frozen(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "gradlew").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (root / "gradlew").chmod(0o755)
+    (root / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
+    catalog = root / "gradle" / "libs.versions.toml"
+    catalog.parent.mkdir()
+    catalog.write_text('[versions]\nexample = "1.0"\n', encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add Gradle catalog")
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [["./gradlew", "test"]],
+    )
+
+    catalog.write_text('[versions]\nexample = "2.0"\n', encoding="utf-8")
+
+    assert "gradle/libs.versions.toml" in tournament_module._verifier_asset_drift(
+        root,
+        assets,
+    )
+
+
+@pytest.mark.parametrize("operation", ["add", "delete", "rename"])
+def test_gradle_policy_membership_drift_is_frozen(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / "gradlew").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (root / "gradlew").chmod(0o755)
+    (root / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
+    gradle_policy = root / "gradle"
+    gradle_policy.mkdir()
+    catalog = gradle_policy / "libs.versions.toml"
+    catalog.write_text('[versions]\nexample = "1.0"\n', encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add Gradle policy")
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [["./gradlew", "test"]],
+    )
+
+    if operation == "add":
+        (gradle_policy / "verification-metadata.xml").write_text(
+            "<verification-metadata/>\n",
+            encoding="utf-8",
+        )
+        expected = "gradle/verification-metadata.xml"
+    elif operation == "delete":
+        catalog.unlink()
+        expected = "gradle/libs.versions.toml"
+    else:
+        catalog.rename(gradle_policy / "platform.versions.toml")
+        expected = "gradle/libs.versions.toml"
+
+    assert expected in tournament_module._verifier_asset_drift(root, assets)
+
+
+def test_dotnet_verifier_requires_explicit_evaluated_input_boundary(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+
+    with pytest.raises(ConfigError, match="evaluated MSBuild input closure"):
+        tournament_module._freeze_verifier_assets(root, [["dotnet", "test"]])
+
+
+def test_explicit_dotnet_test_project_directory_detects_arbitrary_source_drift(
+    tmp_path: Path,
+) -> None:
+    root, _ = _project(tmp_path)
+    project = root / "MyProject.Tests"
+    project.mkdir()
+    (project / "MyProject.Tests.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+        "<IsTestProject>true</IsTestProject></PropertyGroup></Project>\n",
+        encoding="utf-8",
+    )
+    source = project / "UnitTest1.cs"
+    source.write_text("public class UnitTest1 {}\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add dotnet test project")
+
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [["dotnet", "test", "MyProject.Tests/MyProject.Tests.csproj"]],
+        review_assets=["MyProject.Tests"],
+    )
+    source.write_text("public class UnitTest1 { /* weakened */ }\n", encoding="utf-8")
+
+    assert "MyProject.Tests/UnitTest1.cs" in tournament_module._verifier_asset_drift(
+        root,
+        assets,
+    )
 
 
 def test_python_module_verifier_is_hardened_against_cwd_shadowing() -> None:
@@ -799,6 +1452,27 @@ def test_explicit_custom_verifier_directory_freezes_membership(tmp_path: Path) -
     nested.write_text("ALLOW = True\n", encoding="utf-8")
 
     assert "policy/nested/bypass.py" in tournament_module._verifier_asset_drift(
+        root,
+        assets,
+    )
+
+
+def test_repository_directory_argument_freezes_membership(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    integration = root / "integration"
+    integration.mkdir()
+    (integration / "test_value.py").write_text("def test_value(): assert True\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add integration verifier")
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [[sys.executable, "-m", "pytest", "integration", "-q"]],
+    )
+
+    bypass = integration / "test_bypass.py"
+    bypass.write_text("def test_bypass(): assert True\n", encoding="utf-8")
+
+    assert "integration/test_bypass.py" in tournament_module._verifier_asset_drift(
         root,
         assets,
     )

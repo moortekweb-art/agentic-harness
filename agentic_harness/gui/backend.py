@@ -44,7 +44,7 @@ from agentic_harness.core.providers import (
     resolve_api_key,
 )
 from agentic_harness.core.presentation import safe_inline_text
-from agentic_harness.core.redaction import redact_secrets
+from agentic_harness.core.redaction import redact_preview_text, redact_secrets
 from agentic_harness.core.reporting import RunReceipt, build_run_receipt
 from agentic_harness.core.safety import (
     command_uses_windows_shell,
@@ -69,6 +69,7 @@ from agentic_harness.core.tournament import (
     run_verified_tournament,
 )
 from agentic_harness.core.workspace import workspace_change_summary
+from agentic_harness.gui.preview_security import sensitive_preview_path
 
 
 GUI_TASK_CONTRACT = "agentic_harness.gui_task.v2"
@@ -1313,7 +1314,7 @@ class EmbeddedExecutionBackend:
             path.relative_to(self.project_dir)
         except ValueError as exc:
             raise ValueError("Preview path is outside the workspace.") from exc
-        if _sensitive_preview_path(path, self.project_dir):
+        if sensitive_preview_path(path, self.project_dir):
             raise ValueError("Preview file is unavailable.")
         try:
             descriptor = os.open(
@@ -1339,7 +1340,7 @@ class EmbeddedExecutionBackend:
             raise ValueError("Preview file is unavailable.") from exc
         return {
             "path": requested.as_posix(),
-            "content": redact_secrets(content),
+            "content": redact_preview_text(content),
             "truncated": False,
         }
 
@@ -2339,44 +2340,6 @@ def _candidate_count(value: Any) -> int:
     if not 2 <= count <= 10:
         raise ValueError("approach count must be 1 or between 2 and 10")
     return count
-
-
-def _sensitive_preview_path(path: Path, root: Path) -> bool:
-    try:
-        relative = path.relative_to(root)
-    except ValueError:
-        return True
-    parts = {part.lower() for part in relative.parts}
-    name = path.name.lower()
-    dotenv = name == ".env" or name == ".envrc" or name.startswith((".env.", ".env-"))
-    protected_names = {
-        ".git-credentials",
-        ".netrc",
-        ".npmrc",
-        ".pypirc",
-        "_netrc",
-        "application_default_credentials.json",
-        "client_secret.json",
-        "credentials",
-        "credentials.json",
-        "id_ed25519",
-        "id_rsa",
-        "service-account.json",
-        "token.json",
-        "tokens.json",
-        "oauth_token.json",
-        "auth_token.json",
-    }
-    oauth_variant = (name.startswith("client_secret") and name.endswith(".json")) or (
-        name.startswith(("oauth_token", "auth_token")) and name.endswith(".json")
-    )
-    return (
-        dotenv
-        or bool(parts & {".aws", ".azure", ".docker", ".git", ".gnupg", ".kube", ".ssh"})
-        or oauth_variant
-        or name in protected_names
-        or path.suffix.lower() in {".jks", ".key", ".keystore", ".p12", ".pem", ".pfx"}
-    )
 
 
 def _task_status(goal: Goal, autonomy: dict[str, Any]) -> str:
