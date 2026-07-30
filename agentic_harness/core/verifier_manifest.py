@@ -413,10 +413,10 @@ _GRADLE_TEST_BLOCK = re.compile(
     (?:
         \btest
         |
-        \b(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)(?:\.\s*configure)?
+        \b(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)
     )
     (?:\s*\.\s*get\s*\(\s*\))?
-    (?:\s*\.\s*(?:configure|apply))?
+    (?:\.\s*(?P<method>[A-Za-z_][A-Za-z0-9_]*)\s*)?
     \s*\{
     """
 )
@@ -577,6 +577,7 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
         expressions: list[str] = []
         unresolved_source_root = False
         for match in _GRADLE_TEST_BLOCK.finditer(text):
+            method = match.group("method")
             block = _balanced_brace_body(text, match.end() - 1)
             source_matches = list(_GRADLE_SOURCE_ROOT_CALL.finditer(block))
             expressions.extend(
@@ -585,6 +586,9 @@ def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
             )
             unresolved_source_root = unresolved_source_root or (
                 len(_GRADLE_SOURCE_ROOT_NAME.findall(block)) != len(source_matches)
+            )
+            unresolved_source_root = unresolved_source_root or (
+                method is not None and method not in {"configure", "apply"}
             )
         for item in _GRADLE_DIRECT_TEST_CONFIG.finditer(text):
             direct_config = item.group(0)

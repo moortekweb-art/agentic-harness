@@ -1250,6 +1250,42 @@ async function testManagedExpectationStaysPlainAndMobileGetsUnavailableReasons()
   assert.equal(newRouteCard.focusCount, 1);
 }
 
+async function testSetupRequiredStateShowsRecoverySettingsShortcut() {
+  const app = await runApp({
+    publicAccess: true,
+    setupPayload: {
+      contract: "agentic_harness.gui_setup.v1",
+      configured: false,
+      editable: true,
+      workspace: "/tmp/new-project",
+      suggested_check: "npm test",
+    },
+    healthPayload: {
+      ok: true,
+      readiness: {
+        state: "setup_required",
+        can_start: false,
+        summary: "Choose an AI connection.",
+        next_action: "Open Settings and connect an assistant before starting real work.",
+      },
+    },
+    taskPayload: {
+      status: "ready",
+      status_label: "Ready",
+      result_category: "in_progress",
+      summary: "Backend ready",
+      progress: { determinate: false, percent: null, label: "" },
+    },
+  });
+
+  assert.equal(app.elements.get("recoveryCard").hidden, false);
+  assert.equal(app.elements.get("recoveryOpenTaskButton").hidden, false);
+  assert.equal(app.elements.get("recoveryOpenTaskButton").textContent, "Open settings");
+  app.elements.get("recoveryOpenTaskButton").listeners.click();
+  await tick();
+  assert.equal(app.elements.get("settingsView").hidden, false);
+}
+
 async function testResetNeverSilentlyAppliesACloudDefaultRoute() {
   const setupPayload = {
     contract: "agentic_harness.gui_setup.v1",
@@ -1921,6 +1957,7 @@ async function testLostStartResponseReconnectsToTheAcceptedTask() {
   await testLegacyHumanCanChooseEveryModeWithoutWritingACommand();
   await testPredictableViewsConciseModesAndAccessSummaryKeepDraftState();
   await testExpectationReflectsSetupReadinessInsteadOfClaimingReady();
+  await testSetupRequiredStateShowsRecoverySettingsShortcut();
   await testExpectationUsesPlainDynamicFactsAndCardSelectionKeepsFocus();
   await testManagedExpectationStaysPlainAndMobileGetsUnavailableReasons();
   await testResetNeverSilentlyAppliesACloudDefaultRoute();
