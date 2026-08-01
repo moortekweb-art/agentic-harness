@@ -568,32 +568,53 @@ def make_handler(
                 if active is not None:
                     self._json(active.accept())
                 else:
-                    task = command_task(bridge, "accept", body)
-                    task = session.record(task)
-                    self._json(task)
+                    with task_action_lock:
+                        binding = self._managed_task_binding(body)
+                        if binding is None:
+                            return
+                        _current, action_body = binding
+                        task = command_task(bridge, "accept", action_body)
+                        task = session.record(task)
+                        self._json(
+                            task,
+                            status=(
+                                HTTPStatus.CONFLICT
+                                if self._managed_identity_conflict(task)
+                                else HTTPStatus.OK
+                            ),
+                        )
             elif route == "/api/tasks/current/continue":
                 if active is not None:
                     self._json(active.continue_task(str(body.get("feedback") or "")))
                 else:
-                    current = session.record(status_task(bridge))
-                    try:
-                        session.expect_continuation(current)
-                    except GuiSecurityError as exc:
-                        self._json(
-                            {"ok": False, "error": str(exc)},
-                            status=HTTPStatus.CONFLICT,
+                    with task_action_lock:
+                        binding = self._managed_task_binding(body)
+                        if binding is None:
+                            return
+                        current, continuation_body = binding
+                        try:
+                            session.expect_continuation(current)
+                        except GuiSecurityError as exc:
+                            self._json(
+                                {"ok": False, "error": str(exc)},
+                                status=HTTPStatus.CONFLICT,
+                            )
+                            return
+                        continuation_body["feedback"] = session.continuation_feedback(
+                            str(body.get("feedback") or "")
                         )
-                        return
-                    continuation_body = dict(body)
-                    continuation_body["expected_task_id"] = str(body.get("task_id") or "").strip()
-                    continuation_body["feedback"] = session.continuation_feedback(
-                        str(body.get("feedback") or "")
-                    )
-                    task = command_task(bridge, "continue", continuation_body)
-                    if str(task.get("status") or "") == "blocked":
-                        session.cancel_continuation()
-                    task = session.record(task)
-                    self._json(task)
+                        task = command_task(bridge, "continue", continuation_body)
+                        if str(task.get("status") or "") == "blocked":
+                            session.cancel_continuation()
+                        task = session.record(task)
+                        self._json(
+                            task,
+                            status=(
+                                HTTPStatus.CONFLICT
+                                if self._managed_identity_conflict(task)
+                                else HTTPStatus.OK
+                            ),
+                        )
             elif route == "/api/tasks/current/message":
                 if active is not None:
                     self._json(
@@ -750,9 +771,21 @@ def make_handler(
                 if active is not None:
                     self._json(active.stop())
                 else:
-                    task = command_task(bridge, "stop", body)
-                    task = session.record(task)
-                    self._json(task)
+                    with task_action_lock:
+                        binding = self._managed_task_binding(body)
+                        if binding is None:
+                            return
+                        _current, action_body = binding
+                        task = command_task(bridge, "stop", action_body)
+                        task = session.record(task)
+                        self._json(
+                            task,
+                            status=(
+                                HTTPStatus.CONFLICT
+                                if self._managed_identity_conflict(task)
+                                else HTTPStatus.OK
+                            ),
+                        )
             elif route == "/api/session/import":
                 if active is not None:
                     self._json(
@@ -824,6 +857,43 @@ def make_handler(
                 )
                 return None
             return value
+
+        def _managed_task_binding(
+            self, body: dict[str, Any]
+        ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+            task_id = body.get("task_id")
+            if not isinstance(task_id, str) or not task_id.strip():
+                self._json(
+                    {
+                        "ok": False,
+                        "error": "task_id is required for current-task actions.",
+                    },
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return None
+            task_id = task_id.strip()
+            current = session.record(status_task(bridge))
+            if task_id != current.get("id"):
+                self._json(
+                    {
+                        "ok": False,
+                        "error": "The requested task is no longer current.",
+                    },
+                    status=HTTPStatus.CONFLICT,
+                )
+                return None
+            action_body = dict(body)
+            action_body["expected_task_id"] = task_id
+            return current, action_body
+
+        @staticmethod
+        def _managed_identity_conflict(task: dict[str, Any]) -> bool:
+            advanced = task.get("advanced_details")
+            payload = advanced.get("payload") if isinstance(advanced, dict) else None
+            return (
+                isinstance(payload, dict)
+                and payload.get("reason") == "active_run_changed"
+            )
 
         def _json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
             encoded = redact_secrets(

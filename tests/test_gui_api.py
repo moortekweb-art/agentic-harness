@@ -2159,9 +2159,18 @@ def test_gui_server_post_task_workflow_routes() -> None:
             {"mode": "cloud", "objective": "test task", "safe_areas": ["tests"]},
         )
         watched = post_json(base_url, "/api/tasks/current/watch", {})
-        continued = post_json(base_url, "/api/tasks/current/continue", {"feedback": "keep going"})
-        accepted = post_json(base_url, "/api/tasks/current/accept", {})
-        stopped = post_json(base_url, "/api/tasks/current/stop", {})
+        task_id = str(watched["id"])
+        continued = post_json(
+            base_url,
+            "/api/tasks/current/continue",
+            {"task_id": task_id, "feedback": "keep going"},
+        )
+        accepted = post_json(
+            base_url, "/api/tasks/current/accept", {"task_id": task_id}
+        )
+        stopped = post_json(
+            base_url, "/api/tasks/current/stop", {"task_id": task_id}
+        )
 
     assert created["status"] == "starting"
     assert created["objective"] == "test task"
@@ -2184,10 +2193,74 @@ def test_gui_server_post_task_workflow_routes() -> None:
             "--goal",
             "GOAL_CONTENT",
         ],
-        ["continue", "--feedback", "keep going"],
+        ["continue", "--expected-run-id", "run-1", "--feedback", "keep going", "--json"],
         ["review"],
-        ["accept"],
-        ["stop"],
+        ["accept", "--expected-run-id", "run-1", "--json"],
+        ["stop", "--expected-run-id", "run-1", "--json"],
+    ]
+
+
+@pytest.mark.parametrize("action", ["accept", "continue", "stop"])
+def test_gui_current_task_mutations_require_exact_task_identity(action: str) -> None:
+    bridge = FakeBridge()
+    path = f"/api/tasks/current/{action}"
+    with gui_server(bridge) as base_url:
+        missing = post_error(
+            base_url,
+            path,
+            json.dumps({"feedback": "keep going"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        stale = post_error(
+            base_url,
+            path,
+            json.dumps(
+                {"task_id": "run-stale", "feedback": "keep going"}
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert missing.code == 400
+    assert "task_id is required" in str(missing.payload["error"])
+    assert stale.code == 409
+    assert "no longer current" in str(stale.payload["error"])
+    assert not any(command[0] == action for command in bridge.commands)
+
+
+def test_gui_current_task_mutation_reports_backend_identity_race_as_conflict() -> None:
+    class ReplacedRunBridge(FakeBridge):
+        def run(self, args: list[str]) -> CommandResult:
+            self.commands.append(args)
+            return CommandResult(
+                tuple(args),
+                2,
+                json.dumps(
+                    {
+                        "ok": False,
+                        "status": "conflict",
+                        "reason": "active_run_changed",
+                        "expected_run_id": "run-1",
+                        "active_run_id": "run-2",
+                    }
+                ),
+                "",
+            )
+
+    bridge = ReplacedRunBridge()
+    with gui_server(bridge) as base_url:
+        conflict = post_error(
+            base_url,
+            "/api/tasks/current/stop",
+            json.dumps({"task_id": "run-1"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert conflict.code == 409
+    assert conflict.payload["advanced_details"]["payload"]["reason"] == (
+        "active_run_changed"
+    )
+    assert bridge.commands == [
+        ["stop", "--expected-run-id", "run-1", "--json"]
     ]
 
 
@@ -2932,7 +3005,7 @@ class FakeBridge:
         return CommandResult(
             ("local-goal", "status"),
             0,
-            '{"active_goal": {"status": "running", "objective": "test task"}}',
+            '{"active_goal": {"id": "run-1", "status": "running", "objective": "test task", "run_dir": "/tmp/run-1"}}',
             "",
         )
 
@@ -2950,7 +3023,7 @@ class FakeBridge:
 
     def run(self, args: list[str]) -> CommandResult:
         self.commands.append(args)
-        if args == ["accept"]:
+        if args and args[0] == "accept":
             return CommandResult(
                 tuple(args),
                 0,
@@ -2973,8 +3046,13 @@ class FakeBridge:
                 ),
                 "",
             )
-        if args == ["stop"]:
-            return CommandResult(tuple(args), 0, '{"status": "stopped"}', "")
+        if args and args[0] == "stop":
+            return CommandResult(
+                tuple(args),
+                0,
+                '{"classification":"stopped","active_goal":{"id":"run-1","status":"stopped","objective":"test task","run_dir":"/tmp/run-1"}}',
+                "",
+            )
         return CommandResult(
             tuple(args), 0, '{"active_goal": {"status": "running", "objective": "test task"}}', ""
         )
