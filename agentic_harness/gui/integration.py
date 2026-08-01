@@ -68,7 +68,11 @@ def _probe(url: str, *, timeout: float = 1.5) -> tuple[str, str]:
 
 def _origin(url: str) -> tuple[str, str, int | None]:
     parsed = urlparse(url)
-    return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
+    scheme = parsed.scheme.lower()
+    port = parsed.port
+    if port is None:
+        port = {"http": 80, "https": 443}.get(scheme)
+    return scheme, (parsed.hostname or "").lower(), port
 
 
 def _route_definitions() -> tuple[dict[str, str], ...]:

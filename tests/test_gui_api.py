@@ -760,6 +760,33 @@ def test_managed_current_endpoint_keeps_requested_result_in_foreground(
     assert foreground["allowed_actions"] == []
 
 
+def test_managed_current_endpoint_drops_stale_foreground_when_lane_is_idle(
+    tmp_path: Path,
+) -> None:
+    bridge, run_id = _managed_review_bridge(tmp_path)
+
+    with gui_server(bridge) as base_url:  # type: ignore[arg-type]
+        current = get_json(base_url, "/api/tasks/current")
+        assert current["id"] == run_id
+        assert current["status"] == "needs_review"
+        bridge.status_payload = {  # type: ignore[attr-defined]
+            "classification": "idle",
+            "active_goal": None,
+            "capabilities": {
+                "current_state": {
+                    "classification": "ready",
+                    "local_goal_lane_free": True,
+                }
+            },
+        }
+        current = get_json(base_url, "/api/tasks/current")
+        history = get_json(base_url, "/api/tasks/history")
+
+    assert current["status"] == "ready"
+    assert current.get("metadata", {}).get("foreground_task") is not True
+    assert any(task["id"] == run_id for task in history["tasks"])
+
+
 def test_gui_frontend_presents_review_as_a_user_decision() -> None:
     app = Path("agentic_harness/gui/static/app.js").read_text(encoding="utf-8")
 
@@ -2140,6 +2167,40 @@ def test_route_probe_and_execution_must_share_one_origin(monkeypatch) -> None:
         route_execution_config(primary)
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "health_url"),
+    [
+        (
+            "https://models.example.test/v1/chat/completions",
+            "https://models.example.test:443/health",
+        ),
+        (
+            "https://models.example.test:443/v1/chat/completions",
+            "https://models.example.test/health",
+        ),
+        (
+            "http://127.0.0.1/v1/chat/completions",
+            "http://127.0.0.1:80/health",
+        ),
+        (
+            "http://127.0.0.1:80/v1/chat/completions",
+            "http://127.0.0.1/health",
+        ),
+    ],
+)
+def test_route_probe_accepts_equivalent_explicit_default_ports(
+    monkeypatch,
+    endpoint,
+    health_url,
+) -> None:
+    from agentic_harness.gui.integration import route_execution_config
+
+    monkeypatch.setenv("AGENTIC_HARNESS_ROUTE_PRIMARY_ENDPOINT", endpoint)
+    monkeypatch.setenv("AGENTIC_HARNESS_ROUTE_PRIMARY_HEALTH_URL", health_url)
+
+    assert route_execution_config({"id": "primary"})["endpoint"] == endpoint
+
+
 @pytest.mark.parametrize("invalid_value", ["not-a-number", "-1", "0"])
 def test_route_registry_degrades_malformed_max_context_without_crashing(
     monkeypatch,
@@ -2550,9 +2611,16 @@ def test_gui_server_post_task_workflow_routes() -> None:
             "GOAL_CONTENT",
         ],
         ["monitor", "--auto-continue", "--auto-dispatch", "--auto-commit-owned", "--json"],
-        ["continue", "--feedback", "keep going"],
-        ["accept"],
-        ["stop"],
+        [
+            "continue",
+            "--expected-run-id",
+            task_id,
+            "--feedback",
+            "keep going",
+            "--json",
+        ],
+        ["accept", "--expected-run-id", task_id, "--json"],
+        ["stop", "--expected-run-id", task_id, "--json"],
     ]
 
 
@@ -2586,7 +2654,7 @@ def test_gui_connection_test_redacts_secrets_from_error_response(
     assert "<redacted>" in str(result.payload["error"])
 
 
-def test_gui_supervised_messages_are_revisioned_and_cumulative() -> None:
+def test_gui_supervised_messages_are_revisioned_and_cumulative(tmp_path: Path) -> None:
     class MessagingBridge(FakeBridge):
         def start_human_goal(self, **kwargs: object) -> CommandResult:
             result = super().start_human_goal(**kwargs)  # type: ignore[arg-type]
@@ -2601,21 +2669,24 @@ def test_gui_supervised_messages_are_revisioned_and_cumulative() -> None:
             )
 
     bridge = MessagingBridge()
+    bridge.doc_root = tmp_path
     with gui_server(bridge) as base_url:
         post_json(
             base_url,
             "/api/tasks",
             {"mode": "local", "objective": "build the feature", "safe_areas": ["src"]},
         )
+        current = get_json(base_url, "/api/tasks/current")
+        task_id = str(current["id"])
         first = post_json(
             base_url,
             "/api/tasks/current/message",
-            {"message": "Keep the public API compatible."},
+            {"task_id": task_id, "message": "Keep the public API compatible."},
         )
         second = post_json(
             base_url,
             "/api/tasks/current/message",
-            {"message": "Also add a regression test."},
+            {"task_id": task_id, "message": "Also add a regression test."},
         )
 
     messages = second["metadata"]["conversation"]
@@ -2624,12 +2695,153 @@ def test_gui_supervised_messages_are_revisioned_and_cumulative() -> None:
     assert first["metadata"]["conversation"][0]["run_id"] == "run-1"
     nudge_commands = [command for command in bridge.commands if command[0] == "nudge"]
     assert len(nudge_commands) == 2
-    assert "Revision 1: Keep the public API compatible." in nudge_commands[1][2]
-    assert "Revision 2: Also add a regression test." in nudge_commands[1][2]
-    assert "independent acceptance criteria remain unchanged" in nudge_commands[1][2]
+    assert nudge_commands[1][1:3] == ["--expected-run-id", "run-1"]
+    assert "Revision 1: Keep the public API compatible." in " ".join(nudge_commands[1])
+    assert "Revision 2: Also add a regression test." in " ".join(nudge_commands[1])
+    assert "independent acceptance criteria remain unchanged" in " ".join(
+        nudge_commands[1]
+    )
 
 
-def test_gui_supervised_message_requires_active_managed_run() -> None:
+def test_gui_supervised_messages_require_the_exact_current_task_id(tmp_path: Path) -> None:
+    class MessagingBridge(FakeBridge):
+        def start_human_goal(self, **kwargs: object) -> CommandResult:
+            result = super().start_human_goal(**kwargs)  # type: ignore[arg-type]
+            return CommandResult(result.args, 0, "queued\nrun_dir=/tmp/run-2\n", "")
+
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(
+                ("local-goal", "status", "--json"),
+                0,
+                json.dumps(
+                    {
+                        "classification": "working",
+                        "active_goal": {
+                            "id": "run-2",
+                            "status": "running",
+                            "objective": "current task",
+                            "run_dir": "/tmp/run-2",
+                        },
+                    }
+                ),
+                "",
+            )
+
+    bridge = MessagingBridge()
+    bridge.doc_root = tmp_path
+    with gui_server(bridge) as base_url:
+        post_json(
+            base_url,
+            "/api/tasks",
+            {"mode": "local", "objective": "current task", "safe_areas": ["src"]},
+        )
+        current = get_json(base_url, "/api/tasks/current")
+        current_id = str(current["id"])
+        missing = post_error(
+            base_url,
+            "/api/tasks/current/message",
+            json.dumps({"message": "NO-ID-GUIDANCE"}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Origin": base_url},
+        )
+        stale = post_error(
+            base_url,
+            "/api/tasks/current/message",
+            json.dumps(
+                {
+                    "task_id": current_id + "-stale",
+                    "message": "STALE-A-GUIDANCE: replace task B behavior",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Origin": base_url},
+        )
+        matching = post_json(
+            base_url,
+            "/api/tasks/current/message",
+            {"task_id": current_id, "message": "MATCHING-B-GUIDANCE"},
+            origin=base_url,
+        )
+
+    assert missing.code == 400
+    assert "task_id is required" in str(missing.payload["error"])
+    assert stale.code == 409
+    assert "no longer current" in str(stale.payload["error"])
+    assert matching["id"] == current_id
+    nudge_commands = [command for command in bridge.commands if command[0] == "nudge"]
+    assert len(nudge_commands) == 1
+    assert nudge_commands[0][1:3] == ["--expected-run-id", current_id]
+    assert "MATCHING-B-GUIDANCE" in " ".join(nudge_commands[0])
+    assert "NO-ID-GUIDANCE" not in " ".join(nudge_commands[0])
+    assert "STALE-A-GUIDANCE" not in " ".join(nudge_commands[0])
+
+
+def test_gui_supervised_message_rejects_backend_identity_race(tmp_path: Path) -> None:
+    class RacingBridge(FakeBridge):
+        def start_human_goal(self, **kwargs: object) -> CommandResult:
+            result = super().start_human_goal(**kwargs)  # type: ignore[arg-type]
+            return CommandResult(result.args, 0, "queued\nrun_dir=/tmp/run-A\n", "")
+
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(
+                ("local-goal", "status", "--json"),
+                0,
+                json.dumps(
+                    {
+                        "classification": "working",
+                        "active_goal": {
+                            "id": "run-A",
+                            "status": "running",
+                            "objective": "cached task A",
+                            "run_dir": "/tmp/run-A",
+                        },
+                    }
+                ),
+                "",
+            )
+
+        def run(self, args: list[str]) -> CommandResult:
+            if not args or args[0] not in {"nudge", "continue"}:
+                return super().run(args)
+            self.commands.append(args)
+            assert args[1:3] == ["--expected-run-id", "run-A"]
+            return CommandResult(
+                tuple(args),
+                2,
+                json.dumps(
+                    {
+                        "ok": False,
+                        "status": "conflict",
+                        "reason": "active_run_changed",
+                        "expected_run_id": "run-A",
+                        "active_run_id": "run-B",
+                    }
+                ),
+                "",
+            )
+
+    bridge = RacingBridge()
+    bridge.doc_root = tmp_path
+    with gui_server(bridge) as base_url:
+        post_json(
+            base_url,
+            "/api/tasks",
+            {"mode": "local", "objective": "cached task A", "safe_areas": ["src"]},
+        )
+        bridge.commands.clear()
+        result = post_error(
+            base_url,
+            "/api/tasks/current/message",
+            json.dumps(
+                {"task_id": "run-A", "message": "GUIDANCE-FOR-A-ONLY"}
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Origin": base_url},
+        )
+
+    assert result.code == 409
+    assert result.payload["advanced_details"]["payload"]["reason"] == "active_run_changed"
+    assert len(bridge.commands) == 1
+
+
+def test_gui_supervised_message_requires_active_managed_run(tmp_path: Path) -> None:
     class ReadyBridge(FakeBridge):
         def status(self, *, json_output: bool = False) -> CommandResult:
             return CommandResult(
@@ -2639,11 +2851,13 @@ def test_gui_supervised_message_requires_active_managed_run() -> None:
                 "",
             )
 
-    with gui_server(ReadyBridge()) as base_url:
+    bridge = ReadyBridge()
+    bridge.doc_root = tmp_path
+    with gui_server(bridge) as base_url:
         result = post_error(
             base_url,
             "/api/tasks/current/message",
-            json.dumps({"message": "Do something"}).encode("utf-8"),
+            json.dumps({"task_id": "run-1", "message": "Do something"}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
 
@@ -3236,7 +3450,7 @@ class FakeBridge:
 
     def run(self, args: list[str]) -> CommandResult:
         self.commands.append(args)
-        if args == ["accept"]:
+        if args[:1] == ["accept"]:
             return CommandResult(
                 tuple(args),
                 0,
@@ -3259,7 +3473,7 @@ class FakeBridge:
                 ),
                 "",
             )
-        if args == ["stop"]:
+        if args[:1] == ["stop"]:
             return CommandResult(tuple(args), 0, '{"status": "stopped"}', "")
         return CommandResult(
             tuple(args), 0, '{"active_goal": {"status": "running", "objective": "test task"}}', ""

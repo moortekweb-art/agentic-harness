@@ -1419,15 +1419,26 @@ def command_task(
         return status_task(bridge)
     body = body or {}
     if command == "accept":
-        result = bridge.run(["accept"])
+        args = ["accept"]
+        expected_task_id = str(body.get("expected_task_id", "")).strip()
+        if expected_task_id:
+            args.extend(["--expected-run-id", expected_task_id])
+            args.append("--json")
+        result = bridge.run(args)
     elif command == "continue":
         feedback = str(body.get("feedback", "")).strip()
         args = ["continue"]
+        expected_task_id = str(body.get("expected_task_id", "")).strip()
+        if expected_task_id:
+            args.extend(["--expected-run-id", expected_task_id])
         if feedback:
             args.extend(["--feedback", feedback])
+        if expected_task_id:
+            args.append("--json")
         result = bridge.run(args)
     elif command == "nudge":
         feedback = str(body.get("feedback", "")).strip()
+        expected_task_id = str(body.get("expected_task_id", "")).strip()
         if not feedback:
             return _task(
                 status="blocked",
@@ -1435,9 +1446,20 @@ def command_task(
                 needs_human=True,
                 advanced_details={"command": command},
             )
-        result = bridge.run(["nudge", "--feedback", feedback])
+        args = ["nudge"]
+        if expected_task_id:
+            args.extend(["--expected-run-id", expected_task_id])
+        args.extend(["--feedback", feedback])
+        if expected_task_id:
+            args.append("--json")
+        result = bridge.run(args)
     elif command == "stop":
-        result = bridge.run(["stop"])
+        args = ["stop"]
+        expected_task_id = str(body.get("expected_task_id", "")).strip()
+        if expected_task_id:
+            args.extend(["--expected-run-id", expected_task_id])
+            args.append("--json")
+        result = bridge.run(args)
     else:
         return _task(
             status="blocked",
@@ -2873,6 +2895,8 @@ def _normalize_status(value: Any) -> str:
     if normalized in {"needs_review", "awaiting_review", "review", "review_required"}:
         return "needs_review"
     if normalized in {"needs_attention", "attention_required"}:
+        return "needs_attention"
+    if normalized.startswith("stuck"):
         return "needs_attention"
     if normalized in {"accepted", "done", "complete", "completed", "success"}:
         return "done"
