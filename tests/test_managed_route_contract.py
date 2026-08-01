@@ -959,6 +959,7 @@ def test_managed_start_binds_matching_harness_ticket(tmp_path: Path) -> None:
     enriched = GuiSession().enrich(task, body)
 
     assert task["status"] == "starting"
+    assert task["id"] == "observed-run"
     assert enriched["metadata"]["start_accepted"] is True
 
 
@@ -975,6 +976,7 @@ def test_guided_start_binds_matching_harness_ticket(tmp_path: Path) -> None:
     enriched = GuiSession().enrich(task, body)
 
     assert task["status"] == "starting"
+    assert task["id"] == "observed-run"
     assert enriched["metadata"]["start_accepted"] is True
 
 

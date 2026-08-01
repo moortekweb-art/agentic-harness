@@ -1314,6 +1314,11 @@ def start_task(
     )
     started_run_dir = _started_run_dir(result)
     if started_run_dir:
+        # The managed start command is already bound to its exact run directory
+        # above.  Return that identity immediately so a user can safely stop or
+        # guide the task before the first status poll completes.
+        if receipt_matches and task.get("status") != "blocked":
+            task["id"] = Path(started_run_dir).name
         _attach_managed_route_receipt(
             task,
             bridge,
