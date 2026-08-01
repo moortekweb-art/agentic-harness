@@ -1260,8 +1260,13 @@ function stopFromRecovery() {
   const task = state.liveTask || state.currentTask || {};
   if (!task.id || !hasAction(task, "stop")) return;
   if (window.confirm("Stop this task now? Its progress and evidence will be kept.")) {
-    postAction("/api/tasks/current/stop");
+    postAction("/api/tasks/current/stop", { task_id: task.id });
   }
+}
+
+function currentTaskActionBody(extra = {}) {
+  const task = state.liveTask || state.currentTask || {};
+  return { task_id: task.id || "", ...extra };
 }
 
 function renderHealth(health) {
@@ -2866,7 +2871,7 @@ els.messageForm.addEventListener("submit", (event) => {
     return;
   }
   els.messageInput.value = "";
-  postAction("/api/tasks/current/message", { message });
+  postAction("/api/tasks/current/message", currentTaskActionBody({ message }));
 });
 els.approveSpecButton.addEventListener("click", () => {
   state.specificationReviewBinding = window.HarnessAssurance.populateDialog(state.currentTask, {
@@ -2894,12 +2899,15 @@ els.continueForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const feedback = els.continueFeedback.value.trim();
   els.continueDialog.close();
-  postAction("/api/tasks/current/continue", { feedback });
+  postAction("/api/tasks/current/continue", currentTaskActionBody({ feedback }));
 });
-els.acceptButton.addEventListener("click", () => postAction("/api/tasks/current/accept"));
+els.acceptButton.addEventListener("click", () => postAction(
+  "/api/tasks/current/accept",
+  currentTaskActionBody(),
+));
 els.stopButton.addEventListener("click", () => {
   if (window.confirm("Stop after the current safe step? Progress and evidence will be kept.")) {
-    postAction("/api/tasks/current/stop");
+    postAction("/api/tasks/current/stop", currentTaskActionBody());
   }
 });
 els.returnToCurrentButton.addEventListener("click", () => {

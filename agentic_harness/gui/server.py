@@ -194,6 +194,7 @@ def make_handler(
         demo_service = EmbeddedExecutionBackend(managed_demo_workspace.name)
     auth_token = os.environ.get("AGENTIC_HARNESS_GUI_TOKEN", "").strip()
     rate_limiter = RateLimiter(limit=240, window_seconds=60)
+    task_action_lock = RLock()
     trusted_hosts = allowed_hosts or {"127.0.0.1", "localhost", "::1"}
 
     def demo_task() -> dict[str, Any] | None:
@@ -253,26 +254,39 @@ def make_handler(
         foreground = enrich_managed_task_snapshot(bridge, foreground)
         foreground_metadata = dict(foreground.get("metadata", {}))
         foreground_metadata["foreground_task"] = True
+        if not requested_goal_id and _lane_is_idle_for_observed_task(observed):
+            return observed
         if not _identities_match(_task_identity(foreground), _task_identity(observed)):
             foreground_metadata["background_activity"] = {
                 "id": str(observed.get("id") or ""),
                 "objective": str(observed.get("objective") or ""),
                 "status": str(observed.get("status") or "ready"),
             }
-            # Actions target the backend's active run. Never offer them for a
-            # pinned result while unrelated maintenance owns that backend.
+            # Preserve recovery actions for the pinned run while preventing
+            # acceptance of an apparently stale snapshot.
             foreground["allowed_actions"] = []
             guide = dict(foreground.get("guide", {}))
             if foreground.get("status") == "needs_review":
                 guide["eyebrow"] = "Your result"
                 guide["title"] = guide.get("title") or "Your result is ready"
                 guide["next_action"] = (
-                    "Read the result below. Separate background maintenance "
-                    "will not replace this task."
+                    "A newer managed run is now active. Read this result only "
+                    "if it matches your latest active task, then continue with "
+                    "current-task guidance if needed."
                 )
-                foreground["guide"] = guide
+            foreground["guide"] = guide
         foreground["metadata"] = foreground_metadata
         return foreground
+
+    def _lane_is_idle_for_observed_task(task: dict[str, Any]) -> bool:
+        if str(task.get("status") or "").strip() not in {"ready", "done", "stopped"}:
+            return False
+        readiness = task.get("readiness_gate")
+        if not isinstance(readiness, dict):
+            return False
+        if readiness.get("active_run_dir"):
+            return False
+        return readiness.get("can_start") is True
 
     class GuiHandler(BaseHTTPRequestHandler):
         server_version = "AgenticHarnessGUI/0.1"
@@ -571,6 +585,7 @@ def make_handler(
                         )
                         return
                     continuation_body = dict(body)
+                    continuation_body["expected_task_id"] = str(body.get("task_id") or "").strip()
                     continuation_body["feedback"] = session.continuation_feedback(
                         str(body.get("feedback") or "")
                     )
@@ -589,6 +604,16 @@ def make_handler(
                         status=HTTPStatus.BAD_REQUEST,
                     )
                 else:
+                    task_id = body.get("task_id")
+                    if not isinstance(task_id, str) or not task_id.strip():
+                        self._json(
+                            {
+                                "ok": False,
+                                "error": "task_id is required for current-task actions.",
+                            },
+                            status=HTTPStatus.BAD_REQUEST,
+                        )
+                        return
                     feedback = str(body.get("message") or "").strip()
                     if not feedback:
                         self._json(
@@ -602,47 +627,81 @@ def make_handler(
                             status=HTTPStatus.BAD_REQUEST,
                         )
                         return
-                    current = session.record(status_task(bridge))
-                    current_status = str(current.get("status") or "")
-                    if current_status in {"starting", "working", "checking"}:
-                        action = "nudge"
-                    elif current_status == "needs_review":
-                        action = "continue"
-                    else:
-                        self._json(
+                    with task_action_lock:
+                        current = session.record(status_task(bridge))
+                        current_status = str(current.get("status") or "")
+                        if current_status in {"starting", "working", "checking"}:
+                            action = "nudge"
+                        elif current_status == "needs_review":
+                            action = "continue"
+                        else:
+                            self._json(
+                                {
+                                    "ok": False,
+                                    "error": "Start a managed task before sending guidance.",
+                                },
+                                status=HTTPStatus.CONFLICT,
+                            )
+                            return
+                        if task_id != current.get("id"):
+                            self._json(
+                                {
+                                    "ok": False,
+                                    "error": "The requested task is no longer current.",
+                                },
+                                status=HTTPStatus.CONFLICT,
+                            )
+                            return
+                        try:
+                            revision = session.append_user_message(current, feedback, action=action)
+                        except (GuiSecurityError, ValueError) as exc:
+                            self._json(
+                                {"ok": False, "error": str(exc)},
+                                status=HTTPStatus.CONFLICT,
+                            )
+                            return
+                        controlling_feedback = session.controlling_guidance()
+                        task = command_task(
+                            bridge,
+                            action,
                             {
-                                "ok": False,
-                                "error": "Start a managed task before sending guidance.",
+                                "feedback": controlling_feedback,
+                                "expected_task_id": task_id,
                             },
-                            status=HTTPStatus.CONFLICT,
                         )
-                        return
-                    try:
-                        revision = session.append_user_message(current, feedback, action=action)
-                    except (GuiSecurityError, ValueError) as exc:
+                        delivered = str(task.get("status") or "") != "blocked"
+                        advanced = task.get("advanced_details")
+                        payload = (
+                            advanced.get("payload")
+                            if isinstance(advanced, dict)
+                            else None
+                        )
+                        identity_conflict = (
+                            isinstance(payload, dict)
+                            and payload.get("reason") == "active_run_changed"
+                        )
+                        invalidate = getattr(bridge, "invalidate_status_caches", None)
+                        if delivered and callable(invalidate):
+                            invalidate()
+                        session.mark_message_delivery(
+                            revision,
+                            "delivered" if delivered else "failed",
+                        )
+                        if delivered:
+                            task = status_task(bridge)
+                        task = session.record(task)
                         self._json(
-                            {"ok": False, "error": str(exc)},
-                            status=HTTPStatus.CONFLICT,
+                            task,
+                            status=(
+                                HTTPStatus.OK
+                                if delivered
+                                else (
+                                    HTTPStatus.CONFLICT
+                                    if identity_conflict
+                                    else HTTPStatus.BAD_GATEWAY
+                                )
+                            ),
                         )
-                        return
-                    controlling_feedback = session.controlling_guidance()
-                    task = command_task(
-                        bridge,
-                        action,
-                        {"feedback": controlling_feedback},
-                    )
-                    delivered = str(task.get("status") or "") != "blocked"
-                    invalidate = getattr(bridge, "invalidate_status_caches", None)
-                    if delivered and callable(invalidate):
-                        invalidate()
-                    session.mark_message_delivery(
-                        revision,
-                        "delivered" if delivered else "failed",
-                    )
-                    if delivered:
-                        task = status_task(bridge)
-                    task = session.record(task)
-                    self._json(task, status=HTTPStatus.OK if delivered else HTTPStatus.BAD_GATEWAY)
             elif route == "/api/tasks/current/approve-spec":
                 if active is not None:
                     raw_requirements = body.get("requirements")

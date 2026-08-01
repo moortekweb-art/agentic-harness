@@ -2251,15 +2251,17 @@ def test_gui_supervised_messages_are_revisioned_and_cumulative() -> None:
             "/api/tasks",
             {"mode": "local", "objective": "build the feature", "safe_areas": ["src"]},
         )
+        current = get_json(base_url, "/api/tasks/current")
+        task_id = str(current["id"])
         first = post_json(
             base_url,
             "/api/tasks/current/message",
-            {"message": "Keep the public API compatible."},
+            {"task_id": task_id, "message": "Keep the public API compatible."},
         )
         second = post_json(
             base_url,
             "/api/tasks/current/message",
-            {"message": "Also add a regression test."},
+            {"task_id": task_id, "message": "Also add a regression test."},
         )
 
     messages = second["metadata"]["conversation"]
@@ -2268,9 +2270,12 @@ def test_gui_supervised_messages_are_revisioned_and_cumulative() -> None:
     assert first["metadata"]["conversation"][0]["run_id"] == "run-1"
     nudge_commands = [command for command in bridge.commands if command[0] == "nudge"]
     assert len(nudge_commands) == 2
-    assert "Revision 1: Keep the public API compatible." in nudge_commands[1][2]
-    assert "Revision 2: Also add a regression test." in nudge_commands[1][2]
-    assert "independent acceptance criteria remain unchanged" in nudge_commands[1][2]
+    assert nudge_commands[1][1:3] == ["--expected-run-id", "run-1"]
+    assert "Revision 1: Keep the public API compatible." in " ".join(nudge_commands[1])
+    assert "Revision 2: Also add a regression test." in " ".join(nudge_commands[1])
+    assert "independent acceptance criteria remain unchanged" in " ".join(
+        nudge_commands[1]
+    )
 
 
 def test_gui_supervised_message_requires_active_managed_run() -> None:
@@ -2287,12 +2292,77 @@ def test_gui_supervised_message_requires_active_managed_run() -> None:
         result = post_error(
             base_url,
             "/api/tasks/current/message",
-            json.dumps({"message": "Do something"}).encode("utf-8"),
+            json.dumps({"task_id": "run-1", "message": "Do something"}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
 
     assert result.code == 409
     assert "Start a managed task" in str(result.payload["error"])
+
+
+def test_gui_supervised_message_requires_the_exact_current_task_id() -> None:
+    class StableIdentityBridge(FakeBridge):
+        def start_human_goal(self, **kwargs: object) -> CommandResult:
+            result = super().start_human_goal(**kwargs)  # type: ignore[arg-type]
+            return CommandResult(result.args, 0, "queued\nrun_dir=/tmp/run-2\n", "")
+
+        def status(self, *, json_output: bool = False) -> CommandResult:
+            return CommandResult(
+                ("local-goal", "status", "--json"),
+                0,
+                json.dumps(
+                    {
+                        "classification": "working",
+                        "active_goal": {
+                            "id": "run-2",
+                            "status": "running",
+                            "objective": "current task",
+                            "run_dir": "/tmp/run-2",
+                        },
+                    }
+                ),
+                "",
+            )
+
+    bridge = StableIdentityBridge()
+    with gui_server(bridge) as base_url:
+        post_json(
+            base_url,
+            "/api/tasks",
+            {"mode": "local", "objective": "current task", "safe_areas": ["src"]},
+        )
+        current = get_json(base_url, "/api/tasks/current")
+        task_id = str(current["id"])
+        missing = post_error(
+            base_url,
+            "/api/tasks/current/message",
+            json.dumps({"message": "missing identity"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        stale = post_error(
+            base_url,
+            "/api/tasks/current/message",
+            json.dumps(
+                {"task_id": task_id + "-stale", "message": "stale guidance"}
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        matching = post_json(
+            base_url,
+            "/api/tasks/current/message",
+            {"task_id": task_id, "message": "matching guidance"},
+        )
+
+    assert missing.code == 400
+    assert "task_id is required" in str(missing.payload["error"])
+    assert stale.code == 409
+    assert "no longer current" in str(stale.payload["error"])
+    assert matching["id"] == task_id
+    nudge_commands = [command for command in bridge.commands if command[0] == "nudge"]
+    assert len(nudge_commands) == 1
+    assert nudge_commands[0][1:3] == ["--expected-run-id", task_id]
+    assert "matching guidance" in " ".join(nudge_commands[0])
+    assert "stale guidance" not in " ".join(nudge_commands[0])
 
 
 def test_gui_server_accepts_same_origin_json_post() -> None:
