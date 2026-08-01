@@ -23,6 +23,8 @@ control, and only then reports **Verified done**.
   decide whether the result is accepted.
 - **Keep the evidence.** Every run leaves a project-local, redacted report you
   can inspect or commit with the work.
+- **Choose your runtime.** Use the embedded worker, an installed coding app,
+  or an operator-owned OpenAI-compatible endpoint such as vLLM.
 - **Stay local by default.** The GUI binds to loopback, and local model paths do
   not require a cloud service.
 
@@ -58,14 +60,14 @@ mechanics demo, not evidence about model quality. See the complete
 <table>
   <tr>
     <td width="50%" align="center" valign="top">
-      <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui.png">
-        <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui.png" width="420" alt="Agentic Harness Home screen">
+      <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-home-0.13.6.png">
+        <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-home-0.13.6.png" width="420" alt="Agentic Harness Home screen with a free-form task prompt and safe demo">
       </a>
-      <br><sub><strong>Describe the outcome.</strong> Choose an effort level and see what will run before files change.</sub>
+      <br><sub><strong>Describe the outcome.</strong> Use a normal sentence, choose an effort level, and see what will run before files change.</sub>
     </td>
     <td width="50%" align="center" valign="top">
-      <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-verified.png">
-        <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-verified.png" width="420" alt="Agentic Harness verified task evidence">
+      <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-verified-0.13.6.png">
+        <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-verified-0.13.6.png" width="420" alt="Agentic Harness verified task evidence">
       </a>
       <br><sub><strong>Inspect the proof.</strong> Verified done includes changed files, the worker report, and independent evidence.</sub>
     </td>
@@ -76,14 +78,29 @@ mechanics demo, not evidence about model quality. See the complete
 <summary>See the mobile first-run experience</summary>
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-mobile.png">
-    <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-mobile.png" width="220" alt="Agentic Harness mobile first-run screen">
+  <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-mobile-0.13.6.png">
+    <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-mobile-0.13.6.png" width="220" alt="Agentic Harness mobile Home screen with the safe demo result">
   </a>
 </p>
 
 </details>
 
 Click any preview for the full-size screenshot.
+
+<details>
+<summary>See guided setup and provider settings</summary>
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-settings-0.13.6.png">
+    <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-settings-0.13.6.png" width="720" alt="Agentic Harness guided setup and provider settings">
+  </a>
+</p>
+
+The setup flow tests the selected connection before saving it. Provider,
+execution method, task effort, and completion assurance remain separate
+choices.
+
+</details>
 
 ## Prefer the terminal?
 
@@ -154,36 +171,42 @@ route can remain hidden. The interface never silently changes a local selection
 to a cloud route.
 
 <details>
-<summary>Example managed installation</summary>
+<summary>How embedded, managed, and model-provider layers fit together</summary>
 
-This example includes installation-specific local and cloud routes. Friendly
-names lead; technical mode identifiers stay in Advanced details. Choices appear
-only when the connected backend proves that they exist and reports their current
-availability, and unavailable routes remain visible with a reason.
+The embedded worker is the default. A managed runtime such as Local Studio is
+optional and remains operator-owned; it is not bundled as a hidden dependency.
+The model provider is a separate choice, so a managed route can use an
+operator's vLLM or another OpenAI-compatible endpoint without changing the
+Harness's completion gate.
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-managed.png">
-    <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-gui-managed.png" width="720" alt="Managed Agentic Harness installation with execution routes and local model profiles">
+  <a href="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-architecture-0.13.6.svg">
+    <img src="https://raw.githubusercontent.com/moortekweb-art/agentic-harness/main/docs/assets/agentic-harness-architecture-0.13.6.svg" width="720" alt="Agentic Harness architecture showing embedded and managed runtimes with local or cloud model providers">
   </a>
 </p>
+
+See [Local Studio and model runtimes](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/LOCAL_STUDIO_INTEGRATION.md) for the deployment boundary and private-network guidance.
 
 </details>
 
 ## Current evidence and open beta
 
-Version 0.12.0 is a released self-hosted completion-assurance tool validated
-against the project's frozen adversarial protocol. Its frozen specification and evidence boundaries passed a
-preregistered ten-case adversarial matrix with zero false verified completions.
-External usability and real-agent performance validation remain in progress.
+Version 0.13.6 is the current released self-hosted completion-assurance tool.
+It closes verifier and managed-GUI trust-boundary gaps while preserving the
+one-trusted-user, one-workspace product boundary. The release is suitable for
+bounded self-hosted use; it is not a hosted multi-user service or an
+independent security audit.
 
-- Read the [v0.12.0 release and evidence packet](https://github.com/moortekweb-art/agentic-harness/releases/tag/v0.12.0).
+- Read the [v0.13.6 release notes](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/RELEASE_NOTES_0.13.6.md).
 - Review the [assurance protocol](https://github.com/moortekweb-art/agentic-harness/blob/main/evaluation/V012_ASSURANCE_PROTOCOL.md).
 - Try it on a disposable branch using the [external beta guide](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/EXTERNAL_BETA.md).
 - Count a success, failure, blocked setup, or abandoned attempt through the
   [beta issue form](https://github.com/moortekweb-art/agentic-harness/issues/new?template=external-beta.yml).
 
-The project does not claim that the harness improves model intelligence or that
-the still-open external beta has already proved broad usability.
+The project does not claim that the harness improves model intelligence or
+that one safe demo proves broad real-agent performance. Treat external model
+and managed-runtime integrations as deployment-specific until their own
+connection, identity, and end-to-end acceptance paths have been verified.
 
 ## Advanced Workflows
 
@@ -618,6 +641,7 @@ goal/report smoke test, and writes `SHA256SUMS` beside the artifacts.
 
 - [GUI architecture](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_ARCHITECTURE.md)
 - [GUI design](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_DESIGN.md)
+- [Local Studio and model runtimes](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/LOCAL_STUDIO_INTEGRATION.md)
 - [GUI deployment](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/GUI_DEPLOYMENT.md)
 - [Public-release boundary](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/PUBLIC_RELEASE.md)
 - [Autonomous goal contract](https://github.com/moortekweb-art/agentic-harness/blob/main/docs/CODEX_GOAL_PARITY.md)

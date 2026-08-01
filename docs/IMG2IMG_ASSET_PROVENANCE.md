@@ -11,6 +11,21 @@ status evidence and never runtime-generated content.
 - `docs/assets/gui-concepts/review-desk.png` — evidence/review semantics
 - `docs/assets/agentic-harness-social-preview.png` — limited technical depth
 
+## Current product screenshots
+
+The 0.13.6 GUI screenshots used by the public README are behavioral captures,
+not generated illustrations:
+
+- `agentic-harness-gui-home-0.13.6.png`
+- `agentic-harness-gui-settings-0.13.6.png`
+- `agentic-harness-gui-verified-0.13.6.png`
+- `agentic-harness-gui-mobile-0.13.6.png`
+
+They were captured on 2026-08-01 from the packaged GUI against a disposable
+workspace using the built-in safe demo. The fixture used no model, API key,
+private host, or maintainer workspace. The architecture overview
+`agentic-harness-architecture-0.13.6.svg` is hand-authored, versioned artwork.
+
 ## Assets
 
 | Runtime asset | Source master | Purpose | Generation record |
