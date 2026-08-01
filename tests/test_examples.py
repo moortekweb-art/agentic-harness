@@ -90,7 +90,8 @@ def test_readme_public_intro_leads_with_a_short_product_and_install_path() -> No
         '--check "python -m pytest tests/ -q"'
     ) in public_intro
     assert ".agentic-harness/runs/{goal-id}/report.md" in public_intro
-    assert "agentic-harness-gui.png" in public_intro
+    assert "agentic-harness-gui-home-0.13.6.png" in public_intro
+    assert "agentic-harness-gui-verified-0.13.6.png" in public_intro
     assert 'width="420"' in public_intro
     assert "See the mobile first-run experience" in public_intro
     assert 'width="220"' in public_intro
