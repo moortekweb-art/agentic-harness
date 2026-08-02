@@ -667,13 +667,13 @@ exec
 /bin/bash -lc "ls -la && sed -n '1,120p' limits.py && rg --files ." in [local-path]
  succeeded in 0ms:
 total 16
-drwx------ 6 ai-inference ai-inference 4096 Jul 12 00:58 .
-drwx------ 4 ai-inference ai-inference 4096 Jul 12 00:57 ..
-drwx------ 3 ai-inference ai-inference 4096 Jul 12 00:57 .agentic-harness
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 00:58 .agents
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 00:58 .codex
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 00:58 .git
--rw------- 1 ai-inference ai-inference   65 Jul 12 00:57 limits.py
+drwx------ 6 evalhost evalhost 4096 Jul 12 00:58 .
+drwx------ 4 evalhost evalhost 4096 Jul 12 00:57 ..
+drwx------ 3 evalhost evalhost 4096 Jul 12 00:57 .agentic-harness
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 00:58 .agents
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 00:58 .codex
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 00:58 .git
+-rw------- 1 evalhost evalhost   65 Jul 12 00:57 limits.py
 def effective_limit(value, default):
     return value or default
 ./limits.py

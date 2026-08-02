@@ -55,13 +55,13 @@ git diff -- limits.py" in [local-path]
 def effective_limit(value, default):
     return value or default
 total 16
-drwx------ 6 ai-inference ai-inference 4096 Jul 12 01:17 .
-drwx------ 4 ai-inference ai-inference 4096 Jul 12 01:17 ..
-drwx------ 3 ai-inference ai-inference 4096 Jul 12 01:17 .agentic-harness
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:17 .agents
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:17 .codex
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:17 .git
--rw------- 1 ai-inference ai-inference   65 Jul 12 01:17 limits.py
+drwx------ 6 evalhost evalhost 4096 Jul 12 01:17 .
+drwx------ 4 evalhost evalhost 4096 Jul 12 01:17 ..
+drwx------ 3 evalhost evalhost 4096 Jul 12 01:17 .agentic-harness
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:17 .agents
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:17 .codex
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:17 .git
+-rw------- 1 evalhost evalhost   65 Jul 12 01:17 limits.py
 fatal: not a git repository (or any of the parent directories): .git
 warning: Not a git repository. Use --no-index to compare two paths outside a working tree
 usage: git diff --no-index [<options>] <path> <path>
