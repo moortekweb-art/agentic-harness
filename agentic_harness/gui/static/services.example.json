@@ -4,43 +4,49 @@
     "Copy this file to services.local.json in the same directory, then replace",
     "every placeholder host, port, and path with your real deployment values.",
     "services.local.json is gitignored so real hostnames never reach version",
-    "control. Hosts below use the your-host.example.ts.net placeholder form;",
-    "ports 10000 and 8765 are examples only, not defaults of anything."
+    "control. Every host below uses the reserved example.invalid domain and",
+    "every port is arbitrary; nothing here is a default of anything.",
+    "Schema: the top level is either {\"services\": [entry, ...]} or a bare",
+    "[entry, ...] array. Each entry is an object with a required non-empty",
+    "\"label\" (string), a required \"url\" (string, must be an http:// or",
+    "https:// URL), and an optional \"note\" (string). Entries missing a label",
+    "or a usable url are skipped and counted on the page. Unknown keys are",
+    "ignored. This _comment key is documentation only and is ignored too."
   ],
   "services": [
     {
       "label": "Host root",
-      "url": "https://your-host.example.ts.net/",
+      "url": "https://your-host.example.invalid/",
       "note": "Whatever you serve at the root of this machine (for many setups, a model-management panel)."
     },
     {
       "label": "Hub",
-      "url": "https://your-host.example.ts.net/hub/",
+      "url": "https://your-host.example.invalid/hub/",
       "note": "Example of a service mounted behind a reverse-proxy path prefix at /hub/."
     },
     {
       "label": "Cluster",
-      "url": "https://your-host.example.ts.net/cluster/",
+      "url": "https://your-host.example.invalid/cluster/",
       "note": "Example of a second reverse-proxy path mount at /cluster/."
     },
     {
       "label": "Agentic Harness GUI",
-      "url": "https://your-host.example.ts.net:10000/",
-      "note": "This app, if you expose it on its own port. Port 10000 is a placeholder; use whatever you pass to agentic-harness-gui --port."
+      "url": "https://your-host.example.invalid:10000/",
+      "note": "This app, if you expose it on its own port. The port here is a placeholder; use whatever you pass to agentic-harness-gui --port."
     },
     {
       "label": "Utility services",
-      "url": "https://your-host.example.ts.net:8765/",
-      "note": "Example of a small utility service exposed on its own port (8765 is a placeholder)."
+      "url": "https://your-host.example.invalid:8791/",
+      "note": "Example of a small utility service exposed on its own port (the port is a placeholder)."
     },
     {
       "label": "Agent Society",
-      "url": "https://node2.your-tailnet.example.ts.net/agent-society/",
+      "url": "https://second-host.example.invalid/agent-society/",
       "note": "Example of a service running on a second machine on the same private network."
     },
     {
       "label": "Local Studio",
-      "url": "https://your-host.example.ts.net/studio/",
+      "url": "https://your-host.example.invalid/studio/",
       "note": "Point this at your local model studio panel, wherever you serve it."
     }
   ]

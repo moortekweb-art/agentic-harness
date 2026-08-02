@@ -9,9 +9,13 @@
 //
 //   { "services": [ { "label": "...", "url": "https://...", "note": "..." } ] }
 //
-// A bare top-level array of entries is accepted too. Missing file, invalid
-// JSON, or an empty list all fall back to a friendly empty state that tells
-// the operator how to create the file.
+// A bare top-level array of entries is accepted too. "label" and "url" are
+// required per entry; "note" is optional. Every failure mode falls back to the
+// empty state that tells the operator how to create the file: a missing file
+// shows just those instructions, while a transport failure, a non-404 HTTP
+// status, invalid JSON, the wrong top-level shape, or entries missing a label
+// or a usable http(s) url also show a notice naming the specific problem.
+// Nothing here ever throws, spins forever, or renders a blank page.
 "use strict";
 
 (function () {
@@ -51,11 +55,18 @@
   function renderServices(entries) {
     list.textContent = "";
     let rendered = 0;
+    let skipped = 0;
     for (const entry of entries) {
-      if (typeof entry !== "object" || entry === null) continue;
+      if (typeof entry !== "object" || entry === null) {
+        skipped += 1;
+        continue;
+      }
       const label = String(entry.label || "").trim();
       const href = safeHref(entry.url);
-      if (!label || !href) continue;
+      if (!label || !href) {
+        skipped += 1;
+        continue;
+      }
 
       const item = document.createElement("li");
       const link = document.createElement("a");
@@ -85,8 +96,21 @@
       rendered += 1;
     }
     if (rendered === 0) {
+      showStatus(
+        skipped === 1
+          ? "services.local.json has 1 entry, but it is unusable: every entry needs a non-empty \"label\" and an http:// or https:// \"url\"."
+          : "services.local.json has " + skipped + " entries, but none are usable: every entry needs a non-empty \"label\" and an http:// or https:// \"url\".",
+      );
       showEmpty();
       return;
+    }
+    if (skipped > 0) {
+      showStatus(
+        "Skipped " + skipped + (skipped === 1 ? " entry" : " entries") +
+          " in services.local.json: every entry needs a non-empty \"label\" and an http:// or https:// \"url\".",
+      );
+    } else {
+      showStatus("");
     }
     empty.hidden = true;
     list.hidden = false;
@@ -98,11 +122,24 @@
       // Relative on purpose: resolves next to portal.html at any mount.
       response = await fetch("services.local.json", { cache: "no-store" });
     } catch (error) {
+      // The page itself loaded, so this is a transport problem, not a missing
+      // file: say so instead of implying the operator forgot to create it.
+      showStatus(
+        "Could not reach the server to load services.local.json. Check that the harness is still running, then reload.",
+      );
+      showEmpty();
+      return;
+    }
+    if (response.status === 404) {
+      // The normal "operator has not created the file yet" case: the setup
+      // instructions in the empty state are the whole message.
       showEmpty();
       return;
     }
     if (!response.ok) {
-      // 404 is the normal "operator has not created the file yet" case.
+      showStatus(
+        "The server returned HTTP " + response.status + " for services.local.json. Check the file's permissions on the machine running the harness.",
+      );
       showEmpty();
       return;
     }
@@ -114,12 +151,20 @@
       showEmpty();
       return;
     }
-    const entries = Array.isArray(payload)
-      ? payload
-      : Array.isArray(payload?.services)
-        ? payload.services
-        : [];
+    let entries;
+    if (Array.isArray(payload)) {
+      entries = payload;
+    } else if (payload && typeof payload === "object" && Array.isArray(payload.services)) {
+      entries = payload.services;
+    } else {
+      showStatus(
+        'services.local.json is valid JSON but the wrong shape. It must be {"services": [ ... ]} or a bare array of entries.',
+      );
+      showEmpty();
+      return;
+    }
     if (entries.length === 0) {
+      showStatus("");
       showEmpty();
       return;
     }

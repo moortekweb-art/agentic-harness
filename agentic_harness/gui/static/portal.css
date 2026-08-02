@@ -12,6 +12,7 @@
   --accent-strong: #174d44;
   --radius-md: 12px;
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --notice: #b06a1a;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -24,6 +25,7 @@
     --accent: #5fb3a1;
     --accent-strong: #7cc7b6;
     --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --notice: #e0a45c;
   }
 }
 
@@ -65,10 +67,18 @@ code {
   color: var(--muted);
 }
 
+/* Only shown when something is wrong with services.local.json, so it needs to
+   read as a notice rather than as muted body text next to the empty state. */
 .portal-status {
   margin: 0 0 16px;
-  color: var(--muted);
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--notice);
+  border-radius: var(--radius-md);
+  color: var(--ink);
   font-size: 0.92rem;
+  overflow-wrap: anywhere;
 }
 
 .service-list {
