@@ -1,0 +1,47 @@
+{
+  "_comment": [
+    "Template for the Local Network Portal (portal.html).",
+    "Copy this file to services.local.json in the same directory, then replace",
+    "every placeholder host, port, and path with your real deployment values.",
+    "services.local.json is gitignored so real hostnames never reach version",
+    "control. Hosts below use the your-host.example.ts.net placeholder form;",
+    "ports 10000 and 8765 are examples only, not defaults of anything."
+  ],
+  "services": [
+    {
+      "label": "Host root",
+      "url": "https://your-host.example.ts.net/",
+      "note": "Whatever you serve at the root of this machine (for many setups, a model-management panel)."
+    },
+    {
+      "label": "Hub",
+      "url": "https://your-host.example.ts.net/hub/",
+      "note": "Example of a service mounted behind a reverse-proxy path prefix at /hub/."
+    },
+    {
+      "label": "Cluster",
+      "url": "https://your-host.example.ts.net/cluster/",
+      "note": "Example of a second reverse-proxy path mount at /cluster/."
+    },
+    {
+      "label": "Agentic Harness GUI",
+      "url": "https://your-host.example.ts.net:10000/",
+      "note": "This app, if you expose it on its own port. Port 10000 is a placeholder; use whatever you pass to agentic-harness-gui --port."
+    },
+    {
+      "label": "Utility services",
+      "url": "https://your-host.example.ts.net:8765/",
+      "note": "Example of a small utility service exposed on its own port (8765 is a placeholder)."
+    },
+    {
+      "label": "Agent Society",
+      "url": "https://node2.your-tailnet.example.ts.net/agent-society/",
+      "note": "Example of a service running on a second machine on the same private network."
+    },
+    {
+      "label": "Local Studio",
+      "url": "https://your-host.example.ts.net/studio/",
+      "note": "Point this at your local model studio panel, wherever you serve it."
+    }
+  ]
+}

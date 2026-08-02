@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Local Network Portal</title>
+    <link rel="icon" href="static/favicon.svg" type="image/svg+xml" />
+    <!-- All URLs here are relative on purpose: the page works at the bare
+         mount and behind any reverse-proxy path prefix. The server CSP is
+         style-src 'self' and script-src 'self', so styling lives in
+         portal.css and behavior in portal.js (no inline style or script). -->
+    <link rel="stylesheet" href="portal.css" />
+  </head>
+  <body>
+    <main class="portal">
+      <header class="portal-head">
+        <h1>Local Network Portal</h1>
+        <p>
+          One page of links to the services on your local network. The list is
+          loaded from an operator-supplied <code>services.local.json</code>
+          next to this page &mdash; no hostnames are baked into the app.
+        </p>
+      </header>
+
+      <p id="portalStatus" class="portal-status" hidden></p>
+
+      <ul id="serviceList" class="service-list" hidden></ul>
+
+      <section id="portalEmpty" class="portal-empty" hidden>
+        <h2>No services configured yet</h2>
+        <p>
+          This portal renders link cards from <code>services.local.json</code>,
+          a file you create on the machine that runs the harness. It is kept
+          out of version control, so your real hostnames never end up in a
+          repository.
+        </p>
+        <ol>
+          <li>
+            Copy the template that ships with the app:
+            <code>cp services.example.json services.local.json</code> inside
+            <code>agentic_harness/gui/static/</code> of this installation (the
+            harness serves it next to <code>portal.html</code>).
+          </li>
+          <li>
+            Edit each entry&rsquo;s <code>label</code>, <code>url</code>, and
+            <code>note</code> to match your real hosts and ports.
+          </li>
+          <li>Reload this page.</li>
+        </ol>
+        <p>
+          <a href="services.example.json">View the services.example.json template</a>
+        </p>
+      </section>
+
+      <noscript>
+        <p class="portal-status">
+          JavaScript is disabled, so the operator-supplied service list cannot
+          be loaded. The template it follows is
+          <a href="services.example.json">services.example.json</a>.
+        </p>
+      </noscript>
+
+      <footer class="portal-foot">
+        <a href="./">Back to the Agentic Harness GUI</a>
+      </footer>
+    </main>
+    <script src="portal.js"></script>
+  </body>
+</html>

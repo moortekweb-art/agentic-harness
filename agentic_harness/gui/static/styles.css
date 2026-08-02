@@ -2265,3 +2265,28 @@ dialog::backdrop {
     flex-direction: column;
   }
 }
+
+/* Links out to sibling services on the local network (index.html footer). */
+.network-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 24px;
+  padding: 12px 4px 4px;
+  border-top: 1px solid var(--line);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.network-footer-label {
+  font-weight: 600;
+}
+.network-footer a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.network-footer a:hover,
+.network-footer a:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}

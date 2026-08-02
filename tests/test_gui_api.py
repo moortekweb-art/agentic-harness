@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import re
 import socket
 import subprocess
 import sys
@@ -299,7 +300,10 @@ def test_gui_uses_local_custom_icons_across_primary_controls() -> None:
     assert "lucide" not in html.lower()
     assert "unpkg.com/lucide" not in html
     assert "cdn.jsdelivr.net/npm/lucide" not in html
-    assert '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />' in html
+    # Relative on purpose: the GUI must keep working behind reverse-proxy
+    # path prefixes (e.g. tailscale-serve /hub/), where root-absolute
+    # /static/* asset URLs 404.
+    assert '<link rel="icon" href="static/favicon.svg" type="image/svg+xml" />' in html
     assert not (static_root / "icons.svg").exists()
     assert 'id="icon-zap"' in html
     assert 'id="icon-map"' in html
@@ -1621,7 +1625,7 @@ def test_gui_console_entrypoint_forwards_launch_options_without_opening(
                 "--host",
                 "0.0.0.0",
                 "--port",
-                "8765",
+                "8791",
                 "--project-dir",
                 "~/work",
                 "--backend",
@@ -1636,7 +1640,7 @@ def test_gui_console_entrypoint_forwards_launch_options_without_opening(
     assert calls == [
         {
             "host": "0.0.0.0",
-            "port": 8765,
+            "port": 8791,
             "doc_root": home / "docs",
             "project_dir": home / "work",
             "backend": "local-goal",
@@ -1737,6 +1741,63 @@ def test_gui_serves_only_approved_nested_illustration_assets(monkeypatch) -> Non
     assert content_type == "image/webp"
     assert disallowed_nested.value.code == 404
     assert traversal.value.code == 404
+
+
+def test_gui_serves_data_driven_portal_without_hardcoded_topology() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+
+    with gui_server(FakeBridge()) as base_url:
+        portal = get_text(base_url, "/portal.html")
+        portal_js = get_text(base_url, "/portal.js")
+        portal_css = get_text(base_url, "/portal.css")
+        example = get_text(base_url, "/services.example.json")
+        if not (static_root / "services.local.json").exists():
+            # Operator file absent (the committed state): the portal must get a
+            # plain 404 and fall back to its empty state, not an error page.
+            with pytest.raises(urllib.error.HTTPError) as missing_local:
+                urllib.request.urlopen(base_url + "/services.local.json", timeout=3)
+            assert missing_local.value.code == 404
+
+    # The portal is data-driven: links come from the gitignored
+    # services.local.json, fetched via a relative URL so the page keeps
+    # working behind reverse-proxy path prefixes.
+    assert 'fetch("services.local.json"' in portal_js
+    assert 'src="portal.js"' in portal
+    assert 'href="portal.css"' in portal
+    assert "cp services.example.json services.local.json" in portal
+    assert ".portal-empty" in portal_css
+    assert json.loads(example)["services"], "example template must list placeholder services"
+
+    # CSP is style-src 'self' / script-src 'self': no inline style or script.
+    assert "<style" not in portal
+    assert "style=" not in portal
+    assert 'src="portal.js"></script>' in portal
+    assert portal.count("<script") == 1
+
+    # Same intent as tests/test_examples.py's private-infrastructure gate,
+    # applied to the public GUI surface: no real tailnet topology may ship in
+    # tracked static files. Placeholder hosts must use the *.example.ts.net
+    # form (which also rules out any real tailnet domain); the private utility
+    # service name stays out entirely. The marker is assembled at runtime so
+    # this public file never contains the private name verbatim.
+    private_service_marker = "utility" + " " + "hub"
+    index_html = (static_root / "index.html").read_text(encoding="utf-8")
+    surfaces = {
+        "portal.html": portal,
+        "portal.js": portal_js,
+        "portal.css": portal_css,
+        "services.example.json": example,
+        "index.html": index_html,
+        "app.js": (static_root / "app.js").read_text(encoding="utf-8"),
+        "styles.css": (static_root / "styles.css").read_text(encoding="utf-8"),
+    }
+    for name, text in surfaces.items():
+        normalized = text.casefold()
+        assert private_service_marker not in normalized, name
+        for match in re.findall(r"[a-z0-9._-]*ts\.net", normalized):
+            assert match.endswith(".example.ts.net"), (name, match)
+
+    assert 'href="portal.html"' in index_html
 
 
 def test_gui_token_mode_websocket_rejects_query_token(monkeypatch) -> None:
@@ -2102,7 +2163,7 @@ def test_run_server_expands_explicit_doc_root(monkeypatch, tmp_path) -> None:
     result = gui_server_module.run_server_from_args(
         SimpleNamespace(
             host="127.0.0.1",
-            port=8765,
+            port=8791,
             doc_root="~/docs",
             no_open=True,
         )
