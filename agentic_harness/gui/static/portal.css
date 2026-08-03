@@ -1,0 +1,173 @@
+/* Local Network Portal (portal.html). Standalone stylesheet: the GUI server's
+   CSP is style-src 'self', so no inline styles are possible. Mirrors the
+   palette in styles.css and follows the OS light/dark preference. */
+
+:root {
+  --bg: #f7f6f1;
+  --panel: #ffffff;
+  --ink: #1f2528;
+  --muted: #697176;
+  --line: #d8d8d0;
+  --accent: #27695d;
+  --accent-strong: #174d44;
+  --radius-md: 12px;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --notice: #b06a1a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161a1d;
+    --panel: #20262a;
+    --ink: #edf1ed;
+    --muted: #9aa4a0;
+    --line: #333b40;
+    --accent: #5fb3a1;
+    --accent-strong: #7cc7b6;
+    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --notice: #e0a45c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 5px;
+  overflow-wrap: anywhere;
+}
+
+.portal {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 40px 20px 56px;
+}
+
+.portal-head h1 {
+  margin: 0 0 8px;
+  font-size: 1.7rem;
+}
+
+.portal-head p {
+  margin: 0 0 28px;
+  color: var(--muted);
+}
+
+/* Only shown when something is wrong with services.local.json, so it needs to
+   read as a notice rather than as muted body text next to the empty state. */
+.portal-status {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--notice);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.service-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.service {
+  display: block;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 120ms ease;
+}
+
+.service:hover,
+.service:focus-visible {
+  border-color: var(--accent);
+}
+
+.service-name {
+  display: block;
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--accent-strong);
+}
+
+.service-desc {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.service-url {
+  display: block;
+  margin-top: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.portal-empty {
+  padding: 20px 22px;
+  background: var(--panel);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+}
+
+.portal-empty h2 {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+}
+
+.portal-empty p {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.portal-empty ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+  color: var(--muted);
+}
+
+.portal-empty li {
+  margin-bottom: 6px;
+}
+
+.portal-empty a,
+.portal-status a {
+  color: var(--accent);
+}
+
+.portal-foot {
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+
+.portal-foot a {
+  color: var(--accent);
+}

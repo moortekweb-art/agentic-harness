@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import re
 import socket
 import subprocess
 import sys
@@ -299,7 +300,10 @@ def test_gui_uses_local_custom_icons_across_primary_controls() -> None:
     assert "lucide" not in html.lower()
     assert "unpkg.com/lucide" not in html
     assert "cdn.jsdelivr.net/npm/lucide" not in html
-    assert '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />' in html
+    # Relative on purpose: the GUI must keep working behind reverse-proxy
+    # path prefixes (e.g. tailscale-serve /hub/), where root-absolute
+    # /static/* asset URLs 404.
+    assert '<link rel="icon" href="static/favicon.svg" type="image/svg+xml" />' in html
     assert not (static_root / "icons.svg").exists()
     assert 'id="icon-zap"' in html
     assert 'id="icon-map"' in html
@@ -1621,7 +1625,7 @@ def test_gui_console_entrypoint_forwards_launch_options_without_opening(
                 "--host",
                 "0.0.0.0",
                 "--port",
-                "8765",
+                "8791",
                 "--project-dir",
                 "~/work",
                 "--backend",
@@ -1636,7 +1640,7 @@ def test_gui_console_entrypoint_forwards_launch_options_without_opening(
     assert calls == [
         {
             "host": "0.0.0.0",
-            "port": 8765,
+            "port": 8791,
             "doc_root": home / "docs",
             "project_dir": home / "work",
             "backend": "local-goal",
@@ -1737,6 +1741,157 @@ def test_gui_serves_only_approved_nested_illustration_assets(monkeypatch) -> Non
     assert content_type == "image/webp"
     assert disallowed_nested.value.code == 404
     assert traversal.value.code == 404
+
+
+def test_gui_serves_data_driven_portal_without_hardcoded_topology() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+
+    with gui_server(FakeBridge()) as base_url:
+        portal = get_text(base_url, "/portal.html")
+        portal_js = get_text(base_url, "/portal.js")
+        portal_css = get_text(base_url, "/portal.css")
+        example = get_text(base_url, "/services.example.json")
+        if not (static_root / "services.local.json").exists():
+            # Operator file absent (the committed state): the portal must get a
+            # plain 404 and fall back to its empty state, not an error page.
+            with pytest.raises(urllib.error.HTTPError) as missing_local:
+                urllib.request.urlopen(base_url + "/services.local.json", timeout=3)
+            assert missing_local.value.code == 404
+
+    # The portal is data-driven: links come from the gitignored
+    # services.local.json, fetched via a relative URL so the page keeps
+    # working behind reverse-proxy path prefixes.
+    assert 'fetch("services.local.json"' in portal_js
+    assert 'src="portal.js"' in portal
+    assert 'href="portal.css"' in portal
+    assert "cp services.example.json services.local.json" in portal
+    assert ".portal-empty" in portal_css
+    assert json.loads(example)["services"], "example template must list placeholder services"
+
+    # CSP is style-src 'self' / script-src 'self': no inline style or script.
+    assert "<style" not in portal
+    assert "style=" not in portal
+    assert 'src="portal.js"></script>' in portal
+    assert portal.count("<script") == 1
+
+    # Same intent as tests/test_examples.py's private-infrastructure gate,
+    # applied to the public GUI surface: no private topology may ship in
+    # tracked static files. Placeholder hosts must use the reserved
+    # example.invalid domain, so tailnet domains, RFC 1918 addresses and
+    # concrete host:port pairs are all rejected. The private markers are
+    # assembled at runtime so this public file never contains them verbatim.
+    tailnet_domain = "ts" + "." + "net"
+    private_service_marker = "utility" + " " + "hub"
+    rfc1918_prefixes = tuple(f"{octets}." for octets in ("192.168", "10.0.0", "172.16"))
+    banned = (tailnet_domain, private_service_marker, *rfc1918_prefixes)
+    # Loopback placeholders (the local-model endpoint hint) reveal nothing and
+    # stay allowed; every other concrete host:port pair is a topology leak.
+    allowed_hosts = "|".join(
+        (
+            re.escape("your-host.example.invalid"),
+            re.escape("second-host.example.invalid"),
+            re.escape("127.0.0.1"),
+            re.escape("localhost"),
+        )
+    )
+    host_port = re.compile(rf"//(?!(?:{allowed_hosts})\b)[a-z0-9.-]+:\d+")
+    index_html = (static_root / "index.html").read_text(encoding="utf-8")
+    surfaces = {
+        "portal.html": portal,
+        "portal.js": portal_js,
+        "portal.css": portal_css,
+        "services.example.json": example,
+        "index.html": index_html,
+        "app.js": (static_root / "app.js").read_text(encoding="utf-8"),
+        "styles.css": (static_root / "styles.css").read_text(encoding="utf-8"),
+    }
+    for name, text in surfaces.items():
+        normalized = text.casefold()
+        for marker in banned:
+            assert marker not in normalized, (name, marker)
+        assert not host_port.findall(normalized), (name, host_port.findall(normalized))
+
+    assert 'href="portal.html"' in index_html
+
+
+def test_portal_example_template_matches_documented_schema() -> None:
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    payload = json.loads((static_root / "services.example.json").read_text(encoding="utf-8"))
+
+    assert isinstance(payload, dict)
+    entries = payload["services"]
+    assert isinstance(entries, list) and entries
+
+    for entry in entries:
+        # The renderer drops any entry without both a label and an http(s)
+        # url, so the shipped template must never model a broken entry.
+        assert isinstance(entry, dict), entry
+        assert isinstance(entry.get("label"), str) and entry["label"].strip(), entry
+        assert isinstance(entry.get("url"), str), entry
+        assert entry["url"].startswith(("http://", "https://")), entry
+        if "note" in entry:
+            assert isinstance(entry["note"], str), entry
+        assert set(entry) <= {"label", "url", "note"}, entry
+
+
+def test_portal_handles_every_services_local_failure_mode() -> None:
+    """Every bad-input path must reach a readable state, never a blank page.
+
+    The portal has no JS test runner in this repo, so this locks the specific
+    guard branches and operator-facing wording that were verified by hand in a
+    browser: missing file, transport failure, non-404 HTTP status, invalid
+    JSON, wrong top-level shape, empty list, and entries missing a label or a
+    usable url.
+    """
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+    portal_js = (static_root / "portal.js").read_text(encoding="utf-8")
+    portal_html = (static_root / "portal.html").read_text(encoding="utf-8")
+
+    # Missing file: 404 is the "not configured yet" path and shows only the
+    # setup instructions, with no error notice.
+    assert "response.status === 404" in portal_js
+    # Transport failure and non-404 statuses each get their own message.
+    assert "Could not reach the server to load services.local.json" in portal_js
+    assert 'The server returned HTTP " + response.status' in portal_js
+    # Invalid JSON and wrong shape.
+    assert "is not valid JSON" in portal_js
+    assert "wrong shape" in portal_js
+    # Unusable entries are counted rather than silently dropped.
+    assert "none are usable" in portal_js
+    assert '"Skipped " + skipped' in portal_js
+    # The notice element exists, is announced, and is styled as a notice.
+    assert 'id="portalStatus"' in portal_html
+    assert 'role="status"' in portal_html
+    assert ".portal-status" in (static_root / "portal.css").read_text(encoding="utf-8")
+
+
+def test_gui_static_surfaces_have_no_root_absolute_urls() -> None:
+    """No asset or API reference may bypass the mount-relative chokepoint.
+
+    A single root-absolute ``/static/...`` or ``fetch("/api/...")`` breaks the
+    whole page behind a reverse-proxy path prefix, so this fails on the first
+    one rather than waiting for a deployment to notice.
+    """
+    static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
+
+    for name in ("index.html", "portal.html"):
+        text = (static_root / name).read_text(encoding="utf-8")
+        offenders = re.findall(r'(?:src|href|action|poster)="/[^/"]', text)
+        assert not offenders, (name, offenders)
+
+    for name in ("app.js", "auth.js", "assurance.js", "portal.js"):
+        text = (static_root / name).read_text(encoding="utf-8")
+        # Only the appPath() chokepoint and the WebSocket URL it feeds may
+        # combine a root-absolute path with a network call.
+        for call in re.findall(r"fetch\(\s*([\"'`])(/[^\"'`]*)\1", text):
+            raise AssertionError((name, "root-absolute fetch", call[1]))
+        for socket_url in re.findall(r"new WebSocket\(([^)]*)\)", text):
+            assert "window.location.host" in socket_url, (name, socket_url)
+            assert "appPath(" in socket_url, (name, socket_url)
+
+    for name in ("styles.css", "portal.css"):
+        text = (static_root / name).read_text(encoding="utf-8")
+        assert not re.findall(r"url\(\s*[\"']?/", text), name
 
 
 def test_gui_token_mode_websocket_rejects_query_token(monkeypatch) -> None:
@@ -2102,7 +2257,7 @@ def test_run_server_expands_explicit_doc_root(monkeypatch, tmp_path) -> None:
     result = gui_server_module.run_server_from_args(
         SimpleNamespace(
             host="127.0.0.1",
-            port=8765,
+            port=8791,
             doc_root="~/docs",
             no_open=True,
         )

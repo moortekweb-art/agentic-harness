@@ -4,6 +4,16 @@ const TOKEN_KEY = "agentic-harness-gui-session-token";
 const FOREGROUND_TASK_KEY = "agentic-harness-foreground-task-id";
 const ICON_PREFIX = "#icon-";
 const API_TIMEOUT_MS = 20000;
+// Directory of the current document ("/" at the bare mount, "/hub/" behind a
+// reverse-proxy path prefix). Root-absolute paths like "/api/..." are joined
+// onto it so the GUI keeps working behind tailscale-serve path mounts.
+const APP_ROOT = (() => {
+  const path = String(window.location.pathname || "/");
+  return path.endsWith("/") ? path : path.slice(0, path.lastIndexOf("/") + 1);
+})();
+function appPath(path) {
+  return APP_ROOT + String(path).replace(/^\/+/, "");
+}
 // Managed local-model profile changes can include a guarded model swap and startup probe.
 const START_TIMEOUT_MS = 360000;
 const MODES_REFRESH_MIN_INTERVAL_MS = 10000;
@@ -330,7 +340,7 @@ async function api(path, options = {}, retry = true, timeoutMs = API_TIMEOUT_MS)
     : null;
   let response;
   try {
-    response = await fetch(path, { ...options, headers, signal: controller?.signal });
+    response = await fetch(appPath(path), { ...options, headers, signal: controller?.signal });
   } catch (error) {
     if (controller?.signal.aborted) {
       throw new Error("The server took too long to respond. Try Refresh; your task state is preserved.");
@@ -1993,13 +2003,13 @@ function renderSetupJourney(setup) {
     step.classList?.toggle("done", index + 1 < activeStep || configured);
   });
   if (hasError) {
-    els.setupJourneyImage.src = "/static/illustrations/setup-recovery.webp";
+    els.setupJourneyImage.src = "static/illustrations/setup-recovery.webp";
     els.setupJourneySummary.textContent = "The saved configuration needs repair. Nothing will be overwritten until it is safe to continue.";
   } else if (configured) {
-    els.setupJourneyImage.src = "/static/illustrations/verified-archive.webp";
+    els.setupJourneyImage.src = "static/illustrations/verified-archive.webp";
     els.setupJourneySummary.textContent = "This project is connected and independently checked. You can update the settings or return Home to start work.";
   } else {
-    els.setupJourneyImage.src = "/static/illustrations/local-ai-connection.webp";
+    els.setupJourneyImage.src = "static/illustrations/local-ai-connection.webp";
     els.setupJourneySummary.textContent = "Choose how the assistant should run. Agentic Harness will test the full connection before saving it.";
   }
 }
@@ -2309,8 +2319,8 @@ function renderLocalModelDetection(payload) {
   const found = detected.length > 0;
   if (state.setup?.configured !== true && els.executionChoice.value === "local_model") {
     els.setupJourneyImage.src = found
-      ? "/static/illustrations/local-ai-connection.webp"
-      : "/static/illustrations/setup-recovery.webp";
+      ? "static/illustrations/local-ai-connection.webp"
+      : "static/illustrations/setup-recovery.webp";
     els.setupStepChoose.classList?.add("done");
     els.setupStepChoose.classList?.remove("current");
     els.setupStepConnect.classList?.toggle("current", !found);
@@ -2758,7 +2768,7 @@ function connectStatusStream() {
   }
   if (state.socket && Number(state.socket.readyState) < 2) return;
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-  const socket = new WebSocket(`${scheme}://${window.location.host}/api/tasks/stream`);
+  const socket = new WebSocket(`${scheme}://${window.location.host}${appPath("/api/tasks/stream")}`);
   state.socket = socket;
   socket.addEventListener("open", () => {
     state.reconnectDelay = 1000;

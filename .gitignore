@@ -34,3 +34,7 @@ Thumbs.db
 *.key
 *.pem
 *.token
+
+# Operator-local portal data — holds real private hostnames, never commit.
+# The tracked template is agentic_harness/gui/static/services.example.json.
+services.local.json
