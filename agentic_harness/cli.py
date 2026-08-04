@@ -45,7 +45,7 @@ from agentic_harness.core.local_goal_bridge import (
 from agentic_harness.gui.server import run_server_from_args
 from agentic_harness.core.recipes import Recipe, explain_recipe, list_recipes, load_recipe
 from agentic_harness.core.presentation import safe_inline_text
-from agentic_harness.core.redaction import redact_secrets
+from agentic_harness.core.redaction import redact_json_value
 from agentic_harness.core.reporting import (
     build_run_receipt,
     format_report_text,
@@ -2402,22 +2402,13 @@ def format_no_agent_text() -> str:
 
 
 def public_goal_payload(goal: Goal) -> dict[str, Any]:
-    def redact_value(value: Any) -> Any:
-        if isinstance(value, str):
-            return redact_secrets(value)
-        if isinstance(value, list):
-            return [redact_value(item) for item in value]
-        if isinstance(value, dict):
-            return {
-                redact_secrets(str(key)): redact_value(item)
-                for key, item in value.items()
-            }
-        return value
-
-    return {
-        key: redact_value(value)
-        for key, value in goal.to_dict().items()
-    }
+    # One canonical redaction boundary: structured and key-aware, so a
+    # sensitive field name redacts its value even when the value itself does
+    # not look secret-shaped.
+    payload = redact_json_value(goal.to_dict())
+    if not isinstance(payload, dict):
+        return {}
+    return {str(key): value for key, value in payload.items()}
 
 
 def status_json_payload(goal: Goal | None) -> dict[str, object]:
