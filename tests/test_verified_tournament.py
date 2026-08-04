@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 import agentic_harness.core.tournament as tournament_module
+import agentic_harness.core.verifier_manifest as verifier_manifest
 from agentic_harness.cli import main
 from agentic_harness.core.errors import ConfigError, HarnessError
 from agentic_harness.core.tournament import (
@@ -1550,6 +1551,505 @@ def test_pytest_shadow_candidate_cannot_be_accepted_end_to_end(tmp_path: Path) -
     assert result.applied is False
     assert all("pytest.py" in candidate.verifier_asset_drift for candidate in result.candidates)
     assert root.joinpath("value.txt").read_text(encoding="utf-8") == "original\n"
+
+
+@pytest.mark.parametrize(
+    "inline_test",
+    [
+        "#[test]\nfn value_is_one() { assert_eq!(value(), 1); }\n",
+        "#[cfg(test)]\nmod tests {\n    #[test]\n    fn ok() {}\n}\n",
+        "#![cfg(test)]\nfn ok() {}\n",
+        "#[bench]\nfn bench_value(b: &mut Bencher) {}\n",
+        "/// ```\n/// assert_eq!(project::value(), 1);\n/// ```\n",
+        "//! ```\n//! assert_eq!(project::value(), 1);\n//! ```\n",
+        "#[cfg(\n    test\n)]\nmod tests {}\n",
+    ],
+)
+def test_cargo_inline_rust_tests_refuse_automatic_inference(
+    tmp_path: Path,
+    inline_test: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / "Cargo.toml").write_text(
+        '[package]\nname = "project"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    source = root / "src" / "lib.rs"
+    source.parent.mkdir()
+    source.write_text(f"pub fn value() -> u32 {{ 1 }}\n\n{inline_test}", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add cargo project")
+
+    with pytest.raises(ConfigError, match="inline tests in editable Rust sources"):
+        tournament_module._freeze_verifier_assets(root, [["cargo", "test"]])
+
+
+def test_declared_rust_inline_test_source_cannot_be_weakened(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "Cargo.toml").write_text(
+        '[package]\nname = "project"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    source = root / "src" / "lib.rs"
+    source.parent.mkdir()
+    source.write_text(
+        "pub fn value() -> u32 { 1 }\n\n"
+        "#[cfg(test)]\nmod tests {\n"
+        "    #[test]\n"
+        "    fn value_is_one() { assert_eq!(super::value(), 1); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add cargo project")
+
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [["cargo", "test"]],
+        review_assets=["Cargo.toml", "src"],
+    )
+    source.write_text("pub fn value() -> u32 { 1 }\n", encoding="utf-8")
+
+    assert "src/lib.rs" in tournament_module._verifier_asset_drift(root, assets)
+
+
+def test_cargo_project_without_editable_inline_tests_is_frozen(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "Cargo.toml").write_text(
+        '[package]\nname = "project"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    source = root / "src" / "lib.rs"
+    source.parent.mkdir()
+    source.write_text("pub fn value() -> u32 { 1 }\n", encoding="utf-8")
+    integration = root / "tests" / "value.rs"
+    integration.parent.mkdir()
+    integration.write_text(
+        "#[test]\nfn value_is_one() { assert_eq!(project::value(), 1); }\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add cargo project")
+
+    assets = tournament_module._freeze_verifier_assets(root, [["cargo", "test"]])
+    integration.write_text("#[test]\nfn value_is_one() {}\n", encoding="utf-8")
+
+    assert "tests/value.rs" in tournament_module._verifier_asset_drift(root, assets)
+
+
+@pytest.mark.parametrize(
+    ("config_file", "config_text"),
+    [
+        ("pytest.ini", "[pytest]\ntestpaths = verification\n"),
+        ("pyproject.toml", '[tool.pytest.ini_options]\ntestpaths = ["verification"]\n'),
+    ],
+)
+def test_pytest_testpaths_candidate_cannot_weaken_the_selected_tree(
+    tmp_path: Path,
+    config_file: str,
+    config_text: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    verification = root / "verification"
+    verification.mkdir()
+    (verification / "test_value.py").write_text(
+        "from pathlib import Path\n\n"
+        "def test_value():\n"
+        "    assert Path('value.txt').read_text(encoding='utf-8') == 'good\\n'\n",
+        encoding="utf-8",
+    )
+    (root / config_file).write_text(config_text, encoding="utf-8")
+    worker = root / "worker.py"
+    source = worker.read_text(encoding="utf-8")
+    source = source.replace(
+        'Path("value.txt").write_text("bad\\n" if bad_candidate else "good\\n", encoding="utf-8")',
+        'Path("value.txt").write_text("bad\\n", encoding="utf-8")\n'
+        'Path("verification/test_value.py").write_text('
+        '"def test_value():\\n    assert True\\n", encoding="utf-8")',
+    )
+    worker.write_text(source, encoding="utf-8")
+    config_path = root / ".agentic-harness" / "config.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    command = [sys.executable, "-m", "pytest", "-q"]
+    config["review_command"] = command
+    config.pop("review_assets", None)
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "use pytest testpaths verifier")
+
+    result = run_verified_tournament(
+        root,
+        "Make value.txt contain good.",
+        candidate_count=2,
+        review_commands=[command],
+        max_attempts=1,
+    )
+
+    assert result.status == "blocked"
+    assert result.winner is None
+    assert result.applied is False
+    assert all(
+        "verification/test_value.py" in candidate.verifier_asset_drift
+        for candidate in result.candidates
+    )
+    assert root.joinpath("value.txt").read_text(encoding="utf-8") == "original\n"
+
+
+def test_pytest_testpaths_glob_entry_membership_is_frozen(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    for name in ("verification-core", "verification-extra"):
+        directory = root / name
+        directory.mkdir()
+        (directory / "test_value.py").write_text(
+            "def test_value():\n    assert True\n",
+            encoding="utf-8",
+        )
+    (root / "pytest.ini").write_text("[pytest]\ntestpaths = verification-*\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "use globbed pytest testpaths")
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [[sys.executable, "-m", "pytest", "-q"]],
+    )
+
+    (root / "verification-core" / "test_value.py").write_text(
+        "def test_value():\n    pass\n",
+        encoding="utf-8",
+    )
+    (root / "verification-extra" / "test_bypass.py").write_text(
+        "def test_bypass():\n    assert True\n",
+        encoding="utf-8",
+    )
+    drift = tournament_module._verifier_asset_drift(root, assets)
+
+    assert "verification-core/test_value.py" in drift
+    assert "verification-extra/test_bypass.py" in drift
+
+
+@pytest.mark.parametrize(
+    ("config_file", "config_text"),
+    [
+        ("pytest.ini", "[pytest]\ntestpaths = verification\n"),
+        ("tox.ini", "[pytest]\ntestpaths = verification\n"),
+        ("setup.cfg", "[tool:pytest]\ntestpaths = verification\n"),
+        ("pyproject.toml", '[tool.pytest.ini_options]\ntestpaths = ["verification"]\n'),
+    ],
+)
+def test_unresolvable_pytest_testpaths_entry_fails_closed(
+    tmp_path: Path,
+    config_file: str,
+    config_text: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / config_file).write_text(config_text, encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "declare an unresolvable testpath")
+
+    with pytest.raises(ConfigError, match="testpaths entry to bounded tracked"):
+        tournament_module._freeze_verifier_assets(
+            root,
+            [[sys.executable, "-m", "pytest", "-q"]],
+        )
+
+
+def test_untracked_pytest_testpaths_tree_fails_closed(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "pytest.ini").write_text("[pytest]\ntestpaths = verification\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "declare a testpath")
+    verification = root / "verification"
+    verification.mkdir()
+    (verification / "test_value.py").write_text(
+        "def test_value():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="testpaths entry to bounded tracked"):
+        tournament_module._freeze_verifier_assets(
+            root,
+            [[sys.executable, "-m", "pytest", "-q"]],
+        )
+
+
+def test_dynamic_pytest_testpaths_declaration_fails_closed(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\ntestpaths = { dynamic = true }\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "declare a dynamic testpath")
+
+    with pytest.raises(ConfigError, match="dynamic Pytest testpaths declaration"):
+        tournament_module._freeze_verifier_assets(
+            root,
+            [[sys.executable, "-m", "pytest", "-q"]],
+        )
+
+
+def test_unparseable_pytest_configuration_fails_closed(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options\ntestpaths = ['verification']\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "declare an unparseable pytest configuration")
+
+    with pytest.raises(ConfigError, match="cannot inspect the Pytest verifier configuration"):
+        tournament_module._freeze_verifier_assets(
+            root,
+            [[sys.executable, "-m", "pytest", "-q"]],
+        )
+
+
+def test_conftest_pytest_plugins_require_explicit_assets(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    tests_dir = root / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_value.py").write_text(
+        "def test_value():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (root / "conftest.py").write_text(
+        'pytest_plugins = ["tools.custom_pytest_plugin"]\n',
+        encoding="utf-8",
+    )
+    tools = root / "tools"
+    tools.mkdir()
+    (tools / "__init__.py").write_text("", encoding="utf-8")
+    (tools / "custom_pytest_plugin.py").write_text(
+        "def pytest_collection_modifyitems(items):\n    items.clear()\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add pytest plugin")
+    command = [sys.executable, "-m", "pytest", "tests", "-q"]
+
+    with pytest.raises(ConfigError, match="Pytest plugin dependency closure"):
+        tournament_module._freeze_verifier_assets(root, [command])
+
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [command],
+        review_assets=["conftest.py", "tools"],
+    )
+    (tools / "custom_pytest_plugin.py").write_text("", encoding="utf-8")
+
+    assert "tools/custom_pytest_plugin.py" in tournament_module._verifier_asset_drift(
+        root,
+        assets,
+    )
+
+
+@pytest.mark.parametrize(
+    "addopts",
+    [
+        "-p tools.custom_pytest_plugin",
+        "-ptools.custom_pytest_plugin",
+        "-q -p no:cacheprovider",
+    ],
+)
+def test_pytest_addopts_plugin_loading_requires_explicit_assets(
+    tmp_path: Path,
+    addopts: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    tests_dir = root / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_value.py").write_text(
+        "def test_value():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (root / "pytest.ini").write_text(f"[pytest]\naddopts = {addopts}\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "load a pytest plugin from addopts")
+
+    with pytest.raises(ConfigError, match="Pytest plugin dependency closure"):
+        tournament_module._freeze_verifier_assets(
+            root,
+            [[sys.executable, "-m", "pytest", "tests", "-q"]],
+        )
+
+
+@pytest.mark.parametrize(
+    ("build_file", "build_text"),
+    [
+        ("build.gradle", 'apply from: "scripts/test-policy.gradle"\n'),
+        ("build.gradle.kts", 'apply(from = "scripts/test-policy.gradle")\n'),
+        ("settings.gradle", "includeBuild('build-logic')\n"),
+    ],
+)
+def test_delegated_gradle_build_logic_requires_explicit_assets(
+    tmp_path: Path,
+    build_file: str,
+    build_text: str,
+) -> None:
+    root, _ = _project(tmp_path)
+    (root / build_file).write_text(build_text, encoding="utf-8")
+    scripts = root / "scripts"
+    scripts.mkdir()
+    policy = scripts / "test-policy.gradle"
+    policy.write_text("tasks.named('test') { useJUnitPlatform() }\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "delegate Gradle build logic")
+
+    with pytest.raises(ConfigError, match="delegated Gradle build-logic closure"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [["gradle", "test"]],
+        review_assets=["scripts"],
+    )
+    policy.write_text("tasks.named('test') { enabled = false }\n", encoding="utf-8")
+
+    assert "scripts/test-policy.gradle" in tournament_module._verifier_asset_drift(
+        root,
+        assets,
+    )
+
+
+def test_gradle_buildsrc_requires_explicit_assets(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    (root / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+    convention = root / "buildSrc" / "src" / "main" / "groovy"
+    convention.mkdir(parents=True)
+    plugin = convention / "project.test-conventions.gradle"
+    plugin.write_text("tasks.named('test') { useJUnitPlatform() }\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add Gradle convention plugin")
+
+    with pytest.raises(ConfigError, match="buildSrc build-logic closure"):
+        tournament_module._freeze_verifier_assets(root, [["gradle", "test"]])
+
+    assets = tournament_module._freeze_verifier_assets(
+        root,
+        [["gradle", "test"]],
+        review_assets=["buildSrc"],
+    )
+    plugin.write_text("tasks.named('test') { enabled = false }\n", encoding="utf-8")
+
+    assert (
+        "buildSrc/src/main/groovy/project.test-conventions.gradle"
+        in tournament_module._verifier_asset_drift(root, assets)
+    )
+
+
+@pytest.mark.parametrize(
+    ("build_text", "refused"),
+    [
+        ('apply from: "scripts/test-policy.gradle"\n', True),
+        ("apply from: rootProject.file('scripts/test-policy.gradle')\n", True),
+        ('apply(from = "scripts/test-policy.gradle")\n', True),
+        ('apply(\n    from = "scripts/test-policy.gradle"\n)\n', True),
+        ("includeBuild('build-logic')\n", True),
+        ('// apply from: "scripts/test-policy.gradle"\n', False),
+        ('/* includeBuild("build-logic") */\n', False),
+        ('println("apply from: scripts/test-policy.gradle")\n', False),
+        ("plugins { id 'java' }\napply plugin: 'jacoco'\n", False),
+    ],
+)
+def test_masked_gradle_delegation_detection_ignores_comments_and_strings(
+    tmp_path: Path,
+    build_text: str,
+    refused: bool,
+) -> None:
+    (tmp_path / "build.gradle").write_text(build_text, encoding="utf-8")
+
+    if refused:
+        with pytest.raises(ConfigError, match="delegated Gradle build-logic closure"):
+            verifier_manifest._refuse_delegated_gradle_build_logic(tmp_path)
+        return
+
+    verifier_manifest._refuse_delegated_gradle_build_logic(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        (
+            {
+                "pytest.ini": "[pytest]\ntestpaths = ini\n",
+                "pyproject.toml": '[tool.pytest.ini_options]\ntestpaths = ["toml"]\n',
+                "tox.ini": "[pytest]\ntestpaths = tox\n",
+                "setup.cfg": "[tool:pytest]\ntestpaths = cfg\n",
+            },
+            ["ini"],
+        ),
+        (
+            {
+                "pyproject.toml": '[tool.pytest.ini_options]\ntestpaths = ["toml"]\n',
+                "tox.ini": "[pytest]\ntestpaths = tox\n",
+                "setup.cfg": "[tool:pytest]\ntestpaths = cfg\n",
+            },
+            ["toml"],
+        ),
+        (
+            {
+                "pyproject.toml": '[project]\nname = "project"\n',
+                "tox.ini": "[pytest]\ntestpaths = tox\n",
+                "setup.cfg": "[tool:pytest]\ntestpaths = cfg\n",
+            },
+            ["tox"],
+        ),
+        ({"setup.cfg": "[tool:pytest]\ntestpaths = cfg\n"}, ["cfg"]),
+        (
+            {
+                "pytest.ini": "[pytest]\naddopts = -q\n",
+                "setup.cfg": "[tool:pytest]\ntestpaths = cfg\n",
+            },
+            [],
+        ),
+        ({"pytest.ini": "[pytest]\ntestpaths =\n    first\n    second\n"}, ["first", "second"]),
+        ({}, []),
+    ],
+)
+def test_effective_pytest_testpaths_follow_configuration_precedence(
+    tmp_path: Path,
+    files: dict[str, str],
+    expected: list[str],
+) -> None:
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
+
+    configuration = verifier_manifest._effective_pytest_configuration(
+        tmp_path,
+        allow_dynamic=False,
+    )
+
+    assert (
+        verifier_manifest._pytest_testpaths(configuration, allow_dynamic=False) == expected
+    )
+
+
+def test_pytest_testpath_targets_expand_globs_over_tracked_paths(tmp_path: Path) -> None:
+    for name in ("verification-core", "verification-extra", "verification-untracked"):
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "test_value.py").write_text("", encoding="utf-8")
+    tracked = {
+        "verification-core/test_value.py",
+        "verification-extra/test_value.py",
+    }
+
+    targets = verifier_manifest._pytest_testpath_targets(
+        tmp_path,
+        "verification-*",
+        tracked,
+    )
+
+    assert [target.name for target in targets] == [
+        "verification-core",
+        "verification-extra",
+    ]
+    assert verifier_manifest._pytest_testpath_targets(tmp_path, "missing", tracked) == []
+    assert verifier_manifest._pytest_testpath_targets(tmp_path, ".", tracked) == []
+
+
+def test_pytest_testpath_entry_outside_the_workspace_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="outside the workspace"):
+        verifier_manifest._pytest_testpath_targets(tmp_path, "../elsewhere", set())
 
 
 def test_verified_receipt_recovery_rejects_divergent_workspace(tmp_path: Path) -> None:

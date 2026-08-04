@@ -32,7 +32,31 @@ Package-manager test scripts are opaque and require explicit
 script it delegates to. `dotnet test` also requires explicit `review.assets`
 because filename conventions cannot represent the evaluated MSBuild input
 closure. Standard Maven and Gradle test trees and repository directories named
-directly in a verifier command have protected membership. The manifest records
+directly in a verifier command have protected membership.
+
+An acceptance boundary that a filename convention cannot represent is refused
+rather than assumed:
+
+- Cargo manifests and external integration tests under `tests/` can be frozen.
+  Inline `#[cfg(test)]` modules, `#[test]` and `#[bench]` functions, and
+  doctests inside editable Rust sources are not an independent acceptance
+  boundary, because a candidate rewrites the assertion and the implementation
+  in the same file. A `cargo` check refuses automatic inference when an
+  editable tracked Rust source contains one; the operator moves the acceptance
+  tests into a frozen integration-test directory or declares `review.assets`.
+- Pytest `testpaths` are read from the first effective configuration file
+  (`pytest.ini`, then `pyproject.toml`, `tox.ini`, and `setup.cfg`) and the
+  selected trees are frozen with their membership, so a suite outside
+  `tests/` is not silently editable. An entry that cannot be resolved to
+  tracked files, an unreadable or dynamic declaration, and plugin loading
+  through `pytest_plugins` or an `addopts` `-p` option all require explicit
+  `review.assets`; the plugin module graph is not resolved automatically.
+- Gradle build logic delegated through `apply from`, `apply(from = ...)`,
+  `includeBuild`, or a `buildSrc` directory requires explicit `review.assets`,
+  because freezing `build.gradle` does not freeze the scripts and included
+  builds it delegates to.
+
+The manifest records
 both file hashes and protected path-set membership,
 including sensitive paths that were absent at tournament start. Lexical
 symlinks, symlinked parent components, Windows reparse points, and parent

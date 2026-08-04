@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import configparser
 import hashlib
 from fnmatch import fnmatchcase
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import tomllib
 import xml.etree.ElementTree as ET
 
 from agentic_harness.core.config import CONFIG_DIR
@@ -81,6 +83,13 @@ def freeze_verifier_assets(
             protected_paths.update(python_paths)
             protected_patterns.add("**/conftest.py")
             _add_patterns(root, candidates, python_paths)
+            _protect_pytest_configuration(
+                root,
+                candidates,
+                protected_patterns,
+                tracked_paths,
+                allow_dynamic=bool(explicit_assets),
+            )
         if any(argument in {"npm", "pnpm", "yarn", "bun"} for argument in lowered):
             if not explicit_assets:
                 raise ConfigError(
@@ -105,6 +114,8 @@ def freeze_verifier_assets(
             )
         if "cargo" in lowered:
             boundary_established = True
+            if not explicit_assets:
+                _refuse_editable_rust_inline_tests(root, candidates, tracked_paths)
             protected_paths.update(("Cargo.toml", "Cargo.lock"))
             protected_patterns.update(("**/Cargo.toml", "**/Cargo.lock"))
             _add_patterns(root, candidates, ("Cargo.toml", "Cargo.lock"))
@@ -138,6 +149,8 @@ def freeze_verifier_assets(
             )
         if command_names & {"gradle", "gradlew", "gradlew.cmd", "gradlew.bat"}:
             boundary_established = True
+            if not explicit_assets:
+                _refuse_delegated_gradle_build_logic(root)
             protected_paths.update(("gradlew", "gradlew.cmd", "gradlew.bat"))
             protected_patterns.update(
                 (
@@ -208,7 +221,7 @@ def freeze_verifier_assets(
                 "configure review_assets with every repository-controlled verifier input"
             )
 
-    for directory_name in ("tests", "test", "spec", "specs"):
+    for directory_name in _ALWAYS_PROTECTED_TEST_DIRECTORIES:
         protected_patterns.add(f"{directory_name}/**")
         directory = root / directory_name
         if is_link_or_reparse(directory):
@@ -406,6 +419,279 @@ def _add_globs(root: Path, candidates: set[Path], patterns: tuple[str, ...]) -> 
             if candidate.is_file():
                 require_lexical_regular_path(root, candidate, label=str(candidate))
                 candidates.add(candidate)
+
+
+_ALWAYS_PROTECTED_TEST_DIRECTORIES = ("tests", "test", "spec", "specs")
+# A Rust attribute may span lines, so the whole source is scanned instead of
+# individual lines.  Over-matching an unrelated attribute is safe; missing an
+# inline test definition is not.
+_RUST_INLINE_TEST_ATTRIBUTE = re.compile(r"#!?\s*\[[^\]]*\b(?:test|bench)\b[^\]]*\]")
+_RUST_DOC_COMMENT_FENCE = re.compile(r"\s*(?:///|//!).*```")
+_PYTEST_CONFIG_SOURCES = (
+    ("pytest.ini", "pytest"),
+    ("pyproject.toml", "tool.pytest.ini_options"),
+    ("tox.ini", "pytest"),
+    ("setup.cfg", "tool:pytest"),
+)
+_PYTEST_GLOB_CHARACTERS = "*?["
+# ``_gradle_lexical_mask`` keeps keywords and masks string contents, so the
+# delegation target is invisible here while the delegating call is not.
+_GRADLE_DELEGATED_BUILD_LOGIC = re.compile(
+    r"\bapply\b(?:\s|\()*\bfrom\b|\bincludeBuild\b"
+)
+
+
+def _refuse_editable_rust_inline_tests(
+    root: Path,
+    candidates: set[Path],
+    tracked_paths: set[str],
+) -> None:
+    for relative in sorted(tracked_paths):
+        if not relative.endswith(".rs"):
+            continue
+        parts = Path(relative).parts
+        if parts and parts[0] in _ALWAYS_PROTECTED_TEST_DIRECTORIES:
+            continue
+        candidate = root / relative
+        if candidate in candidates or is_link_or_reparse(candidate):
+            continue
+        if not candidate.is_file():
+            continue
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ConfigError(
+                f"unable to inspect Rust verifier inputs: {relative}"
+            ) from exc
+        if not _rust_inline_tests(text):
+            continue
+        raise ConfigError(
+            "verified best-of-N cannot treat inline tests in editable Rust sources as "
+            f"an independent acceptance boundary: {relative}; move the acceptance "
+            "tests into a frozen integration-test directory (tests/) or configure "
+            "review_assets with every repository-controlled verifier input"
+        )
+
+
+def _rust_inline_tests(text: str) -> bool:
+    if _RUST_INLINE_TEST_ATTRIBUTE.search(text):
+        return True
+    return any(
+        _RUST_DOC_COMMENT_FENCE.match(line) is not None for line in text.splitlines()
+    )
+
+
+def _refuse_delegated_gradle_build_logic(root: Path) -> None:
+    for directory in sorted(root.glob("**/buildSrc")):
+        if _is_excluded_workspace_path(directory) or not directory.is_dir():
+            continue
+        raise ConfigError(
+            "verified best-of-N cannot infer the Gradle buildSrc build-logic closure; "
+            "configure review_assets with every buildSrc source and other "
+            "repository-controlled verifier input"
+        )
+    for build_file in sorted(
+        {
+            *root.glob("**/*.gradle"),
+            *root.glob("**/*.gradle.kts"),
+        }
+    ):
+        if _is_excluded_workspace_path(build_file) or is_link_or_reparse(build_file):
+            continue
+        if not build_file.is_file():
+            continue
+        try:
+            text = build_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ConfigError(
+                f"unable to inspect Gradle verifier inputs: {build_file}"
+            ) from exc
+        if _GRADLE_DELEGATED_BUILD_LOGIC.search(_gradle_lexical_mask(text)) is None:
+            continue
+        raise ConfigError(
+            "verified best-of-N cannot infer the delegated Gradle build-logic closure; "
+            "configure review_assets with every applied script, included build, and "
+            "other repository-controlled verifier input"
+        )
+
+
+def _is_excluded_workspace_path(path: Path) -> bool:
+    return CONFIG_DIR in path.parts or ".git" in path.parts
+
+
+def _protect_pytest_configuration(
+    root: Path,
+    candidates: set[Path],
+    protected_patterns: set[str],
+    tracked_paths: set[str],
+    *,
+    allow_dynamic: bool,
+) -> None:
+    configuration = _effective_pytest_configuration(root, allow_dynamic=allow_dynamic)
+    if not allow_dynamic and _pytest_plugin_closure_is_unprovable(
+        root,
+        configuration,
+        tracked_paths,
+    ):
+        raise ConfigError(
+            "verified best-of-N cannot prove the Pytest plugin dependency closure; "
+            "configure review_assets with every loaded plugin module and other "
+            "repository-controlled verifier input"
+        )
+    for entry in _pytest_testpaths(configuration, allow_dynamic=allow_dynamic):
+        targets = _pytest_testpath_targets(root, entry, tracked_paths)
+        if not targets:
+            if allow_dynamic:
+                continue
+            raise ConfigError(
+                "verified best-of-N cannot resolve a Pytest testpaths entry to bounded "
+                f"tracked verifier inputs: {entry}; configure review_assets with every "
+                "repository-controlled verifier input"
+            )
+        for target in targets:
+            require_lexical_regular_path(root, target, label=entry)
+            relative = target.relative_to(root).as_posix()
+            if target.is_dir():
+                protected_patterns.add(f"{relative}/**")
+                candidates.update(_regular_files(root, target))
+            elif target.is_file():
+                candidates.add(target)
+
+
+def _effective_pytest_configuration(
+    root: Path,
+    *,
+    allow_dynamic: bool,
+) -> dict[str, object]:
+    for name, section in _PYTEST_CONFIG_SOURCES:
+        path = root / name
+        if not _lexists(path) or is_link_or_reparse(path) or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            if allow_dynamic:
+                return {}
+            raise _pytest_configuration_error(name) from exc
+        if name == "pyproject.toml":
+            try:
+                document = tomllib.loads(text)
+            except tomllib.TOMLDecodeError as exc:
+                if allow_dynamic:
+                    return {}
+                raise _pytest_configuration_error(name) from exc
+            options: object = document
+            for key in section.split("."):
+                options = options.get(key) if isinstance(options, dict) else None
+            if isinstance(options, dict):
+                return dict(options)
+            continue
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            parser.read_string(text, source=name)
+        except configparser.Error as exc:
+            if allow_dynamic:
+                return {}
+            raise _pytest_configuration_error(name) from exc
+        if parser.has_section(section):
+            return dict(parser[section])
+        # pytest stops at pytest.ini even when it declares no options.
+        if name == "pytest.ini":
+            return {}
+    return {}
+
+
+def _pytest_configuration_error(name: str) -> ConfigError:
+    return ConfigError(
+        f"verified best-of-N cannot inspect the Pytest verifier configuration: {name}; "
+        "configure review_assets with every repository-controlled verifier input"
+    )
+
+
+def _pytest_testpaths(
+    configuration: dict[str, object],
+    *,
+    allow_dynamic: bool,
+) -> list[str]:
+    value = configuration.get("testpaths")
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return value.split()
+    if isinstance(value, list) and all(isinstance(entry, str) for entry in value):
+        return [str(entry) for entry in value]
+    if allow_dynamic:
+        return []
+    raise ConfigError(
+        "verified best-of-N cannot infer a dynamic Pytest testpaths declaration; "
+        "configure review_assets with every repository-controlled verifier input"
+    )
+
+
+def _pytest_testpath_targets(
+    root: Path,
+    entry: str,
+    tracked_paths: set[str],
+) -> list[Path]:
+    normalized = entry.replace("\\", "/").strip()
+    if not normalized:
+        return []
+    raw = Path(normalized)
+    if raw.is_absolute() or ".." in raw.parts:
+        raise ConfigError(f"Pytest testpaths entry is outside the workspace: {entry}")
+    pattern = raw.as_posix()
+    if pattern == ".":
+        return []
+    if any(character in pattern for character in _PYTEST_GLOB_CHARACTERS):
+        matches = sorted(root.glob(pattern))
+    else:
+        candidate = root / raw
+        matches = [candidate] if _lexists(candidate) else []
+    return [
+        match
+        for match in matches
+        if not _is_excluded_workspace_path(match)
+        and _tracked_membership(match.relative_to(root).as_posix(), tracked_paths)
+    ]
+
+
+def _tracked_membership(relative: str, tracked_paths: set[str]) -> bool:
+    if relative in tracked_paths:
+        return True
+    prefix = f"{relative}/"
+    return any(tracked.startswith(prefix) for tracked in tracked_paths)
+
+
+def _pytest_plugin_closure_is_unprovable(
+    root: Path,
+    configuration: dict[str, object],
+    tracked_paths: set[str],
+) -> bool:
+    addopts = configuration.get("addopts")
+    tokens: list[str] = []
+    if isinstance(addopts, str):
+        tokens = addopts.split()
+    elif isinstance(addopts, list):
+        tokens = [str(entry) for entry in addopts]
+    if any(
+        token.startswith("-p") and not token.startswith("--") for token in tokens
+    ):
+        return True
+    for relative in sorted(tracked_paths):
+        if Path(relative).name != "conftest.py":
+            continue
+        candidate = root / relative
+        if is_link_or_reparse(candidate) or not candidate.is_file():
+            continue
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ConfigError(
+                f"unable to inspect Pytest verifier inputs: {relative}"
+            ) from exc
+        if "pytest_plugins" in text:
+            return True
+    return False
 
 
 _GRADLE_TEST_BLOCK = re.compile(
