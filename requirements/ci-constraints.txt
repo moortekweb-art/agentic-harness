@@ -1,0 +1,13 @@
+# Pinned CI toolchain.
+#
+# pyproject.toml keeps floating ranges so downstream installs stay flexible.
+# CI installs under these constraints so a new upstream release of a build,
+# test, lint, or publish tool cannot silently change what a workflow run
+# executes. Update this file only in a dedicated dependency pull request,
+# after the full CI matrix passes with the new versions.
+build==1.5.0
+mypy==2.3.0
+pytest==9.1.1
+ruff==0.15.22
+twine==7.0.0
+types-PyYAML==6.0.12.20260724

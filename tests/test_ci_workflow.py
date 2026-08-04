@@ -13,10 +13,42 @@ def test_ci_runs_package_build_and_compile_smoke() -> None:
     workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert "python -m compileall agentic_harness" in workflow
-    assert "python -m pip install build" in workflow
+    assert "python -m pip install -c requirements/ci-constraints.txt build" in workflow
     assert "python -m build" in workflow
     assert "python -m twine check dist/*" in workflow
     assert "dist/*.whl" in workflow
+
+
+def test_ci_installs_every_tool_under_the_pinned_constraints_file() -> None:
+    constraints = (REPO_ROOT / "requirements/ci-constraints.txt").read_text(encoding="utf-8")
+    pins = [
+        line.strip()
+        for line in constraints.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert {pin.split("==")[0] for pin in pins} == {
+        "build",
+        "mypy",
+        "pytest",
+        "ruff",
+        "twine",
+        "types-PyYAML",
+    }
+    assert all(re.fullmatch(r"[A-Za-z0-9._-]+==[A-Za-z0-9.]+", pin) for pin in pins)
+    metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "ruff==0.15.22" in metadata["project"]["optional-dependencies"]["test"]
+    assert "ruff==0.15.22" in pins
+
+    for relative in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/publish.yml",
+        "docs/templates/publish.yml",
+    ):
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        installs = [line for line in text.splitlines() if "pip install" in line]
+        assert installs
+        for line in installs:
+            assert "-c requirements/ci-constraints.txt" in line
 
 
 def test_ci_runs_packaged_demo_from_installed_wheel() -> None:
@@ -99,7 +131,10 @@ def test_publish_workflow_template_uses_pypi_trusted_publishing() -> None:
     assert not any("PYPI_TOKEN" in str(step) or "password" in str(step) for step in steps)
     all_steps = workflow["jobs"]["validate"]["steps"] + steps
     run_steps = "\n".join(str(step.get("run", "")) for step in all_steps)
-    assert 'python -m pip install -e ".[test]"' in run_steps
+    assert (
+        'python -m pip install -c requirements/ci-constraints.txt -e ".[test]"'
+        in run_steps
+    )
     assert "python -m agentic_harness.cli release-smoke --dist-dir dist" in run_steps
     assert "mkdir -p pypi-dist release-bundle" in run_steps
     assert "cp dist/*.whl dist/*.tar.gz pypi-dist/" in run_steps
@@ -126,7 +161,10 @@ def test_active_publish_workflow_uses_pypi_trusted_publishing() -> None:
     assert not any("PYPI_TOKEN" in str(step) or "password" in str(step) for step in steps)
     all_steps = workflow["jobs"]["validate"]["steps"] + steps
     run_steps = "\n".join(str(step.get("run", "")) for step in all_steps)
-    assert 'python -m pip install -e ".[test]"' in run_steps
+    assert (
+        'python -m pip install -c requirements/ci-constraints.txt -e ".[test]"'
+        in run_steps
+    )
     assert "python -m agentic_harness.cli release-smoke --dist-dir dist" in run_steps
     assert "mkdir -p pypi-dist release-bundle" in run_steps
     assert "cp dist/*.whl dist/*.tar.gz pypi-dist/" in run_steps
