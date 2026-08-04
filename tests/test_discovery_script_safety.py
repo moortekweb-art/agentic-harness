@@ -14,6 +14,7 @@ read, the machine this suite runs on.
 
 from __future__ import annotations
 
+import os
 import shutil
 import stat
 import subprocess
@@ -53,6 +54,19 @@ STUBS: dict[str, str] = {
     "apachectl": f"VirtualHost {STUB_HOST}:443\n",
     "systemctl": "ollama.service loaded active running Ollama\n",
 }
+
+
+def assert_owner_only_mode(path: Path) -> None:
+    """Assert ``path`` is owner-only (0o600) on platforms with POSIX modes.
+
+    On Windows the script still runs ``chmod 600`` under Git Bash, but NTFS
+    ACLs are the real permission model there: ``os.stat`` synthesises mode
+    bits (typically 0o666) rather than reporting POSIX permissions, so the
+    check is meaningless and is omitted. Every other assertion still runs.
+    """
+    if os.name == "nt":
+        return
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def write_stub_path(tmp_path: Path) -> Path:
@@ -172,7 +186,7 @@ def test_explicit_output_path_is_written_at_mode_0600(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert target.is_file()
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert_owner_only_mode(target)
     assert target.read_text(encoding="utf-8").strip()
 
 
@@ -182,7 +196,7 @@ def test_output_equals_form_is_accepted(tmp_path: Path) -> None:
     result = run_script(tmp_path, f"--output={target}")
 
     assert result.returncode == 0, result.stderr
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert_owner_only_mode(target)
 
 
 def test_default_output_path_follows_xdg_state_home(tmp_path: Path) -> None:
@@ -193,7 +207,7 @@ def test_default_output_path_follows_xdg_state_home(tmp_path: Path) -> None:
     expected = state_home / "agentic-harness" / "services-inventory.txt"
     assert result.returncode == 0, result.stderr
     assert expected.is_file()
-    assert stat.S_IMODE(expected.stat().st_mode) == 0o600
+    assert_owner_only_mode(expected)
 
 
 def test_default_output_falls_back_to_home_local_state(tmp_path: Path) -> None:
@@ -204,7 +218,7 @@ def test_default_output_falls_back_to_home_local_state(tmp_path: Path) -> None:
     expected = home / ".local" / "state" / "agentic-harness" / "services-inventory.txt"
     assert result.returncode == 0, result.stderr
     assert expected.is_file()
-    assert stat.S_IMODE(expected.stat().st_mode) == 0o600
+    assert_owner_only_mode(expected)
 
 
 def test_no_topology_is_printed_to_stdout(tmp_path: Path) -> None:
@@ -320,7 +334,7 @@ def test_an_existing_output_is_replaced_safely(tmp_path: Path) -> None:
     assert "STALE-PREVIOUS-INVENTORY" not in contents
     assert STUB_HOST in contents
     # A previously world-readable file does not stay world-readable.
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert_owner_only_mode(target)
 
 
 def test_no_temporary_file_is_left_behind(tmp_path: Path) -> None:
@@ -350,7 +364,7 @@ def test_missing_tools_are_skipped_cleanly(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "not installed; skipping" in contents
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert_owner_only_mode(target)
 
 
 def test_unknown_argument_is_refused_without_writing(tmp_path: Path) -> None:
@@ -520,7 +534,7 @@ def test_the_partial_inventory_is_still_written_at_mode_0600(
 
     assert result.returncode != 0
     assert target.is_file()
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert_owner_only_mode(target)
 
 
 @pytest.mark.parametrize("name, probe", FAILING_PROBES)
@@ -585,7 +599,7 @@ def test_a_failing_probe_does_not_prevent_the_fallback_socket_probe(
     assert result.returncode != 0
     assert "netstat -tlnp" in receipt
     assert FAILING_STUB_MARKER not in receipt
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert_owner_only_mode(target)
 
 
 def test_all_probes_succeeding_still_prints_the_success_receipt(tmp_path: Path) -> None:
