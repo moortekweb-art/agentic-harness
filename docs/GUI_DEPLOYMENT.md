@@ -58,6 +58,62 @@ refused unless `AGENTIC_HARNESS_GUI_TOKEN` is set. For a reverse proxy:
   network; and
 - do not expose the control surface directly to the public internet.
 
+## Local Network Portal
+
+The portal page (`portal.html`) lists links to services on your private
+network. That list is topology, so it is treated as confidential data rather
+than as a static asset.
+
+Configure it in a file you own, **outside the installed package**:
+
+1. `$AGENTIC_HARNESS_PORTAL_SERVICES` if set, else
+2. `$XDG_CONFIG_HOME/agentic-harness/services.json` if `XDG_CONFIG_HOME` is
+   set, else
+3. `~/.config/agentic-harness/services.json`.
+
+```json
+{
+  "services": [
+    {
+      "label": "Host root",
+      "url": "https://your-host.example.invalid/",
+      "note": "Optional one-line description."
+    }
+  ]
+}
+```
+
+`chmod 600` the file. `label` and an http(s) `url` are required; `note` is
+optional; every other key is ignored, and only those three fields are ever sent
+to the browser. The file is read under a 64 KiB bound and at most 200 entries
+are returned.
+
+Entries are refused — and reported on the page — when the URL uses a scheme
+other than `http`/`https`, embeds a username or password, or carries a
+credential-shaped query parameter (`token`, `access_token`, `sig`, `signature`,
+`password`, `secret`, `credential`, `api_key`, `key`, `auth`). Keep capability
+URLs out of the portal; put the secret in the target service's own auth
+instead.
+
+Operational notes:
+
+- The list is served only from the authenticated `GET /api/portal/services`
+  endpoint. It carries the same bearer token, rate limit, `Host` validation and
+  `Cache-Control: no-store` as every other API route.
+- Never place `services.local.json` (or any service list) inside
+  `agentic_harness/gui/static/`. Files there are web-readable, and package-data
+  rules can sweep untracked files into a locally built wheel. Any `*.local.json`
+  under that directory is unconditionally `404`, but the file should not be
+  there at all.
+- `scripts/discover_node1_services.sh` enumerates a host's live services to help
+  you write the config. It always writes to a file (mode 0600) rather than
+  stdout — `--output PATH`, or by default
+  `${XDG_STATE_HOME:-$HOME/.local/state}/agentic-harness/services-inventory.txt`.
+  That inventory contains your real hostnames: keep it out of any checkout.
+- Behind a reverse-proxy path prefix, the portal derives its API URL from the
+  page location, so both `/hub` and `/hub/` work. Configure the proxy to
+  redirect `/prefix` to `/prefix/` if you want canonical URLs.
+
 ## Hosted product boundary
 
 A public demo or multi-user service must use a separate execution plane. At a

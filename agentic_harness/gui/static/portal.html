@@ -17,8 +17,9 @@
         <h1>Local Network Portal</h1>
         <p>
           One page of links to the services on your local network. The list is
-          loaded from an operator-supplied <code>services.local.json</code>
-          next to this page &mdash; no hostnames are baked into the app.
+          read from a configuration file you own, and served only over the
+          harness&rsquo;s authenticated API &mdash; no hostnames are baked into
+          the app, and none are readable without your access token.
         </p>
       </header>
 
@@ -29,26 +30,33 @@
       <section id="portalEmpty" class="portal-empty" hidden>
         <h2>No services configured yet</h2>
         <p>
-          This portal renders link cards from <code>services.local.json</code>,
-          a file you create on the machine that runs the harness. It is kept
-          out of version control, so your real hostnames never end up in a
-          repository.
+          This portal renders link cards from a configuration file you create
+          on the machine that runs the harness. It lives in your own config
+          directory, outside the installed package, so your real hostnames are
+          never part of the app, never packaged into a build, and never served
+          to an unauthenticated visitor.
         </p>
         <ol>
           <li>
-            Find the directory the harness serves this page from:
-            <code>python -c "import agentic_harness.gui, pathlib; print(pathlib.Path(agentic_harness.gui.__file__).parent / 'static')"</code>
-            &mdash; it is <code>agentic_harness/gui/static/</code> inside this
-            installation.
+            Create the file at
+            <code>~/.config/agentic-harness/services.json</code> (or set
+            <code>AGENTIC_HARNESS_PORTAL_SERVICES</code> to any path you
+            prefer; <code>$XDG_CONFIG_HOME</code> is honoured when set).
           </li>
           <li>
-            Copy the template that ships with the app, in that directory:
-            <code>cp services.example.json services.local.json</code>
+            Use the shipped template as the starting shape:
+            <code>{"services": [{"label": "...", "url": "https://...", "note": "..."}]}</code>
           </li>
           <li>
-            Edit each entry&rsquo;s <code>label</code> and <code>url</code>
-            (both required) and its optional <code>note</code> to match your
-            real hosts and ports.
+            Give each entry a <code>label</code> and an http(s)
+            <code>url</code> (both required) and an optional
+            <code>note</code>. URLs that embed a username, a password, or a
+            credential-shaped query parameter are refused, so keep secrets out
+            of the links.
+          </li>
+          <li>
+            Restrict the file to yourself:
+            <code>chmod 600 ~/.config/agentic-harness/services.json</code>
           </li>
           <li>Reload this page.</li>
         </ol>

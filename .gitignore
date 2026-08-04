@@ -35,6 +35,12 @@ Thumbs.db
 *.pem
 *.token
 
-# Operator-local portal data — holds real private hostnames, never commit.
-# The tracked template is agentic_harness/gui/static/services.example.json.
+# Operator-local portal data and topology inventories — these hold real
+# private hostnames, never commit them. The portal reads its configuration
+# from ~/.config/agentic-harness/services.json, outside any checkout; these
+# rules catch stray copies. The tracked template is
+# agentic_harness/gui/static/services.example.json.
+*.local.json
 services.local.json
+services-inventory*.txt
+services-inventory*.json

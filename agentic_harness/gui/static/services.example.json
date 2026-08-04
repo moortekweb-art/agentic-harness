@@ -1,17 +1,23 @@
 {
   "_comment": [
     "Template for the Local Network Portal (portal.html).",
-    "Copy this file to services.local.json in the same directory, then replace",
-    "every placeholder host, port, and path with your real deployment values.",
-    "services.local.json is gitignored so real hostnames never reach version",
-    "control. Every host below uses the reserved example.invalid domain and",
-    "every port is arbitrary; nothing here is a default of anything.",
-    "Schema: the top level is either {\"services\": [entry, ...]} or a bare",
-    "[entry, ...] array. Each entry is an object with a required non-empty",
-    "\"label\" (string), a required \"url\" (string, must be an http:// or",
-    "https:// URL), and an optional \"note\" (string). Entries missing a label",
-    "or a usable url are skipped and counted on the page. Unknown keys are",
-    "ignored. This _comment key is documentation only and is ignored too."
+    "Copy this file to your OWN config directory, not into the installed",
+    "package: ~/.config/agentic-harness/services.json (or $XDG_CONFIG_HOME,",
+    "or any path you set in AGENTIC_HARNESS_PORTAL_SERVICES). Then replace",
+    "every placeholder host, port, and path with your real deployment values",
+    "and chmod 600 the result. Keeping it outside the package means real",
+    "hostnames cannot reach version control, cannot be captured by a local",
+    "wheel build, and are served only over the authenticated API.",
+    "Every host below uses the reserved example.invalid domain and every port",
+    "is arbitrary; nothing here is a default of anything.",
+    "Schema: the top level is {\"services\": [entry, ...]}. Each entry is an",
+    "object with a required non-empty \"label\" (string), a required \"url\"",
+    "(string, must be an http:// or https:// URL), and an optional \"note\"",
+    "(string). Entries whose url embeds a username or password, or carries a",
+    "credential-shaped query parameter (token, access_token, sig, signature,",
+    "password, secret, credential, api_key, key, auth), are refused. Skipped",
+    "entries are reported on the page. Unknown keys are ignored, including",
+    "this _comment key, which is documentation only."
   ],
   "services": [
     {
