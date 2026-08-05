@@ -225,10 +225,21 @@ All candidates start from the same commit, receive the same immutable GoalSpec,
 and run the same configured checks. Repository-local command executables,
 test-suite membership, verifier definitions, and verifier-sensitive paths that
 must remain absent are frozen before work. The built-in manifests cover Python,
-Rust, Go, Maven, Gradle, .NET, and RSpec. Package-manager test scripts such as
+Rust, Go, Maven, Gradle, .NET, and RSpec, each bounded by what that ecosystem
+can actually prove. Package-manager test scripts such as
 `npm test`, `pnpm test`, `yarn test`, and `bun test` are treated as opaque and
 require explicit `review.assets`, because the package manifest can delegate to
-arbitrary repository code. A candidate that changes, adds, removes, or replaces
+arbitrary repository code. Cargo manifests and integration tests under `tests/`
+are frozen, but inline `#[cfg(test)]` tests, benches, and doctests in editable
+Rust sources are not an independent acceptance boundary and require explicit
+`review.assets`. Gradle build logic delegated through `apply from`,
+`includeBuild`, or `buildSrc/` requires them for the same reason, as does a
+Pytest run that loads plugins through `pytest_plugins` or an `addopts` `-p`
+option, because the plugin closure cannot be proven automatically. A Pytest
+`testpaths` tree declared in `pytest.ini`, `pyproject.toml`, `tox.ini`, or
+`setup.cfg` is frozen with its membership, and an entry that cannot be resolved
+to tracked files blocks the tournament. A candidate that changes, adds,
+removes, or replaces
 protected assets with a symlink is disqualified even if its altered check
 returns zero. Python module checks also use safe-path startup
 so a candidate cannot shadow the installed Pytest or unittest package from the

@@ -651,6 +651,7 @@ def test_managed_review_artifact_can_be_previewed_but_other_files_cannot(
     bridge, run_id = _managed_review_bridge(tmp_path)
 
     with gui_server(bridge) as base_url:  # type: ignore[arg-type]
+        get_json(base_url, "/api/tasks/current")
         preview = get_json(
             base_url,
             "/api/tasks/current/artifact"
@@ -669,6 +670,68 @@ def test_managed_review_artifact_can_be_previewed_but_other_files_cannot(
     }
     assert denied.code == 400
     assert "Only a recorded artifact" in str(denied.payload["error"])
+
+
+def test_managed_preview_requires_a_goal_id_this_session_has_seen(
+    tmp_path: Path,
+) -> None:
+    bridge, run_id = _managed_review_bridge(tmp_path)
+    doc_root = Path(bridge.doc_root)  # type: ignore[attr-defined]
+    other_run_id = "20260722T235959Z-unrelated-run"
+    other_run_dir = doc_root / "reports" / "local-node1-goal-harness" / "runs" / other_run_id
+    other_run_dir.mkdir(parents=True)
+    (other_run_dir / "owned-files.txt").write_text("PRIVATE_NOTES.md\n", encoding="utf-8")
+    (doc_root / "PRIVATE_NOTES.md").write_text("another operator's evidence\n", encoding="utf-8")
+
+    with gui_server(bridge) as base_url:  # type: ignore[arg-type]
+        unknown_artifact = get_http_error(
+            base_url,
+            "/api/tasks/current/artifact"
+            f"?path={quote('PRIVATE_NOTES.md')}&goal_id={quote(other_run_id)}",
+        )
+        unknown_file = get_http_error(
+            base_url,
+            "/api/tasks/current/file"
+            f"?path={quote('PRIVATE_NOTES.md')}&goal_id={quote(other_run_id)}",
+        )
+        get_json(base_url, "/api/tasks/current")
+        allowed = get_json(
+            base_url,
+            "/api/tasks/current/file"
+            f"?path={quote('SYSTEM_AUDIT_2026-07-22.md')}&goal_id={quote(run_id)}",
+        )
+        still_denied = get_http_error(
+            base_url,
+            "/api/tasks/current/artifact"
+            f"?path={quote('PRIVATE_NOTES.md')}&goal_id={quote(other_run_id)}",
+        )
+
+    assert unknown_artifact.code == 400
+    assert "task in this session" in str(unknown_artifact.payload["error"])
+    assert unknown_file.code == 400
+    assert "task in this session" in str(unknown_file.payload["error"])
+    assert still_denied.code == 400
+    assert allowed["path"] == "SYSTEM_AUDIT_2026-07-22.md"
+    assert "Overall Score: 8/10" in allowed["content"]
+
+
+def test_embedded_preview_requires_a_goal_id_this_session_has_seen(tmp_path: Path) -> None:
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with gui_server(backend) as base_url:  # type: ignore[arg-type]
+        unknown_file = get_http_error(
+            base_url,
+            "/api/tasks/current/file?path=result.txt&goal_id=goal-does-not-exist",
+        )
+        unknown_artifact = get_http_error(
+            base_url,
+            "/api/tasks/current/artifact?path=result.txt&goal_id=goal-does-not-exist",
+        )
+
+    assert unknown_file.code == 400
+    assert "task in this session" in str(unknown_file.payload["error"])
+    assert unknown_artifact.code == 400
+    assert "task in this session" in str(unknown_artifact.payload["error"])
 
 
 def test_managed_review_history_retains_evidence_after_lane_returns_ready(
@@ -1467,6 +1530,7 @@ def test_managed_preview_redacts_structured_secret_before_http_serialization(
     )
 
     with gui_server(bridge) as base_url:  # type: ignore[arg-type]
+        get_json(base_url, "/api/tasks/current")
         preview = get_json(
             base_url,
             "/api/tasks/current/artifact"
@@ -2365,7 +2429,7 @@ def test_gui_server_post_task_workflow_routes() -> None:
             "GOAL_CONTENT",
         ],
         ["continue", "--expected-run-id", "run-1", "--feedback", "keep going", "--json"],
-        ["review"],
+        ["review", "--expected-run-id", "run-1", "--json"],
         ["accept", "--expected-run-id", "run-1", "--json"],
         ["stop", "--expected-run-id", "run-1", "--json"],
     ]
@@ -2472,6 +2536,51 @@ def test_accept_action_does_not_accept_after_failed_managed_review() -> None:
     assert task["status"] == "needs_review"
     assert ["accept"] not in bridge.commands
     assert task["advanced_details"]["review_command"]["returncode"] == 1
+
+
+def test_accept_review_preflight_is_bound_to_the_expected_run() -> None:
+    bound_bridge = FakeBridge()
+    legacy_bridge = FakeBridge()
+
+    command_task(bound_bridge, "accept", {"expected_task_id": "run-1"})
+    command_task(legacy_bridge, "accept")
+
+    assert bound_bridge.commands == [
+        ["review", "--expected-run-id", "run-1", "--json"],
+        ["accept", "--expected-run-id", "run-1", "--json"],
+    ]
+    assert legacy_bridge.commands == [["review"], ["accept"]]
+
+
+def test_accept_never_runs_when_the_bound_review_preflight_fails() -> None:
+    class ReplacedRunReviewBridge(FakeBridge):
+        def run(self, args: list[str]) -> CommandResult:
+            self.commands.append(args)
+            if args[:1] == ["review"]:
+                return CommandResult(
+                    tuple(args),
+                    2,
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "reason": "active_run_changed",
+                            "expected_run_id": "run-1",
+                            "active_run_id": "run-2",
+                        }
+                    ),
+                    "expected run is no longer active\n",
+                )
+            return super().run(args)
+
+    bridge = ReplacedRunReviewBridge()
+
+    task = command_task(bridge, "accept", {"expected_task_id": "run-1"})
+
+    assert bridge.commands == [["review", "--expected-run-id", "run-1", "--json"]]
+    assert not any(command[:1] == ["accept"] for command in bridge.commands)
+    review_command = task["advanced_details"]["review_command"]
+    assert review_command["returncode"] == 2
+    assert "no longer active" in str(review_command["stderr"])
 
 
 def test_gui_supervised_messages_are_revisioned_and_cumulative() -> None:

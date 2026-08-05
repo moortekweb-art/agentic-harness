@@ -3,6 +3,7 @@ graft .github/workflows
 graft docs
 graft evaluation
 graft examples
+graft requirements
 graft tests
 prune examples/fix-failing-tests-demo/.agentic-harness
 prune examples/fix-failing-tests-demo/.pytest_cache

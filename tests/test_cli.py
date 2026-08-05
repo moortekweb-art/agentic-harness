@@ -291,7 +291,10 @@ def test_init_agent_grok_uses_official_headless_workspace_contract(tmp_path, cap
     config = load_config(tmp_path)
     assert rc == 0
     assert config.worker == "coding_agent"
-    assert config.coding_agent_command[:3] == ["grok", "-p", "{objective}"]
+    # Starter configuration resolves an installed executable to its absolute
+    # path. CI usually has no Grok binary, while operator hosts often do.
+    assert Path(config.coding_agent_command[0]).name == "grok"
+    assert config.coding_agent_command[1:3] == ["-p", "{objective}"]
     assert ["--cwd", "."] == config.coding_agent_command[3:5]
     assert ["--output-format", "plain"] == config.coding_agent_command[5:7]
     assert ["--sandbox", "workspace"] == config.coding_agent_command[11:13]
@@ -3513,6 +3516,39 @@ def test_post_worker_goal_json_redacts_in_memory_secrets(
     assert "<redacted>" in payload["metadata"]["worker_summary"]
     assert "<redacted>" in payload["metadata"]["worker_outcome"]["checkpoint"]
     assert "<redacted>" in payload["error"]
+
+
+def test_public_goal_json_redacts_secrets_named_by_key_not_only_by_shape(
+    tmp_path, capsys
+) -> None:
+    supervisor = Supervisor(project_dir=tmp_path)
+    goal = supervisor.start("redact key-named credentials")
+    goal.metadata["integration"] = {
+        "clientSecret": "ordinary looking value",
+        "privateKey": "plain words only",
+        "nested": [{"authorization": "friendly text"}],
+        "tokenCount": 12,
+        "note": "keep me",
+    }
+    supervisor.store.write_goal(goal)
+    capsys.readouterr()
+
+    direct = cli.public_goal_payload(goal)
+    rc = main(["--project-dir", str(tmp_path), "status", "--format", "json"])
+
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    assert rc == 0
+    assert "ordinary looking value" not in output
+    assert "plain words only" not in output
+    assert "friendly text" not in output
+    for emitted in (payload, direct):
+        integration = emitted["metadata"]["integration"]
+        assert integration["clientSecret"] == "<redacted>"
+        assert integration["privateKey"] == "<redacted>"
+        assert integration["nested"][0]["authorization"] == "<redacted>"
+        assert integration["tokenCount"] == 12
+        assert integration["note"] == "keep me"
 
 
 def test_terminal_text_renderers_redact_errors_and_artifact_paths() -> None:

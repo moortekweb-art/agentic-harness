@@ -61,8 +61,8 @@ exec
  succeeded in 0ms:
 [local-path]
 fatal: not a git repository (or any of the parent directories): .git
--rw------- 1 ai-inference ai-inference 22 Jul 12 01:16 package/__init__.py
--rw------- 1 ai-inference ai-inference 61 Jul 12 01:16 pyproject.toml
+-rw------- 1 evalhost evalhost 22 Jul 12 01:16 package/__init__.py
+-rw------- 1 evalhost evalhost 61 Jul 12 01:16 pyproject.toml
 [project]
 version = "2.4.0"
 dependencies = ["widget>=2.4.0"]

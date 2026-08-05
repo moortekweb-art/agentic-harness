@@ -127,14 +127,14 @@ cmp -s README.md <(printf 'Start with "'`serve --port 8081`.'"\\nDo not expose t
  succeeded in 0ms:
 [local-path]
 total 20
-drwx------ 7 ai-inference ai-inference 4096 Jul 12 01:26 .
-drwx------ 4 ai-inference ai-inference 4096 Jul 12 01:26 ..
-drwx------ 3 ai-inference ai-inference 4096 Jul 12 01:26 .agentic-harness
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:26 .agents
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:26 .codex
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:26 .git
--rw------- 1 ai-inference ai-inference   68 Jul 12 01:26 README.md
-drwx------ 2 ai-inference ai-inference 4096 Jul 12 01:26 config
+drwx------ 7 evalhost evalhost 4096 Jul 12 01:26 .
+drwx------ 4 evalhost evalhost 4096 Jul 12 01:26 ..
+drwx------ 3 evalhost evalhost 4096 Jul 12 01:26 .agentic-harness
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:26 .agents
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:26 .codex
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:26 .git
+-rw------- 1 evalhost evalhost   68 Jul 12 01:26 README.md
+drwx------ 2 evalhost evalhost 4096 Jul 12 01:26 config
 README.md:1:Start with `serve --port 8081`.
 config/app.ini:2:port=8081
 

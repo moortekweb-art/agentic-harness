@@ -77,7 +77,7 @@ jobs:
         run: python agentic_harness/core/release_validation.py ci
 
       - name: Install benchmark and release dependencies
-        run: python -m pip install -e ".[test]"
+        run: python -m pip install -c requirements/ci-constraints.txt -e ".[test]"
 
       - name: Regenerate representative benchmark receipt
         run: |

@@ -3,16 +3,121 @@
 from __future__ import annotations
 
 import hashlib
-from fnmatch import fnmatchcase
 import json
 from pathlib import Path
-import re
-import stat
-import subprocess
-import xml.etree.ElementTree as ET
 
-from agentic_harness.core.config import CONFIG_DIR
 from agentic_harness.core.errors import ConfigError
+from agentic_harness.core.verifiers.cargo import (
+    _refuse_editable_rust_inline_tests,
+    _RUST_DOC_COMMENT_FENCE,
+    _RUST_INLINE_TEST_ATTRIBUTE,
+    _rust_inline_tests,
+)
+from agentic_harness.core.verifiers.common import (
+    _add_globs,
+    _add_patterns,
+    _ALWAYS_PROTECTED_TEST_DIRECTORIES,
+    _configured_test_root,
+    _file_sha256,
+    _git_relevant_paths,
+    _is_excluded_workspace_path,
+    _lexists,
+    _matching_paths,
+    _protect_configured_test_roots,
+    _regular_files,
+    _repository_argument_path,
+    _tracked_membership,
+    is_link_or_reparse,
+    require_lexical_regular_path,
+)
+from agentic_harness.core.verifiers.gradle import (
+    _balanced_brace_body,
+    _balanced_parenthesis_end,
+    _gradle_alias_closures,
+    _GRADLE_ALIAS_CLOSURE_SUFFIX,
+    _GRADLE_DELEGATED_BUILD_LOGIC,
+    _GRADLE_DIRECT_TEST_CONFIG,
+    _GRADLE_GAP,
+    _GRADLE_GAP_TOKEN,
+    _gradle_lexical_mask,
+    _GRADLE_POTENTIAL_CLOSURE,
+    _GRADLE_SOURCE_ROOT_CALL,
+    _GRADLE_SOURCE_ROOT_NAME,
+    _GRADLE_TEST_ALIAS,
+    _GRADLE_TEST_BLOCK,
+    _gradle_test_roots,
+    _gradle_unrecognized_alias_closure_openings,
+    _literal_gradle_test_paths,
+    _QUOTED_PATH,
+    _refuse_delegated_gradle_build_logic,
+    _supported_gradle_alias_receiver,
+)
+from agentic_harness.core.verifiers.maven import _maven_test_roots
+from agentic_harness.core.verifiers.python import (
+    _effective_pytest_configuration,
+    _protect_pytest_configuration,
+    _PYTEST_CONFIG_SOURCES,
+    _pytest_configuration_error,
+    _PYTEST_GLOB_CHARACTERS,
+    _pytest_plugin_closure_is_unprovable,
+    _pytest_testpath_targets,
+    _pytest_testpaths,
+    harden_python_module_commands,
+)
+
+__all__ = [
+    "_ALWAYS_PROTECTED_TEST_DIRECTORIES",
+    "_GRADLE_ALIAS_CLOSURE_SUFFIX",
+    "_GRADLE_DELEGATED_BUILD_LOGIC",
+    "_GRADLE_DIRECT_TEST_CONFIG",
+    "_GRADLE_GAP",
+    "_GRADLE_GAP_TOKEN",
+    "_GRADLE_POTENTIAL_CLOSURE",
+    "_GRADLE_SOURCE_ROOT_CALL",
+    "_GRADLE_SOURCE_ROOT_NAME",
+    "_GRADLE_TEST_ALIAS",
+    "_GRADLE_TEST_BLOCK",
+    "_PYTEST_CONFIG_SOURCES",
+    "_PYTEST_GLOB_CHARACTERS",
+    "_QUOTED_PATH",
+    "_RUST_DOC_COMMENT_FENCE",
+    "_RUST_INLINE_TEST_ATTRIBUTE",
+    "_add_globs",
+    "_add_patterns",
+    "_balanced_brace_body",
+    "_balanced_parenthesis_end",
+    "_configured_test_root",
+    "_effective_pytest_configuration",
+    "_file_sha256",
+    "_git_relevant_paths",
+    "_gradle_alias_closures",
+    "_gradle_lexical_mask",
+    "_gradle_test_roots",
+    "_gradle_unrecognized_alias_closure_openings",
+    "_is_excluded_workspace_path",
+    "_lexists",
+    "_literal_gradle_test_paths",
+    "_matching_paths",
+    "_maven_test_roots",
+    "_protect_configured_test_roots",
+    "_protect_pytest_configuration",
+    "_pytest_configuration_error",
+    "_pytest_plugin_closure_is_unprovable",
+    "_pytest_testpath_targets",
+    "_pytest_testpaths",
+    "_refuse_delegated_gradle_build_logic",
+    "_refuse_editable_rust_inline_tests",
+    "_regular_files",
+    "_repository_argument_path",
+    "_rust_inline_tests",
+    "_supported_gradle_alias_receiver",
+    "_tracked_membership",
+    "freeze_verifier_assets",
+    "harden_python_module_commands",
+    "is_link_or_reparse",
+    "require_lexical_regular_path",
+    "verifier_asset_drift",
+]
 
 
 def freeze_verifier_assets(
@@ -81,6 +186,13 @@ def freeze_verifier_assets(
             protected_paths.update(python_paths)
             protected_patterns.add("**/conftest.py")
             _add_patterns(root, candidates, python_paths)
+            _protect_pytest_configuration(
+                root,
+                candidates,
+                protected_patterns,
+                tracked_paths,
+                allow_dynamic=bool(explicit_assets),
+            )
         if any(argument in {"npm", "pnpm", "yarn", "bun"} for argument in lowered):
             if not explicit_assets:
                 raise ConfigError(
@@ -105,6 +217,8 @@ def freeze_verifier_assets(
             )
         if "cargo" in lowered:
             boundary_established = True
+            if not explicit_assets:
+                _refuse_editable_rust_inline_tests(root, candidates, tracked_paths)
             protected_paths.update(("Cargo.toml", "Cargo.lock"))
             protected_patterns.update(("**/Cargo.toml", "**/Cargo.lock"))
             _add_patterns(root, candidates, ("Cargo.toml", "Cargo.lock"))
@@ -138,6 +252,8 @@ def freeze_verifier_assets(
             )
         if command_names & {"gradle", "gradlew", "gradlew.cmd", "gradlew.bat"}:
             boundary_established = True
+            if not explicit_assets:
+                _refuse_delegated_gradle_build_logic(root)
             protected_paths.update(("gradlew", "gradlew.cmd", "gradlew.bat"))
             protected_patterns.update(
                 (
@@ -208,7 +324,7 @@ def freeze_verifier_assets(
                 "configure review_assets with every repository-controlled verifier input"
             )
 
-    for directory_name in ("tests", "test", "spec", "specs"):
+    for directory_name in _ALWAYS_PROTECTED_TEST_DIRECTORIES:
         protected_patterns.add(f"{directory_name}/**")
         directory = root / directory_name
         if is_link_or_reparse(directory):
@@ -292,697 +408,3 @@ def verifier_asset_drift(
         if not candidate.is_file() or _file_sha256(candidate) != asset["sha256"]:
             drift.append(relative)
     return sorted(set(drift))
-
-
-def harden_python_module_commands(commands: list[list[str]]) -> list[list[str]]:
-    """Prevent the repository root from shadowing pytest/unittest at interpreter start."""
-
-    hardened: list[list[str]] = []
-    for command in commands:
-        updated = list(command)
-        names = [Path(argument).name.lower() for argument in updated]
-        executable = names[0] if names else ""
-        module_index = updated.index("-m") if "-m" in updated else -1
-        module = names[module_index + 1] if 0 <= module_index < len(names) - 1 else ""
-        if (
-            executable.startswith("python")
-            and module in {"pytest", "unittest"}
-            and "-P" not in updated[1:module_index]
-            and "-I" not in updated[1:module_index]
-        ):
-            updated.insert(1, "-P")
-        hardened.append(updated)
-    return hardened
-
-
-def require_lexical_regular_path(root: Path, candidate: Path, *, label: str) -> None:
-    try:
-        relative = candidate.relative_to(root)
-    except ValueError as exc:
-        raise ConfigError(f"verifier asset path is outside the workspace: {label}") from exc
-    current = root
-    for component in relative.parts:
-        current = current / component
-        if is_link_or_reparse(current):
-            raise ConfigError(
-                f"verifier asset must not use a symlink or reparse point: {label}"
-            )
-
-
-def _repository_argument_path(root: Path, text: str, *, executable: bool) -> Path | None:
-    # Go package selectors such as ``./...`` are command syntax, not repository
-    # paths.  In particular, Windows/Python 3.11 can report a synthetic ``...``
-    # path as existing and then fail while traversing it.  Ecosystem-specific
-    # manifest inference below supplies the actual verifier assets.
-    normalized = text.replace("\\", "/")
-    if normalized == "..." or normalized.endswith("/..."):
-        return None
-    raw = Path(text)
-    if ".." in raw.parts:
-        raise ConfigError(f"verifier asset path must not contain parent traversal: {text}")
-    candidate = raw.absolute() if raw.is_absolute() else (root / raw).absolute()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        if not raw.is_absolute() and ("/" in text or "\\" in text):
-            raise ConfigError(f"verifier asset path is outside the workspace: {text}")
-        return None
-    if executable and not _lexists(candidate) and "/" not in text and "\\" not in text:
-        return None
-    return candidate if _lexists(candidate) else None
-
-
-def _regular_files(root: Path, directory: Path) -> set[Path]:
-    result: set[Path] = set()
-    for candidate in directory.rglob("*"):
-        if CONFIG_DIR in candidate.parts or ".git" in candidate.parts:
-            continue
-        if is_link_or_reparse(candidate):
-            raise ConfigError(
-                f"verifier asset must not be a symlink or reparse point: {candidate}"
-            )
-        if candidate.is_file():
-            require_lexical_regular_path(root, candidate, label=str(candidate))
-            result.add(candidate)
-    return result
-
-
-def _lexists(path: Path) -> bool:
-    try:
-        path.lstat()
-    except FileNotFoundError:
-        return False
-    return True
-
-
-def is_link_or_reparse(path: Path) -> bool:
-    try:
-        metadata = path.lstat()
-    except FileNotFoundError:
-        return False
-    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    attributes = getattr(metadata, "st_file_attributes", 0)
-    return stat.S_ISLNK(metadata.st_mode) or bool(
-        reparse_flag and attributes & reparse_flag
-    )
-
-
-def _add_patterns(root: Path, candidates: set[Path], names: tuple[str, ...]) -> None:
-    for name in names:
-        candidate = root / name
-        if _lexists(candidate):
-            require_lexical_regular_path(root, candidate, label=name)
-            if candidate.is_file():
-                candidates.add(candidate)
-
-
-def _add_globs(root: Path, candidates: set[Path], patterns: tuple[str, ...]) -> None:
-    for pattern in patterns:
-        for candidate in root.glob(pattern):
-            if is_link_or_reparse(candidate):
-                raise ConfigError(
-                    f"verifier asset must not be a symlink or reparse point: {candidate}"
-                )
-            if candidate.is_file():
-                require_lexical_regular_path(root, candidate, label=str(candidate))
-                candidates.add(candidate)
-
-
-_GRADLE_TEST_BLOCK = re.compile(
-    r"""(?x)
-    (?:
-        \btest
-        |
-        \b(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)
-    )
-    (?:\s*\.\s*get\s*\(\s*\))?
-    (?:\.\s*(?P<method>[A-Za-z_][A-Za-z0-9_]*)\s*)?
-    \s*\{
-    """
-)
-_GRADLE_DIRECT_TEST_CONFIG = re.compile(
-    r"""(?x)
-    \bsourceSets\s*
-    (?:
-        \.\s*test
-        |
-        \[\s*["']test["']\s*\]
-        |
-        \.\s*(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)
-    )
-    [^\n;]*
-    """
-)
-_GRADLE_SOURCE_ROOT_CALL = re.compile(
-    r"\b(?:java|kotlin|resources)\s*"
-    r"(?:\.\s*|\{\s*)"
-    r"(?:srcDirs?|setSrcDirs)\b(?P<expression>[^\n;}]*)"
-)
-_GRADLE_SOURCE_ROOT_NAME = re.compile(r"\b(?:srcDirs?|setSrcDirs)\b")
-_GRADLE_TEST_ALIAS = re.compile(
-    r"""(?x)
-    (?:
-        \b(?:val|var|def)\s+
-        |
-        (?<![A-Za-z0-9_$.])
-        (?:[A-Za-z_][A-Za-z0-9_$.<>,?]*\s+)+
-    )
-    (?P<name>[A-Za-z_][A-Za-z0-9_]*)
-    (?:\s*:\s*[A-Za-z_][A-Za-z0-9_$.<>,?\s]*)?
-    \s*=\s*
-    \bsourceSets\s*
-    (?:
-        \.\s*test
-        |
-        \[\s*["']test["']\s*\]
-        |
-        \.\s*(?:getByName|named)(?:<[^>]+>)?\(\s*["']test["']\s*\)
-    )
-    """
-)
-_GRADLE_GAP_TOKEN = re.compile(
-    r"(?:\s+|//[^\n]*(?:\n|$)|/\*(?:[^*]|\*(?!/))*\*/)"
-)
-_GRADLE_GAP = r"(?:\s|//[^\n]*(?:\n|$)|/\*(?:[^*]|\*(?!/))*\*/)*"
-_GRADLE_ALIAS_CLOSURE_SUFFIX = re.compile(
-    rf"{_GRADLE_GAP}"
-    rf"(?:\.{_GRADLE_GAP}get{_GRADLE_GAP}"
-    rf"\({_GRADLE_GAP}\){_GRADLE_GAP})?"
-    rf"\.{_GRADLE_GAP}"
-    r"(?P<method>[A-Za-z_][A-Za-z0-9_]*)"
-    rf"{_GRADLE_GAP}(?:\([^{{}};]*\){_GRADLE_GAP})?"
-    r"(?P<opening>\{)"
-)
-_GRADLE_POTENTIAL_CLOSURE = re.compile(
-    rf"\.{_GRADLE_GAP}"
-    r"[A-Za-z_][A-Za-z0-9_]*"
-    rf"{_GRADLE_GAP}(?:\([^{{}};]*\){_GRADLE_GAP})?"
-    r"(?P<opening>\{)"
-)
-_QUOTED_PATH = re.compile(r"""(?P<quote>['"])(?P<path>[^'"]+)(?P=quote)""")
-
-
-def _maven_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
-    configured: set[Path] = set()
-    for pom in sorted(root.glob("**/pom.xml")):
-        require_lexical_regular_path(root, pom, label=str(pom))
-        try:
-            document = ET.parse(pom)
-        except (ET.ParseError, OSError) as exc:
-            raise ConfigError(f"unable to inspect Maven verifier inputs: {pom}") from exc
-        for element in document.iter():
-            if element.tag.rsplit("}", 1)[-1] != "testSourceDirectory":
-                continue
-            value = (element.text or "").strip()
-            if not value:
-                continue
-            configured.add(
-                _configured_test_root(
-                    root,
-                    pom.parent,
-                    value,
-                    ecosystem="Maven",
-                    allow_dynamic=allow_dynamic,
-                )
-            )
-        for test_resources in (
-            element
-            for element in document.iter()
-            if element.tag.rsplit("}", 1)[-1] == "testResources"
-        ):
-            for resource in test_resources:
-                if resource.tag.rsplit("}", 1)[-1] != "testResource":
-                    continue
-                for child in resource:
-                    if child.tag.rsplit("}", 1)[-1] != "directory":
-                        continue
-                    value = (child.text or "").strip()
-                    if value:
-                        configured.add(
-                            _configured_test_root(
-                                root,
-                                pom.parent,
-                                value,
-                                ecosystem="Maven",
-                                allow_dynamic=allow_dynamic,
-                            )
-                        )
-        for execution in (
-            element
-            for element in document.iter()
-            if element.tag.rsplit("}", 1)[-1] == "execution"
-        ):
-            goals = {
-                (goal.text or "").strip()
-                for goal in execution.iter()
-                if goal.tag.rsplit("}", 1)[-1] == "goal"
-            }
-            selected_tags: set[str] = set()
-            if "add-test-source" in goals:
-                selected_tags.add("source")
-            if "add-test-resource" in goals:
-                selected_tags.add("directory")
-            if not selected_tags:
-                continue
-            for child in execution.iter():
-                if child.tag.rsplit("}", 1)[-1] not in selected_tags:
-                    continue
-                value = (child.text or "").strip()
-                if value:
-                    configured.add(
-                        _configured_test_root(
-                            root,
-                            pom.parent,
-                            value,
-                            ecosystem="Maven",
-                            allow_dynamic=allow_dynamic,
-                        )
-                    )
-    return configured
-
-
-def _gradle_test_roots(root: Path, *, allow_dynamic: bool) -> set[Path]:
-    configured: set[Path] = set()
-    for build_file in sorted(
-        {
-            *root.glob("**/build.gradle"),
-            *root.glob("**/build.gradle.kts"),
-        }
-    ):
-        require_lexical_regular_path(root, build_file, label=str(build_file))
-        try:
-            text = build_file.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            raise ConfigError(f"unable to inspect Gradle verifier inputs: {build_file}") from exc
-        expressions: list[str] = []
-        unresolved_source_root = False
-        for match in _GRADLE_TEST_BLOCK.finditer(text):
-            method = match.group("method")
-            block = _balanced_brace_body(text, match.end() - 1)
-            source_matches = list(_GRADLE_SOURCE_ROOT_CALL.finditer(block))
-            expressions.extend(
-                item.group("expression")
-                for item in source_matches
-            )
-            unresolved_source_root = unresolved_source_root or (
-                len(_GRADLE_SOURCE_ROOT_NAME.findall(block)) != len(source_matches)
-            )
-            unresolved_source_root = unresolved_source_root or (
-                method is not None and method not in {"configure", "apply"}
-            )
-        for item in _GRADLE_DIRECT_TEST_CONFIG.finditer(text):
-            direct_config = item.group(0)
-            source_matches = list(_GRADLE_SOURCE_ROOT_CALL.finditer(direct_config))
-            expressions.extend(
-                source_match.group("expression") for source_match in source_matches
-            )
-            unresolved_source_root = unresolved_source_root or (
-                len(_GRADLE_SOURCE_ROOT_NAME.findall(direct_config))
-                != len(source_matches)
-            )
-        lexical_text = _gradle_lexical_mask(text)
-        for alias_match in _GRADLE_TEST_ALIAS.finditer(text):
-            alias_name = alias_match.group("name")
-            alias = re.escape(alias_name)
-            direct_alias = re.compile(
-                rf"\b{alias}\s*(?:\.\s*get\s*\(\s*\))?\s*\.\s*"
-                r"(?:java|kotlin|resources)\s*\.\s*"
-                r"(?:srcDirs?|setSrcDirs)\b(?P<expression>[^\n;}]*)"
-            )
-            for direct_match in direct_alias.finditer(text):
-                expressions.append(direct_match.group("expression"))
-            alias_closures = _gradle_alias_closures(
-                text, alias_name, lexical_text=lexical_text
-            )
-            recognized_openings = {
-                opening for _, opening, _ in alias_closures
-            }
-            for method, opening, receiver_supported in alias_closures:
-                block = _balanced_brace_body(text, opening)
-                source_matches = list(_GRADLE_SOURCE_ROOT_CALL.finditer(block))
-                if receiver_supported and method in {"configure", "apply"}:
-                    expressions.extend(
-                        source_match.group("expression")
-                        for source_match in source_matches
-                    )
-                    unresolved_source_root = unresolved_source_root or (
-                        len(_GRADLE_SOURCE_ROOT_NAME.findall(block))
-                        != len(source_matches)
-                    )
-                elif _GRADLE_SOURCE_ROOT_NAME.search(block):
-                    unresolved_source_root = True
-            for opening in _gradle_unrecognized_alias_closure_openings(
-                text,
-                alias_name,
-                lexical_text=lexical_text,
-                recognized_openings=recognized_openings,
-                declaration_name_start=alias_match.start("name"),
-            ):
-                if _GRADLE_SOURCE_ROOT_NAME.search(
-                    _balanced_brace_body(text, opening)
-                ):
-                    unresolved_source_root = True
-            for line in text.splitlines():
-                if not re.search(rf"\b{alias}\b", line):
-                    continue
-                alias_source_matches = list(direct_alias.finditer(line))
-                unresolved_source_root = unresolved_source_root or (
-                    len(_GRADLE_SOURCE_ROOT_NAME.findall(line))
-                    != len(alias_source_matches)
-                )
-        if unresolved_source_root and not allow_dynamic:
-            raise ConfigError(
-                "verified best-of-N cannot infer a Gradle test source root syntax; "
-                "configure review_assets with every selected test directory"
-            )
-        for expression in expressions:
-            paths = _literal_gradle_test_paths(expression)
-            if paths is None and not allow_dynamic:
-                raise ConfigError(
-                    "verified best-of-N cannot infer a dynamic Gradle test source root; "
-                    "configure review_assets with every selected test directory"
-                )
-            for value in paths or []:
-                configured.add(
-                    _configured_test_root(
-                        root,
-                        build_file.parent,
-                        value,
-                        ecosystem="Gradle",
-                        allow_dynamic=allow_dynamic,
-                    )
-                )
-    return configured
-
-
-def _gradle_unrecognized_alias_closure_openings(
-    text: str,
-    alias: str,
-    *,
-    lexical_text: str,
-    recognized_openings: set[int],
-    declaration_name_start: int,
-) -> set[int]:
-    openings: set[int] = set()
-    for alias_match in re.finditer(
-        rf"\b{re.escape(alias)}\b",
-        lexical_text,
-    ):
-        if alias_match.start() == declaration_name_start:
-            continue
-        search_start = alias_match.end()
-        for suffix in _GRADLE_POTENTIAL_CLOSURE.finditer(
-            text,
-            search_start,
-        ):
-            opening = suffix.start("opening")
-            if opening not in recognized_openings:
-                openings.add(opening)
-    return openings
-
-
-def _gradle_alias_closures(
-    text: str,
-    alias: str,
-    *,
-    lexical_text: str | None = None,
-) -> list[tuple[str, int, bool]]:
-    if lexical_text is None:
-        lexical_text = _gradle_lexical_mask(text)
-    receivers: dict[int, bool] = {
-        match.end(): True
-        for match in re.finditer(rf"\b{re.escape(alias)}\b", lexical_text)
-    }
-    for opening_match in re.finditer(r"\(", lexical_text):
-        opening = opening_match.start()
-        closing = _balanced_parenthesis_end(
-            text, opening, lexical_text=lexical_text
-        )
-        if closing is None:
-            continue
-        receiver_body = text[opening + 1 : closing]
-        if not re.search(
-            rf"\b{re.escape(alias)}\b",
-            lexical_text[opening + 1 : closing],
-        ):
-            continue
-        line_start = text.rfind("\n", 0, opening) + 1
-        prefix = _GRADLE_GAP_TOKEN.sub("", text[line_start:opening])
-        if prefix and (prefix[-1].isalnum() or prefix[-1] in "_$.)]"):
-            continue
-        receivers[closing + 1] = _supported_gradle_alias_receiver(
-            receiver_body, alias
-        )
-
-    closures: set[tuple[str, int, bool]] = set()
-    for receiver_end, receiver_supported in receivers.items():
-        suffix = _GRADLE_ALIAS_CLOSURE_SUFFIX.match(text, receiver_end)
-        if suffix is not None:
-            closures.add(
-                (
-                    suffix.group("method"),
-                    suffix.start("opening"),
-                    receiver_supported,
-                )
-            )
-    return sorted(closures, key=lambda item: item[1])
-
-
-def _supported_gradle_alias_receiver(receiver_body: str, alias: str) -> bool:
-    compact = _GRADLE_GAP_TOKEN.sub("", receiver_body)
-    while (
-        compact.startswith("(")
-        and compact.endswith(")")
-        and _balanced_parenthesis_end(compact, 0) == len(compact) - 1
-    ):
-        compact = compact[1:-1]
-    return compact == alias or bool(
-        re.fullmatch(rf"{re.escape(alias)}\.get\(\)", compact)
-    )
-
-
-def _balanced_parenthesis_end(
-    text: str,
-    opening: int,
-    *,
-    lexical_text: str | None = None,
-) -> int | None:
-    if lexical_text is None:
-        lexical_text = _gradle_lexical_mask(text)
-    if opening >= len(lexical_text) or lexical_text[opening] != "(":
-        return None
-    depth = 0
-    for index in range(opening, len(lexical_text)):
-        character = lexical_text[index]
-        if character == "(":
-            depth += 1
-        elif character == ")":
-            depth -= 1
-            if depth == 0:
-                return index
-    return None
-
-
-def _gradle_lexical_mask(text: str) -> str:
-    """Preserve structural offsets while masking Gradle comments and strings."""
-
-    masked = list(text)
-    index = 0
-    state = "code"
-    quote = ""
-    block_depth = 0
-    while index < len(text):
-        if state == "code":
-            if text.startswith("//", index):
-                masked[index : index + 2] = "  "
-                index += 2
-                state = "line_comment"
-                continue
-            if text.startswith("/*", index):
-                masked[index : index + 2] = "  "
-                index += 2
-                state = "block_comment"
-                block_depth = 1
-                continue
-            if text.startswith('"""', index) or text.startswith("'''", index):
-                quote = text[index : index + 3]
-                masked[index : index + 3] = "   "
-                index += 3
-                state = "triple_string"
-                continue
-            if text[index] in {'"', "'"}:
-                quote = text[index]
-                masked[index] = " "
-                index += 1
-                state = "string"
-                continue
-            index += 1
-            continue
-
-        if state == "line_comment":
-            if text[index] == "\n":
-                state = "code"
-            else:
-                masked[index] = " "
-            index += 1
-            continue
-
-        if state == "block_comment":
-            if text.startswith("/*", index):
-                masked[index : index + 2] = "  "
-                index += 2
-                block_depth += 1
-                continue
-            if text.startswith("*/", index):
-                masked[index : index + 2] = "  "
-                index += 2
-                block_depth -= 1
-                if block_depth == 0:
-                    state = "code"
-                continue
-            if text[index] != "\n":
-                masked[index] = " "
-            index += 1
-            continue
-
-        if state == "string":
-            if text[index] == "\\":
-                masked[index] = " "
-                if index + 1 < len(text):
-                    if text[index + 1] != "\n":
-                        masked[index + 1] = " "
-                    index += 2
-                else:
-                    index += 1
-                continue
-            if text[index] == quote:
-                masked[index] = " "
-                index += 1
-                state = "code"
-                continue
-            if text[index] != "\n":
-                masked[index] = " "
-            index += 1
-            continue
-
-        if text.startswith(quote, index):
-            masked[index : index + 3] = "   "
-            index += 3
-            state = "code"
-            continue
-        if text[index] != "\n":
-            masked[index] = " "
-        index += 1
-
-    return "".join(masked)
-
-
-def _literal_gradle_test_paths(expression: str) -> list[str] | None:
-    paths = [match.group("path") for match in _QUOTED_PATH.finditer(expression)]
-    scrubbed = _QUOTED_PATH.sub("", expression)
-    scrubbed = re.sub(r"\b(?:files|listOf|setOf)\b", "", scrubbed)
-    if "$" in scrubbed or re.search(r"[A-Za-z_]", scrubbed):
-        return None
-    return paths or None
-
-
-def _balanced_brace_body(text: str, opening: int) -> str:
-    depth = 0
-    for index in range(opening, len(text)):
-        character = text[index]
-        if character == "{":
-            depth += 1
-        elif character == "}":
-            depth -= 1
-            if depth == 0:
-                return text[opening + 1 : index]
-    return text[opening + 1 :]
-
-
-def _configured_test_root(
-    root: Path,
-    base: Path,
-    value: str,
-    *,
-    ecosystem: str,
-    allow_dynamic: bool,
-) -> Path:
-    if "$" in value:
-        if allow_dynamic:
-            return root / "src" / "test"
-        raise ConfigError(
-            f"verified best-of-N cannot infer a dynamic {ecosystem} test source root; "
-            "configure review_assets with every selected test directory"
-        )
-    raw = Path(value)
-    if raw.is_absolute() or ".." in raw.parts:
-        raise ConfigError(f"{ecosystem} test source root is outside the workspace: {value}")
-    candidate = (base / raw).absolute()
-    try:
-        candidate.relative_to(root)
-    except ValueError as exc:
-        raise ConfigError(
-            f"{ecosystem} test source root is outside the workspace: {value}"
-        ) from exc
-    return candidate
-
-
-def _protect_configured_test_roots(
-    root: Path,
-    candidates: set[Path],
-    protected_patterns: set[str],
-    configured_roots: set[Path],
-) -> None:
-    for directory in configured_roots:
-        relative = directory.relative_to(root).as_posix()
-        protected_patterns.add(f"{relative}/**")
-        if not _lexists(directory):
-            continue
-        if is_link_or_reparse(directory) or not directory.is_dir():
-            raise ConfigError(
-                f"verifier test source root must be a regular directory: {relative}"
-            )
-        candidates.update(_regular_files(root, directory))
-
-
-def _matching_paths(root: Path, pattern: str, available_paths: set[str]) -> list[str]:
-    matches: list[str] = []
-    for relative in sorted(available_paths):
-        if not fnmatchcase(relative, pattern):
-            continue
-        candidate = root / relative
-        if not _lexists(candidate):
-            continue
-        if is_link_or_reparse(candidate):
-            matches.append(f"{relative}:symlink")
-        elif candidate.is_file():
-            matches.append(relative)
-        elif candidate.is_dir():
-            matches.append(f"{relative}:directory")
-        else:
-            matches.append(f"{relative}:special")
-    return matches
-
-
-def _git_relevant_paths(root: Path) -> set[str]:
-    proc = subprocess.run(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        cwd=root,
-        capture_output=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        return set()
-    return {
-        value.decode("utf-8", errors="surrogateescape")
-        for value in proc.stdout.split(b"\0")
-        if value
-    }
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
