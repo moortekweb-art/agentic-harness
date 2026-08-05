@@ -1584,7 +1584,14 @@ def command_task(
         return status_task(bridge)
     body = body or {}
     if command == "accept":
-        review = bridge.run(["review"])
+        expected_task_id = str(body.get("expected_task_id", "")).strip()
+        # The review preflight must observe the same run the acceptance will
+        # bind to, or another client can swap the active run in between.
+        review = bridge.run(
+            ["review", "--expected-run-id", expected_task_id, "--json"]
+            if expected_task_id
+            else ["review"]
+        )
         if review.returncode != 0:
             task = status_task(bridge)
             details = dict(task.get("advanced_details") or {})
@@ -1597,7 +1604,6 @@ def command_task(
             task["advanced_details"] = details
             return task
         args = ["accept"]
-        expected_task_id = str(body.get("expected_task_id", "")).strip()
         if expected_task_id:
             args.extend(["--expected-run-id", expected_task_id, "--json"])
         result = bridge.run(args)

@@ -278,6 +278,22 @@ def make_handler(
         foreground["metadata"] = foreground_metadata
         return foreground
 
+    def authorized_preview_goal_id(
+        active: EmbeddedExecutionBackend | None, goal_id: str
+    ) -> str:
+        """Resolve a historical preview id through this session's own tasks."""
+        requested = str(goal_id or "").strip()
+        if not requested:
+            return ""
+        known = (
+            any(str(task.get("id") or "").strip() == requested for task in active.history())
+            if active is not None
+            else session.task(requested) is not None
+        )
+        if not known:
+            raise ValueError("Only evidence from a task in this session can be previewed.")
+        return requested
+
     def _lane_is_idle_for_observed_task(task: dict[str, Any]) -> bool:
         if str(task.get("status") or "").strip() not in {"ready", "done", "stopped"}:
             return False
@@ -395,6 +411,7 @@ def make_handler(
                 path = parse_qs(parsed.query).get("path", [""])[0]
                 goal_id = parse_qs(parsed.query).get("goal_id", [""])[0]
                 try:
+                    goal_id = authorized_preview_goal_id(active, goal_id)
                     self._json(
                         active.preview_file(path, goal_id=goal_id)
                         if active is not None
@@ -409,6 +426,7 @@ def make_handler(
                 path = parse_qs(parsed.query).get("path", [""])[0]
                 goal_id = parse_qs(parsed.query).get("goal_id", [""])[0]
                 try:
+                    goal_id = authorized_preview_goal_id(active, goal_id)
                     self._json(
                         active.preview_artifact(path, goal_id=goal_id)
                         if active is not None

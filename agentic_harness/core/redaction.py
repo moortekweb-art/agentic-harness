@@ -158,8 +158,10 @@ def redact_json_value(value: Any, *, depth: int = 0) -> Any:
     if depth > 32:
         return "<redacted>"
     if isinstance(value, dict):
+        # Field names carry secrets too, so the emitted key is scrubbed while
+        # the sensitivity decision still reads the original name.
         return {
-            str(key): (
+            redact_secrets(str(key)): (
                 "<redacted>"
                 if sensitive_json_key(str(key))
                 else redact_json_value(item, depth=depth + 1)

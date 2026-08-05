@@ -3518,6 +3518,39 @@ def test_post_worker_goal_json_redacts_in_memory_secrets(
     assert "<redacted>" in payload["error"]
 
 
+def test_public_goal_json_redacts_secrets_named_by_key_not_only_by_shape(
+    tmp_path, capsys
+) -> None:
+    supervisor = Supervisor(project_dir=tmp_path)
+    goal = supervisor.start("redact key-named credentials")
+    goal.metadata["integration"] = {
+        "clientSecret": "ordinary looking value",
+        "privateKey": "plain words only",
+        "nested": [{"authorization": "friendly text"}],
+        "tokenCount": 12,
+        "note": "keep me",
+    }
+    supervisor.store.write_goal(goal)
+    capsys.readouterr()
+
+    direct = cli.public_goal_payload(goal)
+    rc = main(["--project-dir", str(tmp_path), "status", "--format", "json"])
+
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    assert rc == 0
+    assert "ordinary looking value" not in output
+    assert "plain words only" not in output
+    assert "friendly text" not in output
+    for emitted in (payload, direct):
+        integration = emitted["metadata"]["integration"]
+        assert integration["clientSecret"] == "<redacted>"
+        assert integration["privateKey"] == "<redacted>"
+        assert integration["nested"][0]["authorization"] == "<redacted>"
+        assert integration["tokenCount"] == 12
+        assert integration["note"] == "keep me"
+
+
 def test_terminal_text_renderers_redact_errors_and_artifact_paths() -> None:
     error_secret = "opaque-error-secret-Z7Q4M9"
     artifact_secret = "sk-artifact-secret-Z7Q4M9"
