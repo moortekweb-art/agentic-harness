@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Agentic Harness</title>
-    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="icon" href="static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="static/styles.css" />
   </head>
   <body>
     <svg class="icon-sprite" aria-hidden="true">
@@ -281,7 +281,7 @@
       </div>
 
       <section id="demoCallout" class="first-success-card" aria-labelledby="demoTitle" hidden>
-        <img class="state-illustration demo-illustration" src="/static/illustrations/verified-archive.webp" alt="" width="220" height="147" loading="lazy" />
+        <img class="state-illustration demo-illustration" src="static/illustrations/verified-archive.webp" alt="" width="220" height="147" loading="lazy" />
         <div>
           <p class="eyebrow">No setup required</p>
           <h2 id="demoTitle">See an independently checked result in about a minute</h2>
@@ -593,7 +593,7 @@
           <details id="completedDetails" class="completed-details" hidden>
             <summary>View evidence from the previous task</summary>
             <section id="finalResult" class="final-result" hidden>
-              <img class="state-illustration result-illustration" src="/static/illustrations/verified-archive.webp" alt="" width="240" height="160" loading="lazy" />
+              <img class="state-illustration result-illustration" src="static/illustrations/verified-archive.webp" alt="" width="240" height="160" loading="lazy" />
               <p class="eyebrow">Evidence-backed result</p>
               <h3 id="finalLabel">Outcome</h3>
               <p id="finalReason"></p>
@@ -655,7 +655,7 @@
             <button id="exportButton" title="Copy durable task history"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg><span id="exportButtonLabel">Copy history</span></button>
           </div>
           <div id="historyEmpty" class="illustrated-empty" hidden>
-            <img class="state-illustration" src="/static/illustrations/verified-archive.webp" alt="" width="260" height="173" loading="lazy" />
+            <img class="state-illustration" src="static/illustrations/verified-archive.webp" alt="" width="260" height="173" loading="lazy" />
             <strong>No matching tasks</strong>
             <p>Completed and active work will appear here with its verification evidence.</p>
           </div>
@@ -672,7 +672,7 @@
           <p class="help-text">Configure this project once. API keys entered here last only until the app closes and are never written to the project.</p>
 
           <section id="setupJourney" class="setup-journey" aria-labelledby="setupJourneyTitle">
-            <img id="setupJourneyImage" class="state-illustration" src="/static/illustrations/local-ai-connection.webp" alt="" width="280" height="187" />
+            <img id="setupJourneyImage" class="state-illustration" src="static/illustrations/local-ai-connection.webp" alt="" width="280" height="187" />
             <div>
               <p class="eyebrow">Guided setup</p>
               <h3 id="setupJourneyTitle">Connect, test, then start</h3>
@@ -730,7 +730,7 @@
                   <button type="button" id="checkLocalModelsButton">Find local AI</button>
                 </div>
                 <div class="local-model-guide" id="localModelGuide" hidden>
-                  <img class="state-illustration guide-illustration" src="/static/illustrations/setup-recovery.webp" alt="" width="180" height="120" loading="lazy" />
+                  <img class="state-illustration guide-illustration" src="static/illustrations/setup-recovery.webp" alt="" width="180" height="120" loading="lazy" />
                   <strong>New to local AI? Start with LM Studio.</strong>
                   <ol>
                     <li><a href="https://lmstudio.ai/download" target="_blank" rel="noreferrer">Install LM Studio</a>.</li>
@@ -805,6 +805,15 @@
           </div>
         </form>
       </section>
+
+      <!-- portal.html is served by this same server, so the link stays
+           relative and works at the bare mount and behind any reverse-proxy
+           path prefix. The portal itself loads its links from an
+           operator-supplied services.local.json; nothing is hardcoded here. -->
+      <footer class="network-footer" aria-label="Local network services">
+        <span class="network-footer-label">Local network:</span>
+        <a href="portal.html">Service portal</a>
+      </footer>
     </main>
     <dialog id="shortcutsDialog">
       <form method="dialog">
@@ -848,8 +857,8 @@
         <pre id="previewContent"></pre>
       </form>
     </dialog>
-    <script src="/static/auth.js"></script>
-    <script src="/static/assurance.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="static/auth.js"></script>
+    <script src="static/assurance.js"></script>
+    <script src="static/app.js"></script>
   </body>
 </html>
