@@ -15,6 +15,8 @@ import subprocess
 from threading import Lock
 import time
 
+from agentic_harness.core.redaction import redact_preview_text
+
 
 DOC_ROOT_ENV = "AGENTIC_HARNESS_DOC_ROOT"
 LOCAL_GOAL_ENV = "AGENTIC_HARNESS_LOCAL_GOAL"
@@ -1539,9 +1541,9 @@ def managed_mode_record_dispatchable(mode: dict[str, object]) -> bool:
 def format_command_result(result: CommandResult) -> str:
     parts: list[str] = []
     if result.stdout.strip():
-        parts.append(result.stdout.rstrip())
+        parts.append(redact_preview_text(result.stdout.rstrip()))
     if result.stderr.strip():
-        parts.append(result.stderr.rstrip())
+        parts.append(redact_preview_text(result.stderr.rstrip()))
     if not parts:
         parts.append(f"command exited {result.returncode}")
     return "\n".join(parts)

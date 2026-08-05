@@ -66,6 +66,12 @@ Current candidate: v0.13.6, with notes at `docs/RELEASE_NOTES_0.13.6.md`.
   points and packaged browser assets, runs strict autonomous and demo flows,
   and writes `dist/SHA256SUMS`.
 
+- Confirm the full suite includes and passes the raw worker-output disclosure
+  canaries. They must prove synthetic secrets from worker stdout, stderr,
+  summaries, structured outcomes, and artifact paths are absent from durable
+  goal state, terminal output, GUI task payloads, and browser responses. Do not
+  tag a candidate by excluding or bypassing these tests.
+
 - Run the real browser journey from the candidate:
 
   - navigate Home, Tasks, History, and Settings by pointer and keyboard;

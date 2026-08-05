@@ -29,7 +29,11 @@ from agentic_harness.core.local_goal_bridge import (
     managed_mode_record_dispatchable,
     managed_route_key,
 )
-from agentic_harness.core.redaction import redact_preview_text
+from agentic_harness.core.redaction import (
+    redact_json_value,
+    redact_preview_text,
+    redact_secrets,
+)
 from agentic_harness.gui.preview_security import sensitive_preview_path
 
 
@@ -1896,7 +1900,7 @@ def _task(
             "verification_commands": [],
             "remaining": [],
         }
-    return {
+    task: TaskPayload = {
         "id": runtime_context["id"],
         "objective": runtime_context["objective"],
         "human_title": "Current work",
@@ -1934,6 +1938,8 @@ def _task(
         },
         "advanced_details": details,
     }
+    redacted = redact_json_value(task)
+    return cast(TaskPayload, redacted) if isinstance(redacted, dict) else {}
 
 
 def _guide_for_status(
@@ -3245,14 +3251,19 @@ def _collect_strings(payload: dict[str, Any] | None, keys: tuple[str, ...]) -> l
     for key in keys:
         item = payload.get(key)
         if isinstance(item, str) and item.strip():
-            values.append(item.strip())
+            values.append(redact_secrets(item.strip()))
         elif isinstance(item, list):
-            values.extend(str(value).strip() for value in item if str(value).strip())
+            values.extend(
+                redact_secrets(str(value).strip())
+                for value in item
+                if str(value).strip()
+            )
     return values[:12]
 
 
 def _clean_summary(value: str) -> str:
-    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    safe_value = redact_secrets(value)
+    lines = [line.strip() for line in safe_value.splitlines() if line.strip()]
     if not lines:
         return "No detail returned yet."
     summary = " ".join(lines[:4])

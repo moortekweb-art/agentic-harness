@@ -3093,6 +3093,30 @@ def test_gui_server_websocket_status_redacts_secret_shaped_task_fields() -> None
     assert b"<redacted>" in response
 
 
+def test_task_projection_redacts_raw_command_output_before_in_process_use() -> None:
+    stdout_secret = "ordinary-looking-command-credential"
+    stderr_secret = "gui-command-error-secret-Z7Q4M9"
+    result = CommandResult(
+        ("local-goal", "status", "--json"),
+        1,
+        json.dumps(
+            {
+                "status": "working",
+                "summary": f"api_key={stderr_secret}",
+                "clientSecret": stdout_secret,
+            }
+        ),
+        f"token={stderr_secret}",
+    )
+
+    task = task_from_command_result(result, fallback_status="working")
+    serialized = json.dumps(task)
+
+    assert stdout_secret not in serialized
+    assert stderr_secret not in serialized
+    assert "<redacted>" in serialized
+
+
 def test_gui_server_rejects_cross_origin_websocket() -> None:
     websocket_key = base64.b64encode(b"cross-origin test nonce").decode("ascii")
     with gui_server(FakeBridge()) as base_url:
