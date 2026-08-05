@@ -61,14 +61,14 @@ exec
  exited 1 in 0ms:
 [local-path]
 total 20
-drwx------ 7 ai-inference ai-inference 4096 Jul 12 01:35 .
-drwx------ 4 ai-inference ai-inference 4096 Jul 12 01:35 ..
-drwx------ 3 ai-inference ai-inference 4096 Jul 12 01:35 .agentic-harness
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:35 .agents
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:35 .codex
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:35 .git
-drwx------ 2 ai-inference ai-inference 4096 Jul 12 01:35 package
--rw------- 1 ai-inference ai-inference   61 Jul 12 01:35 pyproject.toml
+drwx------ 7 evalhost evalhost 4096 Jul 12 01:35 .
+drwx------ 4 evalhost evalhost 4096 Jul 12 01:35 ..
+drwx------ 3 evalhost evalhost 4096 Jul 12 01:35 .agentic-harness
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:35 .agents
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:35 .codex
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:35 .git
+drwx------ 2 evalhost evalhost 4096 Jul 12 01:35 package
+-rw------- 1 evalhost evalhost   61 Jul 12 01:35 pyproject.toml
 fatal: not a git repository (or any of the parent directories): .git
 diff --git a/pyproject.toml b/package/__init__.py
 index 3a0ed57..3d67cd6 100644

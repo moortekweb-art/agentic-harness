@@ -641,12 +641,12 @@ exec
 def parse_pairs(text):
     return dict(line.split('=') for line in text.splitlines())
 total 12
-drwx------ 5 ai-inference ai-inference 4096 Jul 12 00:50 .
-drwx------ 3 ai-inference ai-inference 4096 Jul 12 00:50 ..
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 00:50 .agents
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 00:50 .codex
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 00:50 .git
--rw------- 1 ai-inference ai-inference   86 Jul 12 00:50 parser.py
+drwx------ 5 evalhost evalhost 4096 Jul 12 00:50 .
+drwx------ 3 evalhost evalhost 4096 Jul 12 00:50 ..
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 00:50 .agents
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 00:50 .codex
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 00:50 .git
+-rw------- 1 evalhost evalhost   86 Jul 12 00:50 parser.py
 
 codex
 The root cause is the unconditional `line.split('=')`: blank or malformed lines produce one item, while extra `=` can produce too many, and whitespace is retained. There’s no test suite in the directory, so I’ll use a focused executable assertion as the failing regression check, then repeat it after the edit.
