@@ -1280,6 +1280,46 @@ def test_supervisor_worker_unexpected_exception_is_caught(tmp_path) -> None:
     assert "worker crashed unexpectedly" in goal.metadata.get("worker_summary", "")
 
 
+def test_supervisor_redacts_worker_result_before_durable_state(tmp_path) -> None:
+    summary_secret = "sk-worker-summary-ABCDEF12"
+    stderr_secret = "terminal-error-secret-ABCDEF12"
+    outcome_secret = "ordinary-looking-worker-credential"
+    artifact_secret = "github_pat_artifactABCDEF123456"
+    worker = RecordingWorker(
+        WorkerResult(
+            success=False,
+            summary=f"failed with {summary_secret}",
+            stderr=f"token={stderr_secret}",
+            artifacts=[f"logs/{artifact_secret}.txt"],
+            returncode=1,
+            outcome={
+                "summary": f"api_key={summary_secret}",
+                "clientSecret": outcome_secret,
+            },
+        )
+    )
+    supervisor = Supervisor(project_dir=tmp_path, worker=worker)
+
+    started = supervisor.start("exercise the worker output boundary")
+    goal = supervisor.continue_goal()
+
+    state_path = (
+        tmp_path / ".agentic-harness" / "runs" / started.id / "state.json"
+    )
+    serialized = state_path.read_text(encoding="utf-8")
+    in_memory = json.dumps(goal.to_dict())
+    for secret in (
+        summary_secret,
+        stderr_secret,
+        outcome_secret,
+        artifact_secret,
+    ):
+        assert secret not in serialized
+        assert secret not in in_memory
+    assert "<redacted>" in serialized
+    assert goal.metadata["worker_outcome"]["clientSecret"] == "<redacted>"
+
+
 def test_artifact_store_write_text_cleans_up_temp_on_replace_failure(tmp_path) -> None:
     """If NamedTemporaryFile.replace() fails, the temp file must be cleaned up."""
     import os

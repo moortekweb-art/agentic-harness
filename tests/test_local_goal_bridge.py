@@ -10,9 +10,11 @@ import pytest
 
 from agentic_harness.cli import _friendly_queue_summary
 from agentic_harness.core.local_goal_bridge import (
+    CommandResult,
     LocalGoalBridge,
     Mode3AGoalOptions,
     build_mode3a_goal,
+    format_command_result,
     format_popos_setup,
 )
 
@@ -34,6 +36,28 @@ def test_local_goal_bridge_defaults_to_current_directory(tmp_path, monkeypatch) 
 
     assert bridge.doc_root == tmp_path
     assert bridge.local_goal == tmp_path / "scripts/local-goal"
+
+
+def test_format_command_result_redacts_stdout_stderr_and_structured_keys() -> None:
+    stdout_secret = "ordinary-looking-credential"
+    stderr_secret = "command-error-secret-Z7Q4M9"
+    result = CommandResult(
+        ("local-goal", "status", "--json"),
+        1,
+        json.dumps(
+            {
+                "summary": "worker output",
+                "clientSecret": stdout_secret,
+            }
+        ),
+        f"api_key={stderr_secret}",
+    )
+
+    rendered = format_command_result(result)
+
+    assert stdout_secret not in rendered
+    assert stderr_secret not in rendered
+    assert rendered.count("<redacted>") >= 2
 
 
 def test_local_goal_bridge_uses_doc_root_environment_override(tmp_path, monkeypatch) -> None:

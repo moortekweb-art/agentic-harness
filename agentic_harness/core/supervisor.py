@@ -19,7 +19,7 @@ from agentic_harness.core.errors import (
     StateLockError,
 )
 from agentic_harness.core.loop_guard import LoopGuard
-from agentic_harness.core.redaction import redact_secrets
+from agentic_harness.core.redaction import redact_json_value, redact_secrets
 from agentic_harness.core.review import DeterministicReviewer
 from agentic_harness.core.state import Goal, GoalStatus, now_iso
 from agentic_harness.core.worker import Worker, WorkerResult
@@ -142,12 +142,23 @@ class Supervisor:
             self.store.write_goal(goal)
             result = self._run_worker(goal)
             _finish_worker_attempt(goal, attempt_number, result)
+            worker_summary = redact_secrets(result.summary)
+            worker_outcome = redact_json_value(result.outcome)
+            if not isinstance(worker_outcome, dict):
+                worker_outcome = {}
             goal.metadata["worker_success"] = result.success
-            goal.metadata["worker_summary"] = result.summary
+            goal.metadata["worker_summary"] = worker_summary
             goal.metadata["worker_returncode"] = result.returncode
-            goal.metadata["worker_outcome"] = dict(result.outcome)
-            goal.artifacts.extend(path for path in result.artifacts if path not in goal.artifacts)
-            goal.error = None if result.success else result.stderr or result.summary
+            goal.metadata["worker_outcome"] = worker_outcome
+            redacted_artifacts = [redact_secrets(path) for path in result.artifacts]
+            goal.artifacts.extend(
+                path for path in redacted_artifacts if path not in goal.artifacts
+            )
+            goal.error = (
+                None
+                if result.success
+                else redact_secrets(result.stderr or result.summary)
+            )
             goal.transition(
                 GoalStatus.REVIEW if result.success else GoalStatus.FAILED,
                 reason="worker completed" if result.success else "worker failed",
