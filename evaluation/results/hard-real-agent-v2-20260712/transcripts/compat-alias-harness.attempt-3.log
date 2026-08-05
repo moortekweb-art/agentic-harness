@@ -57,15 +57,15 @@ exec
 /bin/bash -lc "ls -la; git status --short; git diff --no-renames; git show HEAD:config.py 2>&1; git show HEAD:example.env 2>&1; rg --files -g '*test*' -g 'pyproject.toml' -g 'Makefile' -g 'README*' -g 'package.json'" in [local-path]
  exited 1 in 0ms:
 total 24
-drwx------ 7 ai-inference ai-inference 4096 Jul 12 01:09 .
-drwx------ 4 ai-inference ai-inference 4096 Jul 12 01:08 ..
-drwx------ 3 ai-inference ai-inference 4096 Jul 12 01:09 .agentic-harness
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:09 .agents
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:09 .codex
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:09 .git
-drwx------ 2 ai-inference ai-inference 4096 Jul 12 01:09 __pycache__
--rw------- 1 ai-inference ai-inference   47 Jul 12 01:08 config.py
--rw------- 1 ai-inference ai-inference   40 Jul 12 01:08 example.env
+drwx------ 7 evalhost evalhost 4096 Jul 12 01:09 .
+drwx------ 4 evalhost evalhost 4096 Jul 12 01:08 ..
+drwx------ 3 evalhost evalhost 4096 Jul 12 01:09 .agentic-harness
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:09 .agents
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:09 .codex
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:09 .git
+drwx------ 2 evalhost evalhost 4096 Jul 12 01:09 __pycache__
+-rw------- 1 evalhost evalhost   47 Jul 12 01:08 config.py
+-rw------- 1 evalhost evalhost   40 Jul 12 01:08 example.env
 fatal: not a git repository (or any of the parent directories): .git
 warning: Not a git repository. Use --no-index to compare two paths outside a working tree
 usage: git diff --no-index [<options>] <path> <path>

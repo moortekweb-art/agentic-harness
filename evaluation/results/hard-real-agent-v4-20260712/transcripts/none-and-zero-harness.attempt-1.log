@@ -36,13 +36,13 @@ exec
 /bin/bash -lc "ls -la && rg -n \"effective_limit|limit\" . --glob '"'! .git'"'" in [local-path]
  succeeded in 0ms:
 total 16
-drwx------ 6 ai-inference ai-inference 4096 Jul 12 01:57 .
-drwx------ 4 ai-inference ai-inference 4096 Jul 12 01:57 ..
-drwx------ 3 ai-inference ai-inference 4096 Jul 12 01:57 .agentic-harness
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:57 .agents
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:57 .codex
-dr-xr-xr-x 2 ai-inference ai-inference   40 Jul 12 01:57 .git
--rw------- 1 ai-inference ai-inference   65 Jul 12 01:57 limits.py
+drwx------ 6 evalhost evalhost 4096 Jul 12 01:57 .
+drwx------ 4 evalhost evalhost 4096 Jul 12 01:57 ..
+drwx------ 3 evalhost evalhost 4096 Jul 12 01:57 .agentic-harness
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:57 .agents
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:57 .codex
+dr-xr-xr-x 2 evalhost evalhost   40 Jul 12 01:57 .git
+-rw------- 1 evalhost evalhost   65 Jul 12 01:57 limits.py
 ./limits.py:1:def effective_limit(value, default):
 
 exec
