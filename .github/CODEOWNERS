@@ -2,6 +2,7 @@
 /agentic_harness/core/review.py @moortekweb-art
 /agentic_harness/core/tournament.py @moortekweb-art
 /agentic_harness/core/verifier_manifest.py @moortekweb-art
+/agentic_harness/core/verifiers/ @moortekweb-art
 /agentic_harness/core/workspace_transaction.py @moortekweb-art
 /agentic_harness/core/safety.py @moortekweb-art
 /agentic_harness/core/config.py @moortekweb-art
