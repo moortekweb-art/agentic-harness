@@ -1815,20 +1815,25 @@ def test_gui_serves_data_driven_portal_without_hardcoded_topology() -> None:
         portal_js = get_text(base_url, "/portal.js")
         portal_css = get_text(base_url, "/portal.css")
         example = get_text(base_url, "/services.example.json")
-        if not (static_root / "services.local.json").exists():
-            # Operator file absent (the committed state): the portal must get a
-            # plain 404 and fall back to its empty state, not an error page.
-            with pytest.raises(urllib.error.HTTPError) as missing_local:
-                urllib.request.urlopen(base_url + "/services.local.json", timeout=3)
-            assert missing_local.value.code == 404
+        # The operator's list is never a static asset, whether or not one is
+        # sitting in the package directory: it is 404 here and authenticated
+        # behind /api/portal/services instead.
+        with pytest.raises(urllib.error.HTTPError) as missing_local:
+            urllib.request.urlopen(base_url + "/services.local.json", timeout=3)
+        assert missing_local.value.code == 404
 
-    # The portal is data-driven: links come from the gitignored
-    # services.local.json, fetched via a relative URL so the page keeps
-    # working behind reverse-proxy path prefixes.
-    assert 'fetch("services.local.json"' in portal_js
+    # The portal is data-driven: links come from the owner's config file via
+    # the authenticated API, fetched with a mount-relative URL so the page
+    # keeps working behind reverse-proxy path prefixes.
+    assert "api/portal/services" in portal_js
+    assert 'fetch("services.local.json"' not in portal_js
     assert 'src="portal.js"' in portal
     assert 'href="portal.css"' in portal
-    assert "cp services.example.json services.local.json" in portal
+    # The old instruction to plant the file inside the installed package is
+    # exactly the mistake this portal must stop teaching.
+    assert "cp services.example.json services.local.json" not in portal
+    assert "services.local.json" not in portal
+    assert ".config/agentic-harness/services.json" in portal
     assert ".portal-empty" in portal_css
     assert json.loads(example)["services"], "example template must list placeholder services"
 
@@ -1899,30 +1904,35 @@ def test_portal_example_template_matches_documented_schema() -> None:
 
 
 def test_portal_handles_every_services_local_failure_mode() -> None:
-    """Every bad-input path must reach a readable state, never a blank page.
+    """Every response path must reach a readable state, never a blank page.
 
-    The portal has no JS test runner in this repo, so this locks the specific
-    guard branches and operator-facing wording that were verified by hand in a
-    browser: missing file, transport failure, non-404 HTTP status, invalid
-    JSON, wrong top-level shape, empty list, and entries missing a label or a
-    usable url.
+    ``tests/frontend_portal_dom_test.js`` executes these branches against a
+    stub DOM; this locks the operator-facing states that must exist at all:
+    loading, unauthenticated, transport failure, non-OK status, unreadable
+    payload, unusable configuration, unconfigured, empty, and ready.
     """
     static_root = Path(__file__).parents[1] / "agentic_harness" / "gui" / "static"
     portal_js = (static_root / "portal.js").read_text(encoding="utf-8")
     portal_html = (static_root / "portal.html").read_text(encoding="utf-8")
 
-    # Missing file: 404 is the "not configured yet" path and shows only the
-    # setup instructions, with no error notice.
-    assert "response.status === 404" in portal_js
-    # Transport failure and non-404 statuses each get their own message.
-    assert "Could not reach the server to load services.local.json" in portal_js
-    assert 'The server returned HTTP " + response.status' in portal_js
-    # Invalid JSON and wrong shape.
-    assert "is not valid JSON" in portal_js
-    assert "wrong shape" in portal_js
+    # Loading is a real state, not an empty page that later fills in.
+    assert "Loading your service list" in portal_js
+    # Authentication: the token the main GUI stored is reused, and a 401/403
+    # tells the operator where to get one instead of failing silently.
+    assert "agentic-harness-gui-session-token" in portal_js
+    assert "response.status === 401" in portal_js
+    assert "Bearer " in portal_js
+    # Transport failure and non-OK statuses each get their own message.
+    assert "Could not reach the harness to load your service list" in portal_js
+    assert 'The harness returned HTTP " + response.status' in portal_js
+    # Unreadable payload, unusable config, unconfigured and empty are distinct.
+    assert "unreadable service list" in portal_js
+    assert "could not be read: " in portal_js
+    assert "!payload.configured" in portal_js
+    assert "configured but empty" in portal_js
     # Unusable entries are counted rather than silently dropped.
-    assert "none are usable" in portal_js
-    assert '"Skipped " + skipped' in portal_js
+    assert "No usable services" in portal_js
+    assert "Skipped " in portal_js
     # The notice element exists, is announced, and is styled as a notice.
     assert 'id="portalStatus"' in portal_html
     assert 'role="status"' in portal_html
@@ -2210,6 +2220,12 @@ def test_gui_frontend_separates_public_strategies_from_legacy_managed_modes() ->
 
 def test_gui_frontend_token_prompt_concurrent_race_regression() -> None:
     subprocess.run(["node", "tests/frontend_token_race_test.js"], check=True)
+
+
+def test_portal_frontend_states_execute_against_a_stub_dom() -> None:
+    """Run portal.js for real, rather than asserting on its source text."""
+
+    subprocess.run(["node", "tests/frontend_portal_dom_test.js"], check=True)
 
 
 def test_gui_server_output_does_not_print_or_inject_configured_token(monkeypatch, capsys) -> None:

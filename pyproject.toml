@@ -53,6 +53,9 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: builds a real artifact or otherwise takes minutes (deselect with -m 'not slow')",
+]
 
 [project.scripts]
 agentic-harness = "agentic_harness.cli:main"
@@ -63,4 +66,25 @@ include = ["agentic_harness*"]
 
 [tool.setuptools.package-data]
 agentic_harness = ["recipes/*.yml"]
-"agentic_harness.gui" = ["static/*", "static/illustrations/*"]
+# Exact paths, never a glob: setuptools package-data matches untracked files
+# too, so "static/*" — or even "static/*.js" — would sweep an operator's local
+# services.local.json, or a stray evil.js, into a locally built wheel. Adding a
+# static asset means adding it here; tests/test_portal_confidentiality.py fails
+# if a tracked asset is missing from this list.
+"agentic_harness.gui" = [
+    "static/app.js",
+    "static/assurance.js",
+    "static/auth.js",
+    "static/favicon.svg",
+    "static/icons-custom.LICENSE",
+    "static/icons-custom.svg",
+    "static/illustrations/local-ai-connection.webp",
+    "static/illustrations/setup-recovery.webp",
+    "static/illustrations/verified-archive.webp",
+    "static/index.html",
+    "static/portal.css",
+    "static/portal.html",
+    "static/portal.js",
+    "static/services.example.json",
+    "static/styles.css",
+]

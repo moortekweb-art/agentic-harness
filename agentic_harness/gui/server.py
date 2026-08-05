@@ -9,7 +9,7 @@ from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, cast
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 import base64
 import getpass
 import hmac
@@ -35,6 +35,7 @@ from agentic_harness.core.strategies import (
     PUBLIC_STRATEGIES,
 )
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
+from agentic_harness.gui.portal_config import load_portal_services
 from agentic_harness.gui.api import (
     command_task,
     details_payload,
@@ -158,6 +159,47 @@ def create_gui_server(
             f"Agentic Harness GUI port {host}:{port} is already in use, and no fallback "
             f"port was available in {port + 1}-{min(port + 50, 65535)}."
         ) from exc
+
+
+# Static serving is an exact allowlist, not an extension filter. Only these
+# known shipped asset paths are reachable; every other file that happens to sit
+# in the package's static directory — an operator's ``services.local.json``, or
+# a planted ``evil.js`` that shares an extension with a real asset — is a 404
+# whether or not it exists on disk.
+SERVABLE_STATIC_PATHS = frozenset(
+    {
+        "app.js",
+        "assurance.js",
+        "auth.js",
+        "favicon.svg",
+        "icons-custom.LICENSE",
+        "icons-custom.svg",
+        "illustrations/local-ai-connection.webp",
+        "illustrations/setup-recovery.webp",
+        "illustrations/verified-archive.webp",
+        "index.html",
+        "portal.css",
+        "portal.html",
+        "portal.js",
+        "services.example.json",
+        "styles.css",
+    }
+)
+_SERVABLE_STATIC_LOOKUP = {path.lower(): path for path in SERVABLE_STATIC_PATHS}
+
+
+def _servable_static_path(relative: str) -> str | None:
+    """Return the exact shipped asset path ``relative`` names, else ``None``."""
+
+    lowered = relative.strip().lower()
+    if not lowered:
+        return None
+    # Operator-local data is never web content, whatever else it looks like.
+    # The exact allowlist already excludes it; this stays as a named invariant
+    # so the denial cannot be lost to a future allowlist edit.
+    if ".local.json" in lowered:
+        return None
+    return _SERVABLE_STATIC_LOOKUP.get(lowered)
 
 
 def make_handler(
@@ -311,7 +353,10 @@ def make_handler(
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             route = parsed.path
-            if route.startswith("/api/") and not self._trusted_host():
+            # Host validation guards every route, not just /api/. A static
+            # asset served under an attacker-controlled hostname is the DNS
+            # rebinding path that authentication alone cannot close.
+            if not self._trusted_host():
                 return
             if route == "/api/tasks/stream":
                 if not self._same_origin():
@@ -454,6 +499,11 @@ def make_handler(
                     if active is not None
                     else session.export()
                 )
+            elif route == "/api/portal/services":
+                # Private network topology: authenticated, Host-validated and
+                # ``Cache-Control: no-store`` by virtue of living behind the
+                # /api/ guards above and going out through ``_json``.
+                self._json(load_portal_services())
             elif route.startswith("/api/"):
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
             else:
@@ -462,7 +512,9 @@ def make_handler(
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             route = parsed.path
-            if route.startswith("/api/") and not self._trusted_host():
+            # Host validation covers every route on this verb too, so an
+            # unknown POST path cannot be reached under a rebound hostname.
+            if not self._trusted_host():
                 return
             if not self._same_origin():
                 return
@@ -1047,22 +1099,34 @@ def make_handler(
                     return
 
         def _static(self, route: str) -> None:
-            relative = "index.html" if route in {"", "/"} else route.removeprefix("/")
+            # Percent-decode before any name check: "%2E%6Cocal.json" and
+            # "a%2Fb" must be judged as the names they actually resolve to,
+            # not as the opaque escapes they arrive as.
+            decoded = unquote(route)
+            relative = "index.html" if decoded in {"", "/"} else decoded.removeprefix("/")
             if relative.startswith("static/"):
                 relative = relative.removeprefix("static/")
             parts = relative.split("/")
-            nested_asset = len(parts) == 2 and parts[0] == "illustrations"
             if (
                 not all(parts)
                 or any(part.startswith(".") or "\\" in part for part in parts)
-                or (len(parts) > 1 and not nested_asset)
+                or len(parts) > 2
             ):
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            # Exact allowlist. Anything that is not a known shipped asset —
+            # operator files such as *.local.json above all, but equally a
+            # planted evil.js or an unknown nested asset — is invisible here
+            # whether or not it exists on disk. The served path comes from the
+            # allowlist entry, never from the request.
+            asset = _servable_static_path(relative)
+            if asset is None:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             static_root = files("agentic_harness.gui.static")
             try:
                 resource = static_root
-                for part in parts:
+                for part in asset.split("/"):
                     resource = resource.joinpath(part)
                 data = resource.read_bytes()
             except (FileNotFoundError, IsADirectoryError):
@@ -1070,8 +1134,8 @@ def make_handler(
                 return
             mime = (
                 "image/webp"
-                if relative.lower().endswith(".webp")
-                else mimetypes.guess_type(relative)[0] or "application/octet-stream"
+                if asset.endswith(".webp")
+                else mimetypes.guess_type(asset)[0] or "application/octet-stream"
             )
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", mime)

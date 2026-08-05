@@ -42,8 +42,14 @@ def test_v011_generated_assets_are_small_packaged_and_have_provenance() -> None:
     assert sum(asset.stat().st_size for asset in assets) < 600_000
     provenance = (ROOT / "docs" / "IMG2IMG_ASSET_PROVENANCE.md").read_text(encoding="utf-8")
     assert all(asset.name in provenance for asset in assets)
+    # The illustrations must stay packaged. Each asset is listed by its exact
+    # path rather than a wildcard so untracked operator files cannot ride along.
     package_data = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"static/illustrations/*"' in package_data
+    for asset in assets:
+        assert f'"static/illustrations/{asset.name}"' in package_data
+    assert '"static/illustrations/*.webp"' not in package_data
+    assert "static/illustrations/*" not in package_data
+    assert all(asset.suffix == ".webp" for asset in assets)
 
 
 def test_managed_routes_expose_additive_product_metadata() -> None:

@@ -1,27 +1,61 @@
 // Local Network Portal loader.
 //
-// The portal ships with zero service topology. At load it fetches
-// "services.local.json" (a relative URL, so it resolves next to portal.html
-// at any mount, including reverse-proxy path prefixes) and renders one link
-// card per entry. That file is written by the operator on the deployment
-// machine and is gitignored; the tracked services.example.json documents the
-// expected shape:
+// The portal ships with zero service topology. At load it asks the harness for
+// the operator's service list over the authenticated API:
 //
-//   { "services": [ { "label": "...", "url": "https://...", "note": "..." } ] }
+//   GET api/portal/services  ->  { ok, configured, services: [...], warnings }
 //
-// A bare top-level array of entries is accepted too. "label" and "url" are
-// required per entry; "note" is optional. Every failure mode falls back to the
-// empty state that tells the operator how to create the file: a missing file
-// shows just those instructions, while a transport failure, a non-404 HTTP
-// status, invalid JSON, the wrong top-level shape, or entries missing a label
-// or a usable http(s) url also show a notice naming the specific problem.
-// Nothing here ever throws, spins forever, or renders a blank page.
+// The list lives in an owner-controlled config file outside the installed
+// package (AGENTIC_HARNESS_PORTAL_SERVICES, else
+// $XDG_CONFIG_HOME/agentic-harness/services.json, else
+// ~/.config/agentic-harness/services.json). It is deliberately NOT a static
+// asset: private hostnames must never be readable without the session token,
+// and the server 404s every *.local.json under static/ for that reason.
+//
+// The request URL is mount-relative, so the page works at the bare mount and
+// behind a reverse-proxy path prefix, with or without a trailing slash. When
+// the harness requires a token, the one the main GUI stored in sessionStorage
+// is reused; a 401 asks the operator to sign in there rather than failing
+// silently. Every failure mode reaches a readable state: loading, unconfigured,
+// error, empty, or ready. Nothing here throws, spins forever, or renders a
+// blank page.
 "use strict";
 
 (function () {
+  // Same key the main GUI (app.js) writes after a successful token prompt.
+  const TOKEN_KEY = "agentic-harness-gui-session-token";
+  const SERVICES_PATH = "api/portal/services";
+
   const list = document.getElementById("serviceList");
   const empty = document.getElementById("portalEmpty");
   const status = document.getElementById("portalStatus");
+
+  // Directory of the current document, so "api/..." resolves against the mount
+  // rather than the last path segment. "/hub" (no trailing slash) and "/hub/"
+  // must both produce "/hub/".
+  function appRoot() {
+    const path = String((window.location && window.location.pathname) || "/");
+    if (path.endsWith("/")) return path;
+    const last = path.lastIndexOf("/");
+    const dir = path.slice(0, last + 1);
+    // A bare "/hub" is the mount itself, not a file inside "/": treat the
+    // final segment as the directory unless it looks like a document.
+    if (/\.[a-z0-9]+$/i.test(path.slice(last + 1))) return dir;
+    return path + "/";
+  }
+
+  function servicesUrl() {
+    return appRoot() + SERVICES_PATH;
+  }
+
+  function storedToken() {
+    try {
+      return window.sessionStorage.getItem(TOKEN_KEY) || "";
+    } catch (error) {
+      // Storage can be blocked entirely; that is just "no token".
+      return "";
+    }
+  }
 
   function showStatus(message) {
     if (!message) {
@@ -43,13 +77,14 @@
     if (!value) return "";
     try {
       const parsed = new URL(value, window.location.href);
-      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-        return parsed.href;
-      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+      // The server already drops credential-bearing URLs; refuse them here too
+      // so a compromised or stale response cannot put one in the DOM.
+      if (parsed.username || parsed.password) return "";
+      return parsed.href;
     } catch (error) {
       return "";
     }
-    return "";
   }
 
   function renderServices(entries) {
@@ -95,80 +130,113 @@
       list.appendChild(item);
       rendered += 1;
     }
-    if (rendered === 0) {
-      showStatus(
-        skipped === 1
-          ? "services.local.json has 1 entry, but it is unusable: every entry needs a non-empty \"label\" and an http:// or https:// \"url\"."
-          : "services.local.json has " + skipped + " entries, but none are usable: every entry needs a non-empty \"label\" and an http:// or https:// \"url\".",
-      );
-      showEmpty();
-      return;
-    }
-    if (skipped > 0) {
-      showStatus(
-        "Skipped " + skipped + (skipped === 1 ? " entry" : " entries") +
-          " in services.local.json: every entry needs a non-empty \"label\" and an http:// or https:// \"url\".",
-      );
-    } else {
-      showStatus("");
-    }
-    empty.hidden = true;
-    list.hidden = false;
+    return { rendered: rendered, skipped: skipped };
+  }
+
+  function describeSkipped(count, warnings) {
+    const detail = warnings.join(" ");
+    if (count === 0) return detail;
+    const noun = count === 1 ? " entry" : " entries";
+    const head = "Skipped " + count + noun + " from your service list.";
+    return detail ? head + " " + detail : head;
   }
 
   async function loadServices() {
+    showStatus("Loading your service list…");
+
+    const headers = { Accept: "application/json" };
+    const token = storedToken();
+    if (token) headers.Authorization = "Bearer " + token;
+
     let response;
     try {
-      // Relative on purpose: resolves next to portal.html at any mount.
-      response = await fetch("services.local.json", { cache: "no-store" });
+      response = await fetch(servicesUrl(), { cache: "no-store", headers: headers });
     } catch (error) {
       // The page itself loaded, so this is a transport problem, not a missing
-      // file: say so instead of implying the operator forgot to create it.
+      // configuration: say so instead of implying the operator forgot to
+      // create the file.
       showStatus(
-        "Could not reach the server to load services.local.json. Check that the harness is still running, then reload.",
+        "Could not reach the harness to load your service list. Check that it is still running, then reload.",
       );
       showEmpty();
       return;
     }
-    if (response.status === 404) {
-      // The normal "operator has not created the file yet" case: the setup
-      // instructions in the empty state are the whole message.
+
+    if (response.status === 401 || response.status === 403) {
+      showStatus(
+        "Your service list needs an access token. Open the main Agentic Harness GUI, enter the token it asks for, then reload this page.",
+      );
       showEmpty();
       return;
     }
     if (!response.ok) {
       showStatus(
-        "The server returned HTTP " + response.status + " for services.local.json. Check the file's permissions on the machine running the harness.",
+        "The harness returned HTTP " + response.status + " for your service list. Check its logs, then reload.",
       );
       showEmpty();
       return;
     }
+
     let payload;
     try {
       payload = await response.json();
     } catch (error) {
-      showStatus("services.local.json exists but is not valid JSON. Fix it and reload.");
+      showStatus("The harness sent an unreadable service list. Check its logs, then reload.");
       showEmpty();
       return;
     }
-    let entries;
-    if (Array.isArray(payload)) {
-      entries = payload;
-    } else if (payload && typeof payload === "object" && Array.isArray(payload.services)) {
-      entries = payload.services;
-    } else {
-      showStatus(
-        'services.local.json is valid JSON but the wrong shape. It must be {"services": [ ... ]} or a bare array of entries.',
-      );
+    if (!payload || typeof payload !== "object") {
+      showStatus("The harness sent an unreadable service list. Check its logs, then reload.");
       showEmpty();
       return;
     }
-    if (entries.length === 0) {
+
+    const warnings = Array.isArray(payload.warnings)
+      ? payload.warnings.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+
+    if (payload.error) {
+      // The config file exists but could not be used. The server sends a
+      // description of the problem and never the file's contents or path.
+      showStatus("Your service list could not be read: " + String(payload.error));
+      showEmpty();
+      return;
+    }
+    if (!payload.configured) {
+      // The normal "not set up yet" case: the setup instructions in the empty
+      // state are the whole message.
       showStatus("");
       showEmpty();
       return;
     }
-    renderServices(entries);
+
+    const entries = Array.isArray(payload.services) ? payload.services : [];
+    if (entries.length === 0) {
+      showStatus(
+        warnings.length
+          ? "No usable services in your service list. " + warnings.join(" ")
+          : "Your service list is configured but empty. Add an entry, then reload.",
+      );
+      showEmpty();
+      return;
+    }
+
+    const counts = renderServices(entries);
+    if (counts.rendered === 0) {
+      showStatus(
+        "No usable services in your service list: every entry needs a non-empty \"label\" and an http:// or https:// \"url\".",
+      );
+      showEmpty();
+      return;
+    }
+    const skipped = counts.skipped;
+    if (skipped > 0 || warnings.length) {
+      showStatus(describeSkipped(skipped, warnings));
+    } else {
+      showStatus("");
+    }
+    empty.hidden = true;
+    list.hidden = false;
   }
 
   loadServices();
