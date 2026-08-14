@@ -35,6 +35,10 @@ from agentic_harness.core.strategies import (
     PUBLIC_STRATEGIES,
 )
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
+from agentic_harness.gui.integration import (
+    integration_health_payload,
+    route_registry_payload,
+)
 from agentic_harness.gui.portal_config import load_portal_services
 from agentic_harness.gui.api import (
     command_task,
@@ -361,6 +365,64 @@ def make_handler(
             return False
         return readiness.get("can_start") is True
 
+    def integration_current_task(
+        active: EmbeddedExecutionBackend | None,
+    ) -> dict[str, Any]:
+        """Project the same current task through the read-only v1 boundary."""
+
+        if active is not None:
+            return active.status()
+        observed = session.record(status_task(bridge))
+        return public_managed_task(observed)
+
+    def integration_tasks(
+        active: EmbeddedExecutionBackend | None,
+    ) -> dict[str, Any]:
+        if active is not None:
+            return {
+                "api_version": "1",
+                "current": active.status(),
+                "tasks": active.history(),
+                "owner": "agentic-harness",
+            }
+        payload = tasks_payload(bridge)
+        current = public_managed_task(session.record(payload["current"]))
+        tasks = [
+            _with_workspace_scope(
+                enrich_managed_task_snapshot(bridge, task),
+                workspace_scope,
+            )
+            for task in (session.history() or payload["tasks"])
+        ]
+        return {
+            "api_version": "1",
+            "current": current,
+            "tasks": tasks,
+            "owner": "agentic-harness",
+        }
+
+    def integration_task(
+        active: EmbeddedExecutionBackend | None,
+        task_id: str,
+    ) -> dict[str, Any] | None:
+        if active is not None:
+            current = active.status()
+            if str(current.get("id") or "") == task_id:
+                return current
+            return next(
+                (
+                    task
+                    for task in active.history()
+                    if str(task.get("id") or "") == task_id
+                ),
+                None,
+            )
+        saved = session.task(task_id)
+        if saved is not None:
+            return saved
+        current = integration_current_task(None)
+        return current if str(current.get("id") or "") == task_id else None
+
     class GuiHandler(BaseHTTPRequestHandler):
         server_version = "AgenticHarnessGUI/0.1"
         _managed_demo_workspace = managed_demo_workspace
@@ -380,10 +442,22 @@ def make_handler(
                     return
                 self._websocket_status()
                 return
-            if route.startswith("/api/") and not self._allowed(parsed.query):
+            if (
+                route.startswith("/api/") or route.startswith("/v1/")
+            ) and not self._allowed(parsed.query):
                 return
             active = active_embedded_service()
-            if route in {"/api/health", "/api/status"}:
+            if route == "/v1/health":
+                self._json(integration_health_payload())
+            elif route == "/v1/routes":
+                self._json(route_registry_payload())
+            elif route == "/v1/tasks":
+                self._json(integration_tasks(active))
+            elif route == "/v1/tasks/current":
+                self._json(integration_current_task(active))
+            elif route.startswith("/v1/tasks/"):
+                self._integration_task_get(route, parsed, active)
+            elif route in {"/api/health", "/api/status"}:
                 self._json(public_health())
             elif route == "/api/modes":
                 if embedded:
@@ -528,7 +602,7 @@ def make_handler(
                 # ``Cache-Control: no-store`` by virtue of living behind the
                 # /api/ guards above and going out through ``_json``.
                 self._json(load_portal_services())
-            elif route.startswith("/api/"):
+            elif route.startswith("/api/") or route.startswith("/v1/"):
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
             else:
                 self._static(route)
@@ -542,7 +616,9 @@ def make_handler(
                 return
             if not self._same_origin():
                 return
-            if route.startswith("/api/") and not self._allowed(parsed.query):
+            if (
+                route.startswith("/api/") or route.startswith("/v1/")
+            ) and not self._allowed(parsed.query):
                 return
             body = self._read_json()
             if body is None:
@@ -894,6 +970,87 @@ def make_handler(
                     self._json({"ok": True, "tasks": session.history()})
             else:
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
+
+        def _integration_task_get(
+            self,
+            route: str,
+            parsed: Any,
+            active: EmbeddedExecutionBackend | None,
+        ) -> None:
+            suffix = route.removeprefix("/v1/tasks/").strip("/")
+            parts = suffix.split("/") if suffix else []
+            task_id = parts[0] if parts else ""
+            if not task_id or task_id == "current":
+                self._json(
+                    {"ok": False, "error": "task id required"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            task = integration_task(active, task_id)
+            if task is None:
+                self._json(
+                    {"ok": False, "error": "task not found"},
+                    status=HTTPStatus.NOT_FOUND,
+                )
+                return
+            if len(parts) == 1:
+                self._json(
+                    {"api_version": "1", "task": task, "owner": "agentic-harness"}
+                )
+                return
+            if len(parts) != 2:
+                self._json(
+                    {"ok": False, "error": "not found"},
+                    status=HTTPStatus.NOT_FOUND,
+                )
+                return
+            if parts[1] == "events":
+                after_raw = parse_qs(parsed.query).get("after", ["0"])[0]
+                try:
+                    after = max(0, int(after_raw))
+                except ValueError:
+                    after = 0
+                if active is not None:
+                    current = active.status()
+                    if str(current.get("id") or "") == task_id:
+                        self._json(
+                            {
+                                "api_version": "1",
+                                "task_id": task_id,
+                                "events": active.events(after=after),
+                            }
+                        )
+                        return
+                task_events = task.get("events")
+                events = (
+                    [
+                        event
+                        for event in task_events
+                        if isinstance(event, dict)
+                        and isinstance(event.get("seq"), int)
+                        and int(event["seq"]) > after
+                    ]
+                    if isinstance(task_events, list)
+                    else []
+                )
+                self._json(
+                    {"api_version": "1", "task_id": task_id, "events": events}
+                )
+                return
+            if parts[1] == "artifacts":
+                artifacts = task.get("artifacts")
+                self._json(
+                    {
+                        "api_version": "1",
+                        "task_id": task_id,
+                        "artifacts": artifacts if isinstance(artifacts, list) else [],
+                    }
+                )
+                return
+            self._json(
+                {"ok": False, "error": "not found"},
+                status=HTTPStatus.NOT_FOUND,
+            )
 
         def log_message(self, format: str, *args: object) -> None:
             return

@@ -3653,3 +3653,101 @@ def test_embedded_setup_and_tasks_stay_unchanged(tmp_path: Path) -> None:
     assert "workspace_identity" not in setup
     assert setup["workspace"] == str(tmp_path)
     assert "workspace_scope" not in current.get("metadata", {})
+
+
+def test_read_only_v1_contract_tracks_the_managed_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = {
+        "api_version": "1",
+        "registry_version": 1,
+        "owner": "agentic-harness",
+        "selection": {"policy": "harness_decides"},
+        "routes": [{"id": "primary", "status": "ready"}],
+    }
+    monkeypatch.setattr(gui_server_module, "route_registry_payload", lambda: registry)
+    monkeypatch.setattr(
+        gui_server_module,
+        "integration_health_payload",
+        lambda: {
+            "ok": True,
+            "service": "agentic-harness",
+            "integration_api_version": "1",
+        },
+    )
+    bridge = FakeBridge()
+
+    with scoped_gui_server(bridge, FakeBridge.doc_root) as base_url:
+        setup = get_json(base_url, "/api/setup")
+        routes = get_json(base_url, "/v1/routes")
+        health = get_json(base_url, "/v1/health")
+        current = get_json(base_url, "/v1/tasks/current")
+        tasks = get_json(base_url, "/v1/tasks")
+        task = get_json(base_url, f"/v1/tasks/{current['id']}")
+        events = get_json(base_url, f"/v1/tasks/{current['id']}/events?after=0")
+        artifacts = get_json(base_url, f"/v1/tasks/{current['id']}/artifacts")
+        unknown = get_http_error(base_url, "/v1/not-real")
+        write_attempt = post_error(
+            base_url,
+            "/v1/tasks",
+            b'{}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    fingerprint = setup["workspace_identity"]["fingerprint"]
+    assert routes == registry
+    assert health["integration_api_version"] == "1"
+    assert current["id"] == "run-1"
+    assert current["metadata"]["workspace_scope"] == fingerprint
+    assert tasks["api_version"] == "1"
+    assert tasks["owner"] == "agentic-harness"
+    assert tasks["current"]["metadata"]["workspace_scope"] == fingerprint
+    assert all(
+        item["metadata"]["workspace_scope"] == fingerprint
+        for item in tasks["tasks"]
+    )
+    assert task["task"]["id"] == current["id"]
+    assert task["task"]["metadata"]["workspace_scope"] == fingerprint
+    assert events == {"api_version": "1", "task_id": "run-1", "events": []}
+    assert artifacts == {
+        "api_version": "1",
+        "task_id": "run-1",
+        "artifacts": [],
+    }
+    assert unknown.code == 404
+    assert unknown.payload == {"ok": False, "error": "not found"}
+    # The compatibility boundary is deliberately GET-only.
+    assert write_attempt.code == 404
+    assert write_attempt.payload == {"ok": False, "error": "not found"}
+    assert not any(command and command[0] == "start" for command in bridge.commands)
+
+
+def test_v1_contract_uses_the_same_token_gate_as_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(GUI_TOKEN_ENV, "test-token")
+
+    with gui_server(FakeBridge()) as base_url:
+        unauthorized = get_http_error(base_url, "/v1/routes")
+        routes = get_json(base_url, "/v1/routes", token="test-token")
+        unknown = get_http_error(base_url, "/v1/not-real", token="test-token")
+
+    assert unauthorized.code == 401
+    assert unauthorized.payload == {"ok": False, "error": "unauthorized"}
+    assert routes["api_version"] == "1"
+    assert routes["owner"] == "agentic-harness"
+    assert unknown.code == 404
+    assert unknown.payload == {"ok": False, "error": "not found"}
+
+
+def test_read_only_v1_contract_is_available_to_embedded_clients(tmp_path: Path) -> None:
+    backend = EmbeddedExecutionBackend(tmp_path)
+
+    with gui_server(backend) as base_url:  # type: ignore[arg-type]
+        current = get_json(base_url, "/v1/tasks/current")
+        tasks = get_json(base_url, "/v1/tasks")
+
+    assert tasks["api_version"] == "1"
+    assert tasks["owner"] == "agentic-harness"
+    assert tasks["current"] == current
+    assert "workspace_scope" not in current.get("metadata", {})

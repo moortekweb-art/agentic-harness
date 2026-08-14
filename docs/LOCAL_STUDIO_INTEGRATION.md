@@ -77,6 +77,22 @@ Every managed task projection carries the same value at
 claim one work area: equal means one shared store, different means two. The GUI
 shows a short note when `split` is true and stays quiet otherwise.
 
+### Read-only operator compatibility
+
+Operator clients that need a compact integration view can use the versioned
+read-only routes under `/v1`: `health`, `routes`, `tasks`, `tasks/current`, and
+task-specific reads for the task, events, and artifacts. These routes use the
+same Host validation, bearer-token gate, redaction, and `no-store` response
+policy as `/api`. There is deliberately no `/v1` write route; task start and
+actions remain on the normal `/api` contract.
+
+The route registry reads only the fixed `PRIMARY` and `OVERFLOW` deployment
+slots under `AGENTIC_HARNESS_ROUTE_<SLOT>_*`. It publishes model and capability
+labels, never provider endpoints or credential environment names. Health probes
+are bounded, do not follow redirects, and must use the same HTTP(S) origin as
+the operator-configured provider endpoint. A client may display these facts,
+but Agentic Harness still owns route selection and records the final decision.
+
 In managed mode, the GUI should expose the runtime's route and availability as
 read-only facts. The Harness must retain the requested objective, route, work
 area, verification policy, and authoritative task identity. A status page,
