@@ -92,6 +92,9 @@ labels, never provider endpoints or credential environment names. Health probes
 are bounded, do not follow redirects, and must use the same HTTP(S) origin as
 the operator-configured provider endpoint. A client may display these facts,
 but Agentic Harness still owns route selection and records the final decision.
+HTTP endpoints in the RFC 6598 CGNAT range remain rejected by default; a
+deployment using a trusted private overlay such as Tailscale must opt in with
+the exact value `AGENTIC_HARNESS_TRUST_CGNAT_OVERLAY=1`.
 
 In managed mode, the GUI should expose the runtime's route and availability as
 read-only facts. The Harness must retain the requested objective, route, work
