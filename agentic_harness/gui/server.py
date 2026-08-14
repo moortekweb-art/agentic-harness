@@ -59,6 +59,7 @@ MAX_CONVERSATION_BYTES = 64 * 1024
 MAX_CONTINUATION_TICKET_BYTES = 128 * 1024
 STREAM_MONITOR_INTERVAL_SECONDS = 8.0
 GUI_SESSION_PATH_ENV = "AGENTIC_HARNESS_GUI_SESSION_PATH"
+WORKSPACE_IDENTITY_CONTRACT = "agentic_harness.workspace_identity.v1"
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     "X-Content-Type-Options": "nosniff",
@@ -112,6 +113,11 @@ def serve_gui(
     print(f"Agentic Harness GUI: {url}")
     if not _is_loopback_host(host):
         _print_non_loopback_warning()
+    if backend == "local-goal":
+        _print_split_workspace_warning(
+            doc_root=resolve_doc_root(doc_root),
+            project_dir=project_dir,
+        )
     if open_browser:
         _open_browser_safely(url)
     try:
@@ -216,6 +222,8 @@ def make_handler(
         if embedded
         else _managed_workspace_identity(bridge, project_dir=project_dir)
     )
+    public_workspace_identity = workspace_identity_payload(workspace_identity)
+    workspace_scope = str(public_workspace_identity.get("fingerprint") or "")
     session = GuiSession(
         state_path=(
             None
@@ -262,6 +270,7 @@ def make_handler(
             }
         )
         payload["demo"] = demo
+        payload["workspace_identity"] = dict(public_workspace_identity)
         return payload
 
     def public_health() -> dict[str, Any]:
@@ -269,6 +278,7 @@ def make_handler(
             return embedded_service.health()
         payload = health_payload(bridge)
         payload["gui_session"] = session.persistence_status()
+        payload["workspace_identity"] = dict(public_workspace_identity)
         if demo_task() is not None:
             payload["readiness"] = demo_service.readiness()
             payload["demo_overlay_active"] = True
@@ -293,7 +303,12 @@ def make_handler(
         )
         if foreground is None:
             return observed
-        foreground = enrich_managed_task_snapshot(bridge, foreground)
+        # Re-stamp after enrichment so the projection always names the store it
+        # was actually read from, whatever the enrichment step rebuilds.
+        foreground = _with_workspace_scope(
+            enrich_managed_task_snapshot(bridge, foreground),
+            workspace_scope,
+        )
         foreground_metadata = dict(foreground.get("metadata", {}))
         foreground_metadata["foreground_task"] = True
         if not requested_goal_id and _lane_is_idle_for_observed_task(observed):
@@ -422,7 +437,10 @@ def make_handler(
                     payload = tasks_payload(bridge)
                     payload["current"] = session.record(payload["current"])
                     payload["tasks"] = [
-                        enrich_managed_task_snapshot(bridge, task)
+                        _with_workspace_scope(
+                            enrich_managed_task_snapshot(bridge, task),
+                            workspace_scope,
+                        )
                         for task in (session.history() or payload["tasks"])
                     ]
                     self._json(payload)
@@ -440,7 +458,10 @@ def make_handler(
                     if active is not None
                     else {
                         "tasks": [
-                            enrich_managed_task_snapshot(bridge, task)
+                            _with_workspace_scope(
+                                enrich_managed_task_snapshot(bridge, task),
+                                workspace_scope,
+                            )
                             for task in session.history(query=query)
                         ]
                     }
@@ -488,11 +509,14 @@ def make_handler(
                         status=HTTPStatus.BAD_REQUEST,
                     )
             elif route == "/api/tasks/current/details":
-                self._json(
-                    {"task": active.status(), "raw": {}}
-                    if active is not None
-                    else details_payload(bridge)
-                )
+                if active is not None:
+                    self._json({"task": active.status(), "raw": {}})
+                else:
+                    details = details_payload(bridge)
+                    details["task"] = _with_workspace_scope(
+                        details["task"], workspace_scope
+                    )
+                    self._json(details)
             elif route == "/api/session":
                 self._json(
                     {"version": 2, "tasks": active.history()}
@@ -557,7 +581,7 @@ def make_handler(
                             return
                     task = session.enrich(start_task(bridge, body), body)
                     session.record(task)
-                    self._json(task)
+                    self._json(_with_workspace_scope(task, workspace_scope))
             elif route == "/api/setup" and embedded:
                 if body.get("api_key") and not self._client_is_loopback():
                     self._json(
@@ -625,7 +649,7 @@ def make_handler(
                         if isinstance(item, dict):
                             task = session.enrich(start_task(bridge, item), item)
                             session.record(task)
-                            tasks.append(task)
+                            tasks.append(_with_workspace_scope(task, workspace_scope))
                     self._json({"tasks": tasks})
             elif route == "/api/tasks/current/watch":
                 if active is not None:
@@ -1191,6 +1215,7 @@ _GUI_METADATA_FIELDS = frozenset(
         "start_accepted",
         "supervision",
         "updated_at",
+        "workspace_scope",
     }
 )
 _GUI_SNAPSHOT_FIELDS = frozenset(
@@ -1238,6 +1263,9 @@ class GuiSession:
         self._continuation_pending = False
         self._state_path = Path(state_path).expanduser() if state_path else None
         self._workspace_identity = dict(workspace_identity or {})
+        # Same recipe as the state filename, so a projection can never claim a
+        # store this session is not actually reading.
+        self._workspace_scope = _workspace_fingerprint(workspace_identity)
         self._lock = RLock()
         self._last_serialized = ""
         self._persistence_warning = ""
@@ -1387,7 +1415,7 @@ class GuiSession:
             return task
         with self._lock:
             task = self._reconcile_active_objective(task)
-            entry = dict(task)
+            entry = dict(_with_workspace_scope(task, self._workspace_scope))
             identity = _task_identity(entry)
             if not entry.get("id"):
                 entry["id"] = f"task-{self._next_id}"
@@ -1408,7 +1436,7 @@ class GuiSession:
             self._history.insert(0, entry)
             self._history = self._history[:MAX_GUI_HISTORY]
             self._save_locked()
-            return task
+            return _with_workspace_scope(task, self._workspace_scope)
 
     def append_user_message(self, task: dict[str, Any], text: str, *, action: str) -> int:
         """Persist a revisioned user amendment bound to the active managed run."""
@@ -1524,7 +1552,10 @@ class GuiSession:
 
     def history(self, *, query: str = "") -> list[dict[str, Any]]:
         with self._lock:
-            tasks = list(self._history)
+            tasks = [
+                _with_workspace_scope(task, self._workspace_scope)
+                for task in self._history
+            ]
         needle = query.strip().lower()
         if needle:
             tasks = [task for task in tasks if needle in json.dumps(task, sort_keys=True).lower()]
@@ -1539,7 +1570,7 @@ class GuiSession:
         with self._lock:
             for task in self._history:
                 if str(task.get("id") or "").strip() == requested:
-                    return dict(task)
+                    return dict(_with_workspace_scope(task, self._workspace_scope))
         return None
 
     def latest_foreground_task(self) -> dict[str, Any] | None:
@@ -1552,7 +1583,7 @@ class GuiSession:
                     continue
                 if _is_internal_qualification_task(task):
                     continue
-                return dict(task)
+                return dict(_with_workspace_scope(task, self._workspace_scope))
         return None
 
     def export(self) -> dict[str, Any]:
@@ -1760,6 +1791,88 @@ def _managed_workspace_identity(
     return identity
 
 
+def _identity_digest(key_material: str) -> str:
+    """Return the one short opaque digest this module keys state with."""
+
+    return hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
+
+
+def _workspace_fingerprint(identity: dict[str, str] | None) -> str:
+    """Digest the exact identity material that keys the managed session file.
+
+    The advertised fingerprint and the session-state filename must never drift
+    apart, so both come from this one function rather than two hash recipes.
+    """
+
+    if not identity:
+        return ""
+    return _identity_digest(
+        json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    )
+
+
+def workspace_identity_payload(identity: dict[str, str] | None) -> dict[str, Any]:
+    """Say which work area a managed page runs in and where it saves tasks.
+
+    Two managed services can share one execution work area while keeping
+    separate saved-task stores, because the store is keyed by project dir. That
+    split is otherwise invisible: both pages label themselves with the work
+    area. This makes it a stated fact with a comparable fingerprint.
+
+    ``os_user`` and the backend executable path stay fingerprint material only.
+    They describe the operator and the machine layout, not the work area, so
+    they are never published here.
+    """
+
+    if not identity:
+        return {}
+    work_area = str(identity.get("doc_root") or "")
+    # No recorded project dir means no separate store exists to diverge from.
+    state_scope = str(identity.get("project_dir") or work_area)
+    split = bool(work_area) and bool(state_scope) and state_scope != work_area
+    return {
+        "contract": WORKSPACE_IDENTITY_CONTRACT,
+        "label": Path(work_area).name or work_area,
+        "work_area": work_area,
+        "state_scope": state_scope,
+        "fingerprint": _workspace_fingerprint(identity),
+        "split": split,
+        "summary": (
+            "Saved task history on this page is associated with a different project "
+            "folder from the work area shown above, so another page can show different work "
+            "for the same work area."
+            if split
+            else "Saved task history on this page uses the same project scope as the work area shown above."
+        ),
+        "operator_action": (
+            "Compare this fingerprint on every page that shows this work area. "
+            "To give them one shared saved-task history, run each service under "
+            "the same account and managed backend with the same --project-dir "
+            "and --doc-root."
+            if split
+            else ""
+        ),
+    }
+
+
+def _with_workspace_scope(task: dict[str, Any], fingerprint: str) -> dict[str, Any]:
+    """Attribute one public task projection to the saved-task store it came from.
+
+    Status, readiness, and allowed actions are untouched; this only records
+    which store answered, so two pages claiming one work area can be compared.
+    """
+
+    if not fingerprint or not isinstance(task, dict) or not task:
+        return task
+    scoped = dict(task)
+    metadata = scoped.get("metadata")
+    scoped["metadata"] = {
+        **(metadata if isinstance(metadata, dict) else {}),
+        "workspace_scope": fingerprint,
+    }
+    return scoped
+
+
 def _managed_session_path(
     project_dir: str | Path | None,
     *,
@@ -1779,15 +1892,11 @@ def _managed_session_path(
         if state_home
         else Path.home() / ".local" / "state"
     )
-    if workspace_identity:
-        key_material = json.dumps(
-            workspace_identity,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-    else:
-        key_material = str(Path(project_dir).expanduser().resolve())
-    project_key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
+    project_key = (
+        _workspace_fingerprint(workspace_identity)
+        if workspace_identity
+        else _identity_digest(str(Path(project_dir).expanduser().resolve()))
+    )
     return state_root / "agentic-harness" / "gui-sessions" / f"{project_key}.json"
 
 
@@ -2347,6 +2456,30 @@ def _print_non_loopback_warning() -> None:
         "machines that can reach this host. Set AGENTIC_HARNESS_GUI_TOKEN before "
         "launch when binding beyond 127.0.0.1, and keep a firewall or private "
         "network as the primary access boundary."
+    )
+
+
+def _print_split_workspace_warning(
+    *,
+    doc_root: str | Path,
+    project_dir: str | Path,
+) -> None:
+    """Name a managed saved-task store that does not match its work area.
+
+    Two managed services can share one work area and still keep separate saved
+    tasks, which makes them disagree about the same work. Say so at launch
+    instead of leaving the operator to infer it from two conflicting pages.
+    """
+
+    work_area = Path(doc_root).expanduser().resolve()
+    state_scope = Path(project_dir).expanduser().resolve()
+    if work_area == state_scope:
+        return
+    print(
+        "NOTE: this managed service runs in --doc-root but saves its GUI task "
+        "history under a different --project-dir, so another service sharing "
+        "the same work area can show different current work. Pass the same "
+        "path to both flags to keep one shared history."
     )
 
 

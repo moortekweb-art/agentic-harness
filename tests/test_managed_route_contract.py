@@ -24,7 +24,9 @@ from agentic_harness.gui.server import (
     GuiSession,
     _managed_session_path,
     _managed_workspace_identity,
+    _workspace_fingerprint,
     make_handler,
+    workspace_identity_payload,
 )
 
 
@@ -1923,6 +1925,148 @@ def test_managed_session_rejects_persisted_workspace_identity_mismatch(
     assert second.history() == []
     assert second.persistence_status()["status"] == "degraded"
     assert "workspace identity" in second.persistence_status()["warning"]
+
+
+# A value that cannot collide with any key or sentence in the payload, so a
+# leak assertion fails only on a real leak.
+IDENTITY_OS_USER = "os-user-4f1c9d"
+
+
+def _identity(doc_root: Path, executable: Path, project_dir: Path) -> dict[str, str]:
+    return {
+        "doc_root": str(doc_root.resolve()),
+        "local_goal": str(executable.resolve()),
+        "os_user": IDENTITY_OS_USER,
+        "project_dir": str(project_dir.resolve()),
+    }
+
+
+def test_workspace_fingerprint_is_the_session_file_key(tmp_path: Path) -> None:
+    """One recipe: the advertised fingerprint cannot drift from the real store."""
+
+    docs = tmp_path / "docs"
+    project = tmp_path / "project"
+    docs.mkdir()
+    project.mkdir()
+    identity = _identity(docs, tmp_path / "local-goal", project)
+
+    fingerprint = _workspace_fingerprint(identity)
+    state_path = _managed_session_path(project, workspace_identity=identity)
+
+    assert state_path is not None
+    assert state_path.stem == fingerprint
+    assert len(fingerprint) == 24
+    assert workspace_identity_payload(identity)["fingerprint"] == fingerprint
+
+
+def test_workspace_identity_reports_a_split_saved_task_store(tmp_path: Path) -> None:
+    """Same work area, different saved-task scope: two stores, stated as two."""
+
+    docs = tmp_path / "docs"
+    canary = tmp_path / "canary"
+    docs.mkdir()
+    canary.mkdir()
+    executable = tmp_path / "local-goal"
+
+    split = workspace_identity_payload(_identity(docs, executable, canary))
+    aligned = workspace_identity_payload(_identity(docs, executable, docs))
+
+    assert split["split"] is True
+    assert split["work_area"] == str(docs.resolve())
+    assert split["state_scope"] == str(canary.resolve())
+    assert split["operator_action"]
+
+    assert aligned["split"] is False
+    assert aligned["state_scope"] == aligned["work_area"]
+    assert aligned["operator_action"] == ""
+
+    # The work area is identical, so only the fingerprint distinguishes them.
+    assert split["work_area"] == aligned["work_area"]
+    assert split["fingerprint"] != aligned["fingerprint"]
+
+
+def test_workspace_identity_omits_operator_and_backend_identity(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    executable = tmp_path / "secret-backend-name"
+    docs.mkdir()
+    identity = _identity(docs, executable, docs)
+
+    payload = workspace_identity_payload(identity)
+
+    assert "os_user" not in payload
+    assert "local_goal" not in payload
+    serialized = json.dumps(payload)
+    assert IDENTITY_OS_USER not in serialized
+    assert str(executable.resolve()) not in serialized
+    # Both stay fingerprint material, so a changed operator changes the digest.
+    assert _workspace_fingerprint(identity) != _workspace_fingerprint(
+        {**identity, "os_user": "someone-else"}
+    )
+
+
+def test_workspace_identity_without_a_project_dir_claims_no_split(
+    tmp_path: Path,
+) -> None:
+    """No configured project dir means no separate store exists to diverge from."""
+
+    executable = tmp_path / "local-goal"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    bridge = LocalGoalBridge(doc_root=docs, local_goal=executable)
+
+    payload = workspace_identity_payload(_managed_workspace_identity(bridge))
+
+    assert payload["split"] is False
+    assert payload["state_scope"] == payload["work_area"] == str(docs.resolve())
+    assert workspace_identity_payload(None) == {}
+
+
+def test_managed_session_stamps_every_projection_with_its_own_store(
+    tmp_path: Path,
+) -> None:
+    """Recorded, replayed, and pinned tasks all name the store that answered."""
+
+    docs = tmp_path / "docs"
+    canary = tmp_path / "canary"
+    docs.mkdir()
+    canary.mkdir()
+    identity = _identity(docs, tmp_path / "local-goal", canary)
+    session = GuiSession(tmp_path / "gui-session.json", workspace_identity=identity)
+    fingerprint = _workspace_fingerprint(identity)
+
+    recorded = session.record(
+        {
+            "id": "run-a",
+            "status": "needs_review",
+            "objective": "A managed result",
+            "metadata": {"start_accepted": True},
+        }
+    )
+
+    assert recorded["metadata"]["workspace_scope"] == fingerprint
+    assert session.history()[0]["metadata"]["workspace_scope"] == fingerprint
+    assert session.task("run-a")["metadata"]["workspace_scope"] == fingerprint
+    assert session.latest_foreground_task()["metadata"]["workspace_scope"] == fingerprint
+    # Pre-existing metadata survives the stamp.
+    assert recorded["metadata"]["start_accepted"] is True
+
+    # The stamp must survive the persistence allowlist, so a restarted service
+    # still attributes its replayed history to the store it came from.
+    restarted = GuiSession(tmp_path / "gui-session.json", workspace_identity=identity)
+    assert restarted.history()[0]["metadata"]["workspace_scope"] == fingerprint
+
+
+def test_unscoped_session_leaves_tasks_untouched() -> None:
+    """A session with no workspace identity keeps its existing projection shape."""
+
+    session = GuiSession()
+
+    recorded = session.record({"id": "run-a", "status": "ready", "metadata": {}})
+
+    assert "workspace_scope" not in recorded["metadata"]
+    assert "workspace_scope" not in session.history()[0]["metadata"]
 
 
 def test_model_profile_attachment_without_run_identity_fails_closed() -> None:

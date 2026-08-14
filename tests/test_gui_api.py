@@ -1389,6 +1389,8 @@ def test_gui_server_get_api_routes_return_json() -> None:
         readiness = get_json(base_url, "/api/readiness")
 
     assert health["ok"] is True
+    # The identity block is additive; every pre-existing key keeps its value.
+    workspace_identity = setup.pop("workspace_identity")
     assert setup == {
         "contract": "agentic_harness.gui_setup.v1",
         "configured": True,
@@ -1429,6 +1431,12 @@ def test_gui_server_get_api_routes_return_json() -> None:
             "workspace": "isolated_temporary",
         },
     }
+    assert workspace_identity["contract"] == "agentic_harness.workspace_identity.v1"
+    assert workspace_identity["work_area"] == str(FakeBridge.doc_root.resolve())
+    # No project dir was configured, so there is no separate store to diverge from.
+    assert workspace_identity["state_scope"] == workspace_identity["work_area"]
+    assert workspace_identity["split"] is False
+    assert workspace_identity["operator_action"] == ""
     assert health["no_babysitting"]["enabled"] is True
     assert health["readiness"]["agent_loop"]["stage"] == "Act"
     assert readiness["agent_loop"]["stage"] == "Act"
@@ -3404,6 +3412,24 @@ def gui_server(bridge: FakeBridge) -> Iterator[str]:
         thread.join(timeout=2)
 
 
+@contextmanager
+def scoped_gui_server(bridge: FakeBridge, project_dir: Path) -> Iterator[str]:
+    """Serve one managed handler bound to an explicit saved-task scope."""
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        make_handler(bridge, project_dir=project_dir),  # type: ignore[arg-type]
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def get_json(base_url: str, path: str, *, token: str | None = None) -> dict[str, object]:
     request = urllib.request.Request(base_url + path)
     if token is not None:
@@ -3497,3 +3523,133 @@ def _busy_port_with_free_successor() -> socket.socket:
         probe.close()
         return busy
     raise RuntimeError("could not reserve a busy port with a free successor")
+
+
+@pytest.fixture
+def isolated_gui_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep managed session files inside the test tree, never the real home."""
+
+    monkeypatch.delenv("AGENTIC_HARNESS_GUI_SESSION_PATH", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    return tmp_path
+
+
+def test_managed_split_workspace_is_reported_on_both_services(
+    isolated_gui_state: Path,
+) -> None:
+    """Two services on one work area must not silently claim one saved-task store.
+
+    Same doc_root, different project_dir: each service reads a different saved
+    task history while labelling itself with the same work area. The fingerprint
+    is what lets an operator tell those two pages apart.
+    """
+
+    work_area = FakeBridge.doc_root.resolve()
+    canary = isolated_gui_state / "canary"
+    canary.mkdir()
+
+    with scoped_gui_server(FakeBridge(), work_area) as aligned_url:
+        aligned = get_json(aligned_url, "/api/setup")["workspace_identity"]
+        aligned_task = get_json(aligned_url, "/api/tasks/current")
+    with scoped_gui_server(FakeBridge(), canary) as split_url:
+        split = get_json(split_url, "/api/setup")["workspace_identity"]
+        split_task = get_json(split_url, "/api/tasks/current")
+        split_health = get_json(split_url, "/api/health")["workspace_identity"]
+
+    assert aligned["split"] is False
+    assert aligned["state_scope"] == aligned["work_area"] == str(work_area)
+
+    assert split["split"] is True
+    assert split["work_area"] == str(work_area)
+    assert split["state_scope"] == str(canary)
+    assert split["operator_action"]
+
+    assert aligned["fingerprint"] != split["fingerprint"]
+    assert split_health == split
+
+    # Each projection names the store that actually answered it.
+    assert aligned_task["metadata"]["workspace_scope"] == aligned["fingerprint"]
+    assert split_task["metadata"]["workspace_scope"] == split["fingerprint"]
+
+
+def test_managed_task_projections_all_carry_the_workspace_scope(
+    isolated_gui_state: Path,
+) -> None:
+    canary = isolated_gui_state / "canary"
+    canary.mkdir()
+
+    with scoped_gui_server(FakeBridge(), canary) as base_url:
+        fingerprint = get_json(base_url, "/api/setup")["workspace_identity"]["fingerprint"]
+        current = get_json(base_url, "/api/tasks/current")
+        tasks = get_json(base_url, "/api/tasks")
+        history = get_json(base_url, "/api/tasks/history")
+        details = get_json(base_url, "/api/tasks/current/details")
+
+    assert fingerprint
+    assert current["metadata"]["workspace_scope"] == fingerprint
+    assert tasks["current"]["metadata"]["workspace_scope"] == fingerprint
+    assert details["task"]["metadata"]["workspace_scope"] == fingerprint
+    for task in [*tasks["tasks"], *history["tasks"]]:
+        assert task["metadata"]["workspace_scope"] == fingerprint
+
+    # Attribution only; the readiness contract is untouched.
+    assert current["status"] == "working"
+    assert current["readiness_gate"]["can_start"] is False
+    assert [action["action"] for action in current["allowed_actions"]] == [
+        "message",
+        "stop",
+    ]
+
+
+def test_managed_identity_never_publishes_operator_or_backend_paths(
+    isolated_gui_state: Path,
+) -> None:
+    """os_user and the backend executable are fingerprint material, not content."""
+
+    canary = isolated_gui_state / "canary"
+    canary.mkdir()
+
+    with scoped_gui_server(FakeBridge(), canary) as base_url:
+        setup = get_json(base_url, "/api/setup")
+        current = get_json(base_url, "/api/tasks/current")
+
+    identity = setup["workspace_identity"]
+    assert set(identity) == {
+        "contract",
+        "label",
+        "work_area",
+        "state_scope",
+        "fingerprint",
+        "split",
+        "summary",
+        "operator_action",
+    }
+    serialized = json.dumps(identity)
+    assert str(FakeBridge.local_goal.resolve()) not in serialized
+    # os_user exclusion is asserted against a controlled sentinel in
+    # tests/test_managed_route_contract.py; a real username can legitimately
+    # appear inside a configured path, so a substring check is unsound here.
+    # The stamp is an opaque digest, never a readable path.
+    scope = current["metadata"]["workspace_scope"]
+    assert len(scope) == 24 and all(char in "0123456789abcdef" for char in scope)
+
+
+def test_embedded_setup_and_tasks_stay_unchanged(tmp_path: Path) -> None:
+    """The identity block is a managed-backend contract; embedded is untouched."""
+
+    service = EmbeddedExecutionBackend(tmp_path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service, project_dir=tmp_path))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        setup = get_json(base_url, "/api/setup")
+        current = get_json(base_url, "/api/tasks/current")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert "workspace_identity" not in setup
+    assert setup["workspace"] == str(tmp_path)
+    assert "workspace_scope" not in current.get("metadata", {})

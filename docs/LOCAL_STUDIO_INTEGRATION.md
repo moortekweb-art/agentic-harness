@@ -44,6 +44,7 @@ has a compatible external controller/runtime contract:
 ```bash
 agentic-harness-gui \
   --backend local-goal \
+  --doc-root /path/to/project \
   --project-dir /path/to/project \
   --no-open
 ```
@@ -54,6 +55,27 @@ specific; this repository does not ship a private controller, a private
 hostname, or a default remote connection. See
 [`TURNSTONE_INTEGRATION.md`](TURNSTONE_INTEGRATION.md) for the public
 compatibility boundary.
+
+### One work area, one saved-task store
+
+In managed mode the two path flags mean different things:
+
+- `--doc-root` is the execution work area. The backend runs there, and the GUI
+  reports it as the workspace.
+- `--project-dir` only scopes the saved GUI task history and session state.
+
+Pass the same path to both unless a separate saved-task store is intended. When
+they differ, two managed services can share one work area and still disagree
+about the current task, because each reads a different store while labelling
+itself with the same work area.
+
+Managed `/api/setup` and `/api/health` therefore publish an additive
+`workspace_identity` object (`agentic_harness.workspace_identity.v1`) carrying
+`work_area`, `state_scope`, a `split` flag, and an opaque `fingerprint`.
+Every managed task projection carries the same value at
+`metadata.workspace_scope`. Compare the fingerprint across any two pages that
+claim one work area: equal means one shared store, different means two. The GUI
+shows a short note when `split` is true and stays quiet otherwise.
 
 In managed mode, the GUI should expose the runtime's route and availability as
 read-only facts. The Harness must retain the requested objective, route, work

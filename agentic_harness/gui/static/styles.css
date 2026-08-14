@@ -251,6 +251,19 @@ h3 {
   text-align: right;
 }
 
+/* Only rendered when the saved-task store and the work area disagree; an
+   aligned deployment never shows this. */
+.workspace-split-note {
+  margin: -12px 0 18px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .first-success-card {
   display: flex;
   align-items: center;

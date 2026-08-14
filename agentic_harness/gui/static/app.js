@@ -106,6 +106,7 @@ const els = {
   themeIcon: byId("themeIcon"),
   shortcutsButton: byId("shortcutsButton"),
   workspacePath: byId("workspacePath"),
+  workspaceSplitNote: byId("workspaceSplitNote"),
   executionSummary: byId("executionSummary"),
   demoCallout: byId("demoCallout"),
   demoTitle: byId("demoTitle"),
@@ -2109,6 +2110,20 @@ function renderSetup(setup) {
   const workspaceName = workspace.split(/[\\/]/).filter(Boolean).at(-1) || "Current workspace";
   els.workspacePath.textContent = workspaceName.replaceAll("-", " ").replaceAll("_", " ");
   els.workspacePath.title = workspace || "Workspace path unavailable";
+  // Managed backends report which work area they run in and where they save
+  // tasks. Say something only when those disagree; an aligned deployment and
+  // the embedded backend stay visually unchanged.
+  const identity = setup.workspace_identity || {};
+  const workspaceSplit = identity.split === true;
+  if (els.workspaceSplitNote) {
+    els.workspaceSplitNote.hidden = !workspaceSplit;
+    if (workspaceSplit) {
+      els.workspaceSplitNote.title = identity.operator_action || "";
+    }
+  }
+  if (workspaceSplit && identity.work_area) {
+    els.workspacePath.title = identity.work_area;
+  }
   const worker = setup.worker || {};
   els.managedSettings.hidden = !readOnly || Boolean(configurationError);
   els.editableSettings.hidden = readOnly;
