@@ -74,7 +74,12 @@ Managed `/api/setup` and `/api/health` therefore publish an additive
 `work_area`, `state_scope`, a `split` flag, and an opaque `fingerprint`.
 Every managed task projection carries the same value at
 `metadata.workspace_scope`. Compare the fingerprint across any two pages that
-claim one work area: equal means one shared store, different means two. The GUI
+claim one work area: equal nonempty values mean the private workspace identity
+and resolved saved-task file are the same, while different values mean the
+pages do not share one store. Persistence-disabled sessions publish an empty
+value. The resolved path is digest material only and is never published.
+Services with an equal fingerprint serialize and reload each shared-store
+update so one process cannot erase another process's task history. The GUI
 shows a short note when `split` is true and stays quiet otherwise.
 
 ### Read-only operator compatibility

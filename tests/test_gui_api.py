@@ -539,9 +539,7 @@ def test_managed_review_exposes_current_run_result_and_reason(tmp_path: Path) ->
     assert task["verification"][-1] == {
         "name": "human_review",
         "passed": False,
-        "message": (
-            "Manual review required: no suitable behavioral verifier mapped at intake."
-        ),
+        "message": ("Manual review required: no suitable behavioral verifier mapped at intake."),
         "independent": False,
         "source": "managed-review",
     }
@@ -599,9 +597,7 @@ def test_managed_route_receipt_reports_external_reviewer_fallback_across_continu
         ),
         encoding="utf-8",
     )
-    (continuation / "review.json").write_text(
-        json.dumps({"status": "accepted"}), encoding="utf-8"
-    )
+    (continuation / "review.json").write_text(json.dumps({"status": "accepted"}), encoding="utf-8")
     (continuation / "acceptance.json").write_text(
         json.dumps({"status": "accepted"}), encoding="utf-8"
     )
@@ -627,9 +623,7 @@ def test_managed_route_receipt_reports_external_reviewer_fallback_across_continu
     (external_reviews / "20260722T072634Z-kimi-coding.json").write_text(
         json.dumps(kimi_review), encoding="utf-8"
     )
-    (source / "external-review-latest.json").write_text(
-        json.dumps(kimi_review), encoding="utf-8"
-    )
+    (source / "external-review-latest.json").write_text(json.dumps(kimi_review), encoding="utf-8")
 
     receipt = _managed_route_receipt(
         continuation,
@@ -640,9 +634,7 @@ def test_managed_route_receipt_reports_external_reviewer_fallback_across_continu
     assert receipt["reviewer"] == "kimi-coding"
     assert receipt["reviewer_model"] == "kimi-coding/kimi-for-coding"
     assert receipt["fallback_used"] is True
-    assert receipt["fallback_reason"] == (
-        "glm-5.2 -> kimi-coding: prior reviewer unavailable."
-    )
+    assert receipt["fallback_reason"] == ("glm-5.2 -> kimi-coding: prior reviewer unavailable.")
 
 
 def test_managed_review_artifact_can_be_previewed_but_other_files_cannot(
@@ -1521,9 +1513,7 @@ def test_managed_preview_redacts_structured_secret_before_http_serialization(
                 "cookie_preferences": "keep-safe",
                 "refresh_token": refresh_marker,
                 "private_key": (
-                    "-----BEGIN PRIVATE KEY-----\n"
-                    f"{private_key_marker}\n"
-                    "-----END PRIVATE KEY-----"
+                    f"-----BEGIN PRIVATE KEY-----\n{private_key_marker}\n-----END PRIVATE KEY-----"
                 ),
                 "nested": [{"client_secret": "nested-client-secret-R4Q8M2"}],
                 "finding": "safe",
@@ -1541,8 +1531,7 @@ def test_managed_preview_redacts_structured_secret_before_http_serialization(
         get_json(base_url, "/api/tasks/current")
         preview = get_json(
             base_url,
-            "/api/tasks/current/artifact"
-            f"?path={quote(preview_name)}&goal_id={quote(run_id)}",
+            f"/api/tasks/current/artifact?path={quote(preview_name)}&goal_id={quote(run_id)}",
         )
 
     assert synthetic_secret not in preview["content"]
@@ -2181,8 +2170,7 @@ def test_managed_gui_runs_and_dismisses_isolated_demo_without_changing_real_task
 def test_gui_frontend_plumbs_token_without_persisting_or_exporting_it() -> None:
     static_root = Path("agentic_harness/gui/static")
     app = "\n".join(
-        (static_root / name).read_text(encoding="utf-8")
-        for name in ("auth.js", "app.js")
+        (static_root / name).read_text(encoding="utf-8") for name in ("auth.js", "app.js")
     )
 
     assert "new URLSearchParams(window.location.search)" not in app
@@ -2408,12 +2396,8 @@ def test_gui_server_post_task_workflow_routes() -> None:
             "/api/tasks/current/continue",
             {"task_id": task_id, "feedback": "keep going"},
         )
-        accepted = post_json(
-            base_url, "/api/tasks/current/accept", {"task_id": task_id}
-        )
-        stopped = post_json(
-            base_url, "/api/tasks/current/stop", {"task_id": task_id}
-        )
+        accepted = post_json(base_url, "/api/tasks/current/accept", {"task_id": task_id})
+        stopped = post_json(base_url, "/api/tasks/current/stop", {"task_id": task_id})
 
     assert created["status"] == "starting"
     assert created["objective"] == "test task"
@@ -2457,9 +2441,7 @@ def test_gui_current_task_mutations_require_exact_task_identity(action: str) -> 
         stale = post_error(
             base_url,
             path,
-            json.dumps(
-                {"task_id": "run-stale", "feedback": "keep going"}
-            ).encode("utf-8"),
+            json.dumps({"task_id": "run-stale", "feedback": "keep going"}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
 
@@ -2499,12 +2481,8 @@ def test_gui_current_task_mutation_reports_backend_identity_race_as_conflict() -
         )
 
     assert conflict.code == 409
-    assert conflict.payload["advanced_details"]["payload"]["reason"] == (
-        "active_run_changed"
-    )
-    assert bridge.commands == [
-        ["stop", "--expected-run-id", "run-1", "--json"]
-    ]
+    assert conflict.payload["advanced_details"]["payload"]["reason"] == ("active_run_changed")
+    assert bridge.commands == [["stop", "--expected-run-id", "run-1", "--json"]]
 
 
 def test_accept_action_does_not_accept_after_failed_managed_review() -> None:
@@ -2634,9 +2612,7 @@ def test_gui_supervised_messages_are_revisioned_and_cumulative() -> None:
     assert nudge_commands[1][1:3] == ["--expected-run-id", "run-1"]
     assert "Revision 1: Keep the public API compatible." in " ".join(nudge_commands[1])
     assert "Revision 2: Also add a regression test." in " ".join(nudge_commands[1])
-    assert "independent acceptance criteria remain unchanged" in " ".join(
-        nudge_commands[1]
-    )
+    assert "independent acceptance criteria remain unchanged" in " ".join(nudge_commands[1])
 
 
 def test_gui_supervised_message_requires_active_managed_run() -> None:
@@ -2703,9 +2679,9 @@ def test_gui_supervised_message_requires_the_exact_current_task_id() -> None:
         stale = post_error(
             base_url,
             "/api/tasks/current/message",
-            json.dumps(
-                {"task_id": task_id + "-stale", "message": "stale guidance"}
-            ).encode("utf-8"),
+            json.dumps({"task_id": task_id + "-stale", "message": "stale guidance"}).encode(
+                "utf-8"
+            ),
             headers={"Content-Type": "application/json"},
         )
         matching = post_json(
@@ -3052,9 +3028,7 @@ def test_managed_status_and_stream_keep_the_users_started_task_in_foreground() -
     assert current["id"] != "background-maintenance"
     assert current["objective"] == "Prepare Michael's requested result"
     assert current["metadata"]["foreground_task"] is True
-    assert current["metadata"]["background_activity"]["id"] == (
-        "background-maintenance"
-    )
+    assert current["metadata"]["background_activity"]["id"] == ("background-maintenance")
     assert current["allowed_actions"] == []
     assert b"101 Switching Protocols" in response
     assert b"Prepare Michael's requested result" in response
@@ -3572,6 +3546,31 @@ def test_managed_split_workspace_is_reported_on_both_services(
     assert split_task["metadata"]["workspace_scope"] == split["fingerprint"]
 
 
+def test_managed_fingerprint_changes_when_the_resolved_store_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fingerprints: list[str] = []
+    for state_home in (tmp_path / "state-a", tmp_path / "state-b"):
+        monkeypatch.delenv("AGENTIC_HARNESS_GUI_SESSION_PATH", raising=False)
+        monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+        with scoped_gui_server(FakeBridge(), FakeBridge.doc_root) as base_url:
+            identity = get_json(base_url, "/api/setup")["workspace_identity"]
+            task = get_json(base_url, "/api/tasks/current")
+        fingerprints.append(identity["fingerprint"])
+        assert task["metadata"]["workspace_scope"] == identity["fingerprint"]
+
+    monkeypatch.setenv(
+        "AGENTIC_HARNESS_GUI_SESSION_PATH",
+        str(tmp_path / "explicit" / "session.json"),
+    )
+    with scoped_gui_server(FakeBridge(), FakeBridge.doc_root) as base_url:
+        explicit = get_json(base_url, "/api/setup")["workspace_identity"]
+    fingerprints.append(explicit["fingerprint"])
+
+    assert len(set(fingerprints)) == 3
+
+
 def test_managed_task_projections_all_carry_the_workspace_scope(
     isolated_gui_state: Path,
 ) -> None:
@@ -3657,6 +3656,7 @@ def test_embedded_setup_and_tasks_stay_unchanged(tmp_path: Path) -> None:
 
 def test_read_only_v1_contract_tracks_the_managed_projection(
     monkeypatch: pytest.MonkeyPatch,
+    isolated_gui_state: Path,
 ) -> None:
     registry = {
         "api_version": "1",
@@ -3690,7 +3690,7 @@ def test_read_only_v1_contract_tracks_the_managed_projection(
         write_attempt = post_error(
             base_url,
             "/v1/tasks",
-            b'{}',
+            b"{}",
             headers={"Content-Type": "application/json"},
         )
 
@@ -3702,10 +3702,7 @@ def test_read_only_v1_contract_tracks_the_managed_projection(
     assert tasks["api_version"] == "1"
     assert tasks["owner"] == "agentic-harness"
     assert tasks["current"]["metadata"]["workspace_scope"] == fingerprint
-    assert all(
-        item["metadata"]["workspace_scope"] == fingerprint
-        for item in tasks["tasks"]
-    )
+    assert all(item["metadata"]["workspace_scope"] == fingerprint for item in tasks["tasks"])
     assert task["task"]["id"] == current["id"]
     assert task["task"]["metadata"]["workspace_scope"] == fingerprint
     assert events == {"api_version": "1", "task_id": "run-1", "events": []}
@@ -3720,6 +3717,60 @@ def test_read_only_v1_contract_tracks_the_managed_projection(
     assert write_attempt.code == 404
     assert write_attempt.payload == {"ok": False, "error": "not found"}
     assert not any(command and command[0] == "start" for command in bridge.commands)
+
+
+def test_v1_task_detail_uses_the_same_enriched_projection_as_the_list(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_gui_state: Path,
+) -> None:
+    monkeypatch.setattr(
+        gui_server_module,
+        "enrich_managed_task_snapshot",
+        lambda _bridge, task: {**task, "projection_marker": "enriched"},
+    )
+
+    with scoped_gui_server(FakeBridge(), FakeBridge.doc_root) as base_url:
+        current = get_json(base_url, "/v1/tasks/current")
+        tasks = get_json(base_url, "/v1/tasks")
+        detail = get_json(base_url, f"/v1/tasks/{current['id']}")
+
+    listed = next(task for task in tasks["tasks"] if task["id"] == current["id"])
+    assert listed["projection_marker"] == "enriched"
+    assert detail["task"]["projection_marker"] == "enriched"
+
+
+def test_v1_task_detail_prefers_live_state_over_a_stale_saved_snapshot(
+    isolated_gui_state: Path,
+) -> None:
+    bridge = FakeBridge()
+    identity = gui_server_module._managed_workspace_identity(
+        bridge,
+        project_dir=FakeBridge.doc_root,
+    )
+    state_path = gui_server_module._managed_session_path(
+        FakeBridge.doc_root,
+        workspace_identity=identity,
+    )
+    assert state_path is not None
+    gui_server_module.GuiSession(
+        state_path,
+        workspace_identity=identity,
+    ).record(
+        {
+            "id": "run-1",
+            "status": "done",
+            "objective": "stale snapshot",
+            "summary": "stale snapshot",
+            "metadata": {},
+        }
+    )
+
+    with scoped_gui_server(bridge, FakeBridge.doc_root) as base_url:
+        detail = get_json(base_url, "/v1/tasks/run-1")["task"]
+        current = get_json(base_url, "/v1/tasks/current")
+
+    assert detail["status"] == current["status"] == "working"
+    assert detail["objective"] == current["objective"] == "test task"
 
 
 def test_v1_contract_uses_the_same_token_gate_as_api(

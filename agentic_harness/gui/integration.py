@@ -61,7 +61,7 @@ def _probe(url: str, *, timeout: float = 1.5) -> tuple[str, str]:
         raw = response.read(_MAX_HEALTH_BYTES)
         if response.status < 200 or response.status >= 300:
             return "unavailable", f"health endpoint returned HTTP {response.status}"
-    except (OSError, HTTPException, TimeoutError) as exc:
+    except (OSError, HTTPException, TimeoutError, ValueError) as exc:
         return "unavailable", type(exc).__name__
     finally:
         connection.close()
@@ -89,22 +89,15 @@ def _route_definitions() -> tuple[dict[str, str], ...]:
         definitions.append(
             {
                 "id": role,
-                "node": os.environ.get(f"{prefix}LABEL", default_label).strip()
-                or default_label,
-                "runtime": os.environ.get(
-                    f"{prefix}RUNTIME", "openai-compatible"
-                ).strip()
+                "node": os.environ.get(f"{prefix}LABEL", default_label).strip() or default_label,
+                "runtime": os.environ.get(f"{prefix}RUNTIME", "openai-compatible").strip()
                 or "openai-compatible",
                 "role": role,
                 **values,
                 "api_key_env": os.environ.get(f"{prefix}API_KEY_ENV", "").strip(),
-                "capabilities": os.environ.get(
-                    f"{prefix}CAPABILITIES", "chat,tools"
-                ).strip()
+                "capabilities": os.environ.get(f"{prefix}CAPABILITIES", "chat,tools").strip()
                 or "chat,tools",
-                "max_context_tokens": os.environ.get(
-                    f"{prefix}MAX_CONTEXT_TOKENS", "32768"
-                ).strip()
+                "max_context_tokens": os.environ.get(f"{prefix}MAX_CONTEXT_TOKENS", "32768").strip()
                 or "32768",
             }
         )
@@ -201,8 +194,7 @@ def route_registry_payload() -> dict[str, Any]:
         "selection": {
             "policy": "harness_decides",
             "operator_hint": (
-                "Operator clients may request an intent; Agentic Harness records "
-                "the final route."
+                "Operator clients may request an intent; Agentic Harness records the final route."
             ),
         },
         "routes": routes,

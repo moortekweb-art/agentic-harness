@@ -88,6 +88,22 @@ def test_invalid_route_configuration_is_reported_without_echoing_it(
     assert secret_endpoint not in json.dumps(payload)
 
 
+def test_non_ascii_health_path_is_reported_without_dropping_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_primary_route(
+        monkeypatch,
+        endpoint="http://127.0.0.1:9/v1/chat/completions",
+        health_url="http://127.0.0.1:9/h\N{LATIN SMALL LETTER E WITH ACUTE}alth",
+    )
+
+    payload = integration.route_registry_payload()
+    route = payload["routes"][0]
+
+    assert route["status"] == "unavailable"
+    assert route["status_reason"] == "UnicodeEncodeError"
+
+
 def test_health_probe_does_not_follow_redirects() -> None:
     redirected_hits = 0
 
@@ -123,9 +139,7 @@ def test_health_probe_does_not_follow_redirects() -> None:
     source_thread = threading.Thread(target=source.serve_forever, daemon=True)
     source_thread.start()
     try:
-        state, reason = integration._probe(
-            f"http://127.0.0.1:{source.server_port}/health"
-        )
+        state, reason = integration._probe(f"http://127.0.0.1:{source.server_port}/health")
     finally:
         source.shutdown()
         source.server_close()
