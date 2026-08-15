@@ -44,6 +44,7 @@ has a compatible external controller/runtime contract:
 ```bash
 agentic-harness-gui \
   --backend local-goal \
+  --doc-root /path/to/project \
   --project-dir /path/to/project \
   --no-open
 ```
@@ -54,6 +55,51 @@ specific; this repository does not ship a private controller, a private
 hostname, or a default remote connection. See
 [`TURNSTONE_INTEGRATION.md`](TURNSTONE_INTEGRATION.md) for the public
 compatibility boundary.
+
+### One work area, one saved-task store
+
+In managed mode the two path flags mean different things:
+
+- `--doc-root` is the execution work area. The backend runs there, and the GUI
+  reports it as the workspace.
+- `--project-dir` only scopes the saved GUI task history and session state.
+
+Pass the same path to both unless a separate saved-task store is intended. When
+they differ, two managed services can share one work area and still disagree
+about the current task, because each reads a different store while labelling
+itself with the same work area.
+
+Managed `/api/setup` and `/api/health` therefore publish an additive
+`workspace_identity` object (`agentic_harness.workspace_identity.v1`) carrying
+`work_area`, `state_scope`, a `split` flag, and an opaque `fingerprint`.
+Every managed task projection carries the same value at
+`metadata.workspace_scope`. Compare the fingerprint across any two pages that
+claim one work area: equal nonempty values mean the private workspace identity
+and resolved saved-task file are the same, while different values mean the
+pages do not share one store. Persistence-disabled sessions publish an empty
+value. The resolved path is digest material only and is never published.
+Services with an equal fingerprint serialize and reload each shared-store
+update so one process cannot erase another process's task history. The GUI
+shows a short note when `split` is true and stays quiet otherwise.
+
+### Read-only operator compatibility
+
+Operator clients that need a compact integration view can use the versioned
+read-only routes under `/v1`: `health`, `routes`, `tasks`, `tasks/current`, and
+task-specific reads for the task, events, and artifacts. These routes use the
+same Host validation, bearer-token gate, redaction, and `no-store` response
+policy as `/api`. There is deliberately no `/v1` write route; task start and
+actions remain on the normal `/api` contract.
+
+The route registry reads only the fixed `PRIMARY` and `OVERFLOW` deployment
+slots under `AGENTIC_HARNESS_ROUTE_<SLOT>_*`. It publishes model and capability
+labels, never provider endpoints or credential environment names. Health probes
+are bounded, do not follow redirects, and must use the same HTTP(S) origin as
+the operator-configured provider endpoint. A client may display these facts,
+but Agentic Harness still owns route selection and records the final decision.
+HTTP endpoints in the RFC 6598 CGNAT range remain rejected by default; a
+deployment using a trusted private overlay such as Tailscale must opt in with
+the exact value `AGENTIC_HARNESS_TRUST_CGNAT_OVERLAY=1`.
 
 In managed mode, the GUI should expose the runtime's route and availability as
 read-only facts. The Harness must retain the requested objective, route, work

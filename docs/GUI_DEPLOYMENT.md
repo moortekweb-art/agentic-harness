@@ -25,6 +25,22 @@ The template binds to loopback and passes `--project-dir <WORKDIR> --no-open`.
 The service user needs write access to the workspace and `.agentic-harness/`
 state, but should not have broader machine privileges.
 
+A unit running `--backend local-goal` must pin `--doc-root` as well, because in
+managed mode `--doc-root` is the execution work area while `--project-dir` only
+scopes the saved GUI task history. Pass the same path to both unless a separate
+saved-task store is intended, and never rely on the `--project-dir` default:
+a unit without a pinned `WorkingDirectory` would silently change store between
+restarts. Managed `/api/setup` reports `workspace_identity.split` and a
+`workspace_identity.fingerprint` so two services can be compared directly.
+A nonempty fingerprint includes the resolved GUI session-store location
+without publishing that path. Equal nonempty fingerprints therefore mean both
+services use the same workspace identity and saved-task file; shared readers
+and writers coordinate through that store's process lock. If services set
+different `XDG_STATE_HOME` or `AGENTIC_HARNESS_GUI_SESSION_PATH` values, their
+fingerprints intentionally differ. Persistence-disabled sessions publish an
+empty fingerprint rather than pretending that separate in-memory histories are
+one store.
+
 Verify the exact installed candidate before switching a service:
 
 ```bash

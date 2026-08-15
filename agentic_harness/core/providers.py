@@ -160,7 +160,11 @@ class ProviderProfile:
             return "private_network" if hostname.endswith(".local") else "remote"
         if address.is_loopback:
             return "device"
-        if address.is_private or address.is_link_local:
+        if (
+            address.is_private
+            or address.is_link_local
+            or (_cgnat_overlay_trusted() and address in _CGNAT_OVERLAY)
+        ):
             return "private_network"
         return "remote"
 
@@ -194,6 +198,17 @@ def resolve_api_key(
     return value
 
 
+_CGNAT_OVERLAY = ipaddress.ip_network("100.64.0.0/10")
+_CGNAT_OVERLAY_OPT_IN_ENV = "AGENTIC_HARNESS_TRUST_CGNAT_OVERLAY"
+
+
+def _cgnat_overlay_trusted(environ: Mapping[str, str] | None = None) -> bool:
+    """Treat RFC 6598 space as local only under an exact operator opt-in."""
+
+    source = os.environ if environ is None else environ
+    return source.get(_CGNAT_OVERLAY_OPT_IN_ENV, "") == "1"
+
+
 def _is_local_hostname(hostname: str) -> bool:
     normalized = hostname.strip().strip("[]").lower()
     if normalized in {"localhost", "host.docker.internal"} or normalized.endswith(".local"):
@@ -202,4 +217,10 @@ def _is_local_hostname(hostname: str) -> bool:
         address = ipaddress.ip_address(normalized)
     except ValueError:
         return False
-    return bool(address.is_loopback or address.is_private or address.is_link_local)
+    overlay_trusted = _cgnat_overlay_trusted() and address in _CGNAT_OVERLAY
+    return bool(
+        address.is_loopback
+        or address.is_private
+        or address.is_link_local
+        or overlay_trusted
+    )

@@ -25,7 +25,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--project-dir",
         default=".",
-        help="Workspace whose .agentic-harness state and files the app should use.",
+        help=(
+            "With the embedded backend, the workspace whose .agentic-harness state and "
+            "files the app should use. With --backend local-goal, this only scopes the "
+            "saved GUI task history and session state; the execution work area is "
+            "--doc-root. Pass the same path to both flags unless you deliberately want "
+            "a separate saved-task store."
+        ),
     )
     parser.add_argument(
         "--backend",
@@ -37,8 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--doc-root",
         default=None,
         help=(
-            "Optional legacy local-goal backend checkout root. Explicit value wins; otherwise "
-            f"{DOC_ROOT_ENV} or the current directory is used."
+            "Optional legacy local-goal backend checkout root. This is the managed "
+            "execution work area the GUI reports and the backend runs in. Explicit "
+            f"value wins; otherwise {DOC_ROOT_ENV} or the current directory is used."
         ),
     )
     parser.add_argument("--no-open", action="store_true", help="Do not open a browser automatically.")

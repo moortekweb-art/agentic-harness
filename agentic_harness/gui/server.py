@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
+import errno
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import importlib
+import importlib.util
 from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, cast
+from typing import Any, BinaryIO, Callable, Iterator, cast
 from urllib.parse import parse_qs, unquote, urlparse
 import base64
 import getpass
@@ -35,6 +39,10 @@ from agentic_harness.core.strategies import (
     PUBLIC_STRATEGIES,
 )
 from agentic_harness.gui.backend import EmbeddedExecutionBackend
+from agentic_harness.gui.integration import (
+    integration_health_payload,
+    route_registry_payload,
+)
 from agentic_harness.gui.portal_config import load_portal_services
 from agentic_harness.gui.api import (
     command_task,
@@ -54,11 +62,18 @@ from agentic_harness.gui.api import (
 )
 
 
+fcntl = importlib.import_module("fcntl") if importlib.util.find_spec("fcntl") else None
+msvcrt = importlib.import_module("msvcrt") if importlib.util.find_spec("msvcrt") else None
+
+
 MAX_REQUEST_BYTES = 1_048_576
 MAX_CONVERSATION_BYTES = 64 * 1024
 MAX_CONTINUATION_TICKET_BYTES = 128 * 1024
 STREAM_MONITOR_INTERVAL_SECONDS = 8.0
 GUI_SESSION_PATH_ENV = "AGENTIC_HARNESS_GUI_SESSION_PATH"
+GUI_SESSION_LOCK_TIMEOUT_SECONDS = 10.0
+GUI_SESSION_LOCK_RETRY_SECONDS = 0.05
+WORKSPACE_IDENTITY_CONTRACT = "agentic_harness.workspace_identity.v1"
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     "X-Content-Type-Options": "nosniff",
@@ -112,6 +127,11 @@ def serve_gui(
     print(f"Agentic Harness GUI: {url}")
     if not _is_loopback_host(host):
         _print_non_loopback_warning()
+    if backend == "local-goal":
+        _print_split_workspace_warning(
+            doc_root=resolve_doc_root(doc_root),
+            project_dir=project_dir,
+        )
     if open_browser:
         _open_browser_safely(url)
     try:
@@ -212,19 +232,23 @@ def make_handler(
     embedded = embedded_service is not None
     bridge = cast(LocalGoalBridge, service)
     workspace_identity = (
+        None if embedded else _managed_workspace_identity(bridge, project_dir=project_dir)
+    )
+    session_path = (
         None
         if embedded
-        else _managed_workspace_identity(bridge, project_dir=project_dir)
+        else _managed_session_path(
+            project_dir,
+            workspace_identity=workspace_identity,
+        )
     )
+    public_workspace_identity = workspace_identity_payload(
+        workspace_identity,
+        state_path=session_path,
+    )
+    workspace_scope = str(public_workspace_identity.get("fingerprint") or "")
     session = GuiSession(
-        state_path=(
-            None
-            if embedded
-            else _managed_session_path(
-                project_dir,
-                workspace_identity=workspace_identity,
-            )
-        ),
+        state_path=session_path,
         workspace_identity=workspace_identity,
     )
     managed_demo_workspace: TemporaryDirectory[str] | None = None
@@ -262,6 +286,7 @@ def make_handler(
             }
         )
         payload["demo"] = demo
+        payload["workspace_identity"] = dict(public_workspace_identity)
         return payload
 
     def public_health() -> dict[str, Any]:
@@ -269,6 +294,7 @@ def make_handler(
             return embedded_service.health()
         payload = health_payload(bridge)
         payload["gui_session"] = session.persistence_status()
+        payload["workspace_identity"] = dict(public_workspace_identity)
         if demo_task() is not None:
             payload["readiness"] = demo_service.readiness()
             payload["demo_overlay_active"] = True
@@ -293,7 +319,12 @@ def make_handler(
         )
         if foreground is None:
             return observed
-        foreground = enrich_managed_task_snapshot(bridge, foreground)
+        # Re-stamp after enrichment so the projection always names the store it
+        # was actually read from, whatever the enrichment step rebuilds.
+        foreground = _with_workspace_scope(
+            enrich_managed_task_snapshot(bridge, foreground),
+            workspace_scope,
+        )
         foreground_metadata = dict(foreground.get("metadata", {}))
         foreground_metadata["foreground_task"] = True
         if not requested_goal_id and _lane_is_idle_for_observed_task(observed):
@@ -320,9 +351,7 @@ def make_handler(
         foreground["metadata"] = foreground_metadata
         return foreground
 
-    def authorized_preview_goal_id(
-        active: EmbeddedExecutionBackend | None, goal_id: str
-    ) -> str:
+    def authorized_preview_goal_id(active: EmbeddedExecutionBackend | None, goal_id: str) -> str:
         """Resolve a historical preview id through this session's own tasks."""
         requested = str(goal_id or "").strip()
         if not requested:
@@ -346,6 +375,65 @@ def make_handler(
             return False
         return readiness.get("can_start") is True
 
+    def integration_current_task(
+        active: EmbeddedExecutionBackend | None,
+    ) -> dict[str, Any]:
+        """Project the same current task through the read-only v1 boundary."""
+
+        if active is not None:
+            return active.status()
+        observed = session.record(status_task(bridge))
+        return public_managed_task(observed)
+
+    def integration_tasks(
+        active: EmbeddedExecutionBackend | None,
+    ) -> dict[str, Any]:
+        if active is not None:
+            return {
+                "api_version": "1",
+                "current": active.status(),
+                "tasks": active.history(),
+                "owner": "agentic-harness",
+            }
+        payload = tasks_payload(bridge)
+        current = public_managed_task(session.record(payload["current"]))
+        tasks = [
+            _with_workspace_scope(
+                enrich_managed_task_snapshot(bridge, task),
+                workspace_scope,
+            )
+            for task in (session.history() or payload["tasks"])
+        ]
+        return {
+            "api_version": "1",
+            "current": current,
+            "tasks": tasks,
+            "owner": "agentic-harness",
+        }
+
+    def integration_task(
+        active: EmbeddedExecutionBackend | None,
+        task_id: str,
+    ) -> dict[str, Any] | None:
+        if active is not None:
+            current = active.status()
+            if str(current.get("id") or "") == task_id:
+                return current
+            return next(
+                (task for task in active.history() if str(task.get("id") or "") == task_id),
+                None,
+            )
+        observed = session.record(status_task(bridge))
+        if str(observed.get("id") or "") == task_id:
+            return public_managed_task(observed, task_id)
+        saved = session.task(task_id)
+        if saved is None:
+            return None
+        return _with_workspace_scope(
+            enrich_managed_task_snapshot(bridge, saved),
+            workspace_scope,
+        )
+
     class GuiHandler(BaseHTTPRequestHandler):
         server_version = "AgenticHarnessGUI/0.1"
         _managed_demo_workspace = managed_demo_workspace
@@ -365,10 +453,22 @@ def make_handler(
                     return
                 self._websocket_status()
                 return
-            if route.startswith("/api/") and not self._allowed(parsed.query):
+            if (route.startswith("/api/") or route.startswith("/v1/")) and not self._allowed(
+                parsed.query
+            ):
                 return
             active = active_embedded_service()
-            if route in {"/api/health", "/api/status"}:
+            if route == "/v1/health":
+                self._json(integration_health_payload())
+            elif route == "/v1/routes":
+                self._json(route_registry_payload())
+            elif route == "/v1/tasks":
+                self._json(integration_tasks(active))
+            elif route == "/v1/tasks/current":
+                self._json(integration_current_task(active))
+            elif route.startswith("/v1/tasks/"):
+                self._integration_task_get(route, parsed, active)
+            elif route in {"/api/health", "/api/status"}:
                 self._json(public_health())
             elif route == "/api/modes":
                 if embedded:
@@ -422,7 +522,10 @@ def make_handler(
                     payload = tasks_payload(bridge)
                     payload["current"] = session.record(payload["current"])
                     payload["tasks"] = [
-                        enrich_managed_task_snapshot(bridge, task)
+                        _with_workspace_scope(
+                            enrich_managed_task_snapshot(bridge, task),
+                            workspace_scope,
+                        )
                         for task in (session.history() or payload["tasks"])
                     ]
                     self._json(payload)
@@ -440,7 +543,10 @@ def make_handler(
                     if active is not None
                     else {
                         "tasks": [
-                            enrich_managed_task_snapshot(bridge, task)
+                            _with_workspace_scope(
+                                enrich_managed_task_snapshot(bridge, task),
+                                workspace_scope,
+                            )
                             for task in session.history(query=query)
                         ]
                     }
@@ -488,11 +594,12 @@ def make_handler(
                         status=HTTPStatus.BAD_REQUEST,
                     )
             elif route == "/api/tasks/current/details":
-                self._json(
-                    {"task": active.status(), "raw": {}}
-                    if active is not None
-                    else details_payload(bridge)
-                )
+                if active is not None:
+                    self._json({"task": active.status(), "raw": {}})
+                else:
+                    details = details_payload(bridge)
+                    details["task"] = _with_workspace_scope(details["task"], workspace_scope)
+                    self._json(details)
             elif route == "/api/session":
                 self._json(
                     {"version": 2, "tasks": active.history()}
@@ -504,7 +611,7 @@ def make_handler(
                 # ``Cache-Control: no-store`` by virtue of living behind the
                 # /api/ guards above and going out through ``_json``.
                 self._json(load_portal_services())
-            elif route.startswith("/api/"):
+            elif route.startswith("/api/") or route.startswith("/v1/"):
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
             else:
                 self._static(route)
@@ -518,7 +625,9 @@ def make_handler(
                 return
             if not self._same_origin():
                 return
-            if route.startswith("/api/") and not self._allowed(parsed.query):
+            if (route.startswith("/api/") or route.startswith("/v1/")) and not self._allowed(
+                parsed.query
+            ):
                 return
             body = self._read_json()
             if body is None:
@@ -557,7 +666,7 @@ def make_handler(
                             return
                     task = session.enrich(start_task(bridge, body), body)
                     session.record(task)
-                    self._json(task)
+                    self._json(_with_workspace_scope(task, workspace_scope))
             elif route == "/api/setup" and embedded:
                 if body.get("api_key") and not self._client_is_loopback():
                     self._json(
@@ -625,7 +734,7 @@ def make_handler(
                         if isinstance(item, dict):
                             task = session.enrich(start_task(bridge, item), item)
                             session.record(task)
-                            tasks.append(task)
+                            tasks.append(_with_workspace_scope(task, workspace_scope))
                     self._json({"tasks": tasks})
             elif route == "/api/tasks/current/watch":
                 if active is not None:
@@ -762,11 +871,7 @@ def make_handler(
                         )
                         delivered = str(task.get("status") or "") != "blocked"
                         advanced = task.get("advanced_details")
-                        payload = (
-                            advanced.get("payload")
-                            if isinstance(advanced, dict)
-                            else None
-                        )
+                        payload = advanced.get("payload") if isinstance(advanced, dict) else None
                         identity_conflict = (
                             isinstance(payload, dict)
                             and payload.get("reason") == "active_run_changed"
@@ -871,6 +976,83 @@ def make_handler(
             else:
                 self._json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
+        def _integration_task_get(
+            self,
+            route: str,
+            parsed: Any,
+            active: EmbeddedExecutionBackend | None,
+        ) -> None:
+            suffix = route.removeprefix("/v1/tasks/").strip("/")
+            parts = suffix.split("/") if suffix else []
+            task_id = parts[0] if parts else ""
+            if not task_id or task_id == "current":
+                self._json(
+                    {"ok": False, "error": "task id required"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            task = integration_task(active, task_id)
+            if task is None:
+                self._json(
+                    {"ok": False, "error": "task not found"},
+                    status=HTTPStatus.NOT_FOUND,
+                )
+                return
+            if len(parts) == 1:
+                self._json({"api_version": "1", "task": task, "owner": "agentic-harness"})
+                return
+            if len(parts) != 2:
+                self._json(
+                    {"ok": False, "error": "not found"},
+                    status=HTTPStatus.NOT_FOUND,
+                )
+                return
+            if parts[1] == "events":
+                after_raw = parse_qs(parsed.query).get("after", ["0"])[0]
+                try:
+                    after = max(0, int(after_raw))
+                except ValueError:
+                    after = 0
+                if active is not None:
+                    current = active.status()
+                    if str(current.get("id") or "") == task_id:
+                        self._json(
+                            {
+                                "api_version": "1",
+                                "task_id": task_id,
+                                "events": active.events(after=after),
+                            }
+                        )
+                        return
+                task_events = task.get("events")
+                events = (
+                    [
+                        event
+                        for event in task_events
+                        if isinstance(event, dict)
+                        and isinstance(event.get("seq"), int)
+                        and int(event["seq"]) > after
+                    ]
+                    if isinstance(task_events, list)
+                    else []
+                )
+                self._json({"api_version": "1", "task_id": task_id, "events": events})
+                return
+            if parts[1] == "artifacts":
+                artifacts = task.get("artifacts")
+                self._json(
+                    {
+                        "api_version": "1",
+                        "task_id": task_id,
+                        "artifacts": artifacts if isinstance(artifacts, list) else [],
+                    }
+                )
+                return
+            self._json(
+                {"ok": False, "error": "not found"},
+                status=HTTPStatus.NOT_FOUND,
+            )
+
         def log_message(self, format: str, *args: object) -> None:
             return
 
@@ -960,10 +1142,7 @@ def make_handler(
         def _managed_identity_conflict(task: dict[str, Any]) -> bool:
             advanced = task.get("advanced_details")
             payload = advanced.get("payload") if isinstance(advanced, dict) else None
-            return (
-                isinstance(payload, dict)
-                and payload.get("reason") == "active_run_changed"
-            )
+            return isinstance(payload, dict) and payload.get("reason") == "active_run_changed"
 
         def _json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
             encoded = redact_secrets(
@@ -1089,9 +1268,7 @@ def make_handler(
                         task = status_task(bridge)
                     if active is None and not embedded:
                         task = public_managed_task(session.record(task))
-                    message = redact_secrets(
-                        json.dumps(redact_json_value(task), sort_keys=True)
-                    )
+                    message = redact_secrets(json.dumps(redact_json_value(task), sort_keys=True))
                     self.wfile.write(_websocket_text_frame(message))
                     self.wfile.flush()
                     time.sleep(2)
@@ -1191,6 +1368,7 @@ _GUI_METADATA_FIELDS = frozenset(
         "start_accepted",
         "supervision",
         "updated_at",
+        "workspace_scope",
     }
 )
 _GUI_SNAPSHOT_FIELDS = frozenset(
@@ -1236,13 +1414,46 @@ class GuiSession:
         self._active_identity = _empty_identity()
         self._active_lineage: list[dict[str, str]] = []
         self._continuation_pending = False
-        self._state_path = Path(state_path).expanduser() if state_path else None
+        self._pending_start: dict[str, Any] | None = None
+        self._state_path = (
+            Path(os.path.abspath(Path(state_path).expanduser())) if state_path else None
+        )
         self._workspace_identity = dict(workspace_identity or {})
+        # The file name remains keyed by the historical workspace recipe, but
+        # the public scope also includes the resolved store path. Two services
+        # therefore cannot advertise one scope while reading different files.
+        self._workspace_scope = _workspace_store_fingerprint(
+            workspace_identity,
+            self._state_path,
+        )
         self._lock = RLock()
         self._last_serialized = ""
         self._persistence_warning = ""
         self._active_durability_warning = ""
+        self._dirty_local_state = False
         self._load()
+
+    @contextmanager
+    def _state_transaction(self) -> Iterator[bool]:
+        """Reload and optionally persist while holding the shared store lock."""
+
+        with self._lock:
+            if self._state_path is None:
+                yield False
+                return
+            state_lock = _locked_session_state(self._state_path)
+            try:
+                state_lock.__enter__()
+            except OSError as exc:
+                self._persistence_warning = f"GUI session persistence is degraded: {exc}"
+                yield False
+                return
+            try:
+                if not self._dirty_local_state:
+                    self._load_locked()
+                yield True
+            finally:
+                state_lock.__exit__(None, None, None)
 
     def enrich(self, task: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -1273,22 +1484,76 @@ class GuiSession:
                 if isinstance(source.get("checks"), list)
                 else []
             )
-            if start_accepted:
-                self._active_objective = objective
-                self._active_metadata = _safe_metadata(metadata)
-                identity = _task_identity(task)
-                self._active_identity = identity
-                self._active_lineage = [identity] if _has_identity(identity) else []
-                if not _has_identity(identity) and self._state_path is not None:
-                    self._active_durability_warning = (
-                        "The task started without a durable run id. Its labels will remain "
-                        "available in this process but cannot be safely restored after a restart."
-                    )
-                    metadata["persistence_warning"] = self._active_durability_warning
-                else:
-                    self._active_durability_warning = ""
+            if (
+                start_accepted
+                and not _has_identity(_task_identity(task))
+                and self._state_path is not None
+            ):
+                metadata["persistence_warning"] = (
+                    "The task started without a durable run id. Its labels will remain "
+                    "available in this process but cannot be safely restored after a restart."
+                )
             task["metadata"] = metadata
+            self._activate_started_task(task)
+            if start_accepted:
+                self._pending_start = {
+                    # Keep the exact object alive until ``record`` consumes it.
+                    # An integer id can be reused after garbage collection and
+                    # must never re-arm labels for a different task.
+                    "task_object": task,
+                    "objective": self._active_objective,
+                    "metadata": dict(self._active_metadata),
+                    "identity": dict(self._active_identity),
+                    "lineage": [dict(item) for item in self._active_lineage],
+                    "durability_warning": self._active_durability_warning,
+                }
             return task
+
+    def _activate_started_task(self, task: dict[str, Any]) -> None:
+        """Bind labels from a trusted accepted-start projection to its run."""
+
+        metadata = task.get("metadata")
+        if not isinstance(metadata, dict) or metadata.get("start_accepted") is not True:
+            return
+        self._active_objective = str(task.get("objective") or "").strip()
+        self._active_metadata = _safe_metadata(metadata)
+        identity = _task_identity(task)
+        self._active_identity = identity
+        self._active_lineage = [identity] if _has_identity(identity) else []
+        self._active_durability_warning = (
+            str(metadata.get("persistence_warning") or "")
+            if not _has_identity(identity) and self._state_path is not None
+            else ""
+        )
+
+    def _restore_pending_start(self, task: dict[str, Any]) -> bool:
+        pending = self._pending_start
+        if pending is None:
+            return False
+        pending_identity = _identity_from_value(pending.get("identity"))
+        task_identity = _task_identity(task)
+        same_task = pending.get("task_object") is task
+        if not same_task and not (
+            _has_identity(pending_identity)
+            and _has_identity(task_identity)
+            and _identities_match(pending_identity, task_identity)
+        ):
+            return False
+        self._active_objective = str(pending.get("objective") or "")
+        self._active_metadata = _safe_metadata(pending.get("metadata"))
+        self._active_identity = pending_identity
+        lineage = pending.get("lineage")
+        self._active_lineage = (
+            [
+                identity
+                for value in lineage
+                if _has_identity(identity := _identity_from_value(value))
+            ]
+            if isinstance(lineage, list)
+            else []
+        )
+        self._active_durability_warning = str(pending.get("durability_warning") or "")
+        return True
 
     def _reconcile_active_objective(self, task: dict[str, Any]) -> dict[str, Any]:
         task = dict(task)
@@ -1318,8 +1583,7 @@ class GuiSession:
                     if lineage_state == "pending":
                         return task
                     parent_is_known = any(
-                        _identities_match(candidate, parent_identity)
-                        for candidate in known_lineage
+                        _identities_match(candidate, parent_identity) for candidate in known_lineage
                     )
                     if lineage_state == "linked" and parent_is_known:
                         self._active_identity = identity
@@ -1336,6 +1600,18 @@ class GuiSession:
             # This binding is permitted only for an identityless start still
             # held in this process. Identityless active state is never loaded
             # from disk, so a restart cannot attach it to unrelated work.
+            observed_objective = " ".join(str(task.get("objective") or "").split())
+            expected_objective = " ".join(self._active_objective.split())
+            objective_matches = observed_objective == expected_objective
+            objective_is_worker_title = expected_objective.startswith(f"{observed_objective} ")
+            if observed_objective and not (objective_matches or objective_is_worker_title):
+                # Real managed status projections echo the active goal's raw
+                # objective, while older workers may echo only a leading title.
+                # Any other positive mismatch means this durable identity belongs
+                # to different work, so fail closed instead of moving labels.
+                self._clear_active()
+                self._pending_start = None
+                return task
             self._active_identity = identity
             self._active_lineage = [identity]
             self._active_durability_warning = ""
@@ -1382,12 +1658,24 @@ class GuiSession:
         self._continuation_pending = False
         self._active_durability_warning = ""
 
+    def _persist_transaction(self, can_persist: bool) -> bool:
+        if self._state_path is None:
+            return True
+        if not can_persist:
+            self._dirty_local_state = True
+            return False
+        return self._save_locked()
+
     def record(self, task: dict[str, Any]) -> dict[str, Any]:
         if not task:
             return task
-        with self._lock:
+        with self._state_transaction() as can_persist:
+            # ``enrich`` and ``record`` are intentionally separate calls. A
+            # sibling process may publish state between them, so restore the
+            # accepted start after the transaction reloads the shared file.
+            restored_pending_start = self._restore_pending_start(task)
             task = self._reconcile_active_objective(task)
-            entry = dict(task)
+            entry = dict(_with_workspace_scope(task, self._workspace_scope))
             identity = _task_identity(entry)
             if not entry.get("id"):
                 entry["id"] = f"task-{self._next_id}"
@@ -1407,12 +1695,17 @@ class GuiSession:
                 ]
             self._history.insert(0, entry)
             self._history = self._history[:MAX_GUI_HISTORY]
-            self._save_locked()
-            return task
+            self._persist_transaction(can_persist)
+            if restored_pending_start:
+                # The handoff is complete even when persistence degraded:
+                # dirty local state now owns the labels, so retaining this
+                # one-call object binding can only make it stale.
+                self._pending_start = None
+            return _with_workspace_scope(task, self._workspace_scope)
 
     def append_user_message(self, task: dict[str, Any], text: str, *, action: str) -> int:
         """Persist a revisioned user amendment bound to the active managed run."""
-        with self._lock:
+        with self._state_transaction() as can_persist:
             task = self._reconcile_active_objective(task)
             identity = _task_identity(task)
             if not _has_identity(identity) or not _identities_match(
@@ -1428,10 +1721,13 @@ class GuiSession:
                     "This run's conversation has reached its 64 KB safety limit. "
                     "Let the task finish, then continue with a concise summary."
                 )
-            revision = max(
-                (int(row.get("revision") or 0) for row in conversation),
-                default=0,
-            ) + 1
+            revision = (
+                max(
+                    (int(row.get("revision") or 0) for row in conversation),
+                    default=0,
+                )
+                + 1
+            )
             conversation.append(
                 {
                     "revision": revision,
@@ -1446,12 +1742,12 @@ class GuiSession:
             self._active_metadata["conversation"] = conversation[-100:]
             if action == "continue":
                 self._continuation_pending = True
-            self._save_locked()
+            self._persist_transaction(can_persist)
             return revision
 
     def expect_continuation(self, task: dict[str, Any]) -> None:
         """Hold GUI ownership across the managed backend's ready-before-start gap."""
-        with self._lock:
+        with self._state_transaction() as can_persist:
             task = self._reconcile_active_objective(task)
             identity = _task_identity(task)
             if not _has_identity(self._active_identity):
@@ -1463,16 +1759,16 @@ class GuiSession:
                     "The active run identity changed; refresh before continuing."
                 )
             self._continuation_pending = True
-            self._save_locked()
+            self._persist_transaction(can_persist)
 
     def cancel_continuation(self) -> None:
-        with self._lock:
+        with self._state_transaction() as can_persist:
             self._continuation_pending = False
-            self._save_locked()
+            self._persist_transaction(can_persist)
 
     def controlling_guidance(self) -> str:
         """Return the complete revision history so a newer nudge cannot erase an older one."""
-        with self._lock:
+        with self._state_transaction():
             messages = self._conversation_locked()
             lines = [
                 "Supervised goal amendments for this exact run. Later revisions control "
@@ -1487,7 +1783,7 @@ class GuiSession:
 
     def continuation_feedback(self, feedback: str) -> str:
         """Carry every GUI revision into an explicit managed continuation."""
-        with self._lock:
+        with self._state_transaction():
             messages = self._conversation_locked()
             if not messages:
                 return feedback
@@ -1505,7 +1801,7 @@ class GuiSession:
             return "\n\n".join(lines)
 
     def mark_message_delivery(self, revision: int, delivery: str) -> None:
-        with self._lock:
+        with self._state_transaction() as can_persist:
             conversation = self._conversation_locked()
             for row in conversation:
                 if int(row.get("revision") or 0) == revision:
@@ -1514,7 +1810,7 @@ class GuiSession:
             self._active_metadata["conversation"] = conversation
             if delivery == "failed":
                 self._continuation_pending = False
-            self._save_locked()
+            self._persist_transaction(can_persist)
 
     def _conversation_locked(self) -> list[dict[str, Any]]:
         value = self._active_metadata.get("conversation")
@@ -1523,8 +1819,8 @@ class GuiSession:
         return [dict(row) for row in value if isinstance(row, dict)]
 
     def history(self, *, query: str = "") -> list[dict[str, Any]]:
-        with self._lock:
-            tasks = list(self._history)
+        with self._state_transaction():
+            tasks = [_with_workspace_scope(task, self._workspace_scope) for task in self._history]
         needle = query.strip().lower()
         if needle:
             tasks = [task for task in tasks if needle in json.dumps(task, sort_keys=True).lower()]
@@ -1536,23 +1832,23 @@ class GuiSession:
         requested = str(task_id or "").strip()
         if not requested:
             return None
-        with self._lock:
+        with self._state_transaction():
             for task in self._history:
                 if str(task.get("id") or "").strip() == requested:
-                    return dict(task)
+                    return dict(_with_workspace_scope(task, self._workspace_scope))
         return None
 
     def latest_foreground_task(self) -> dict[str, Any] | None:
         """Return the newest real GUI request, excluding harness qualification work."""
 
-        with self._lock:
+        with self._state_transaction():
             for task in self._history:
                 metadata = task.get("metadata")
                 if not isinstance(metadata, dict) or metadata.get("start_accepted") is not True:
                     continue
                 if _is_internal_qualification_task(task):
                     continue
-                return dict(task)
+                return dict(_with_workspace_scope(task, self._workspace_scope))
         return None
 
     def export(self) -> dict[str, Any]:
@@ -1566,7 +1862,7 @@ class GuiSession:
         tasks = payload.get("tasks", [])
         if not isinstance(tasks, list):
             return
-        with self._lock:
+        with self._state_transaction() as can_persist:
             imported: list[dict[str, Any]] = []
             for task in tasks:
                 if not isinstance(task, dict):
@@ -1577,7 +1873,7 @@ class GuiSession:
                 imported.append(safe)
             self._history = imported[:MAX_GUI_HISTORY]
             self._next_id = len(self._history) + 1
-            self._save_locked()
+            self._persist_transaction(can_persist)
 
     def persistence_status(self) -> dict[str, Any]:
         if self._state_path is None:
@@ -1645,16 +1941,45 @@ class GuiSession:
         }
 
     def _load(self) -> None:
+        with self._state_transaction():
+            return
+
+    def _load_locked(self) -> None:
         if self._state_path is None:
             return
+        # Identityless accepted starts are intentionally process-local: they
+        # may bind to the durable id that a later status poll supplies, but
+        # must never be restored after a service restart. Preserve that local
+        # state across this process's shared-store reload only.
+        identityless_active = (
+            {
+                "objective": self._active_objective,
+                "metadata": dict(self._active_metadata),
+                "lineage": [dict(item) for item in self._active_lineage],
+                "continuation_pending": self._continuation_pending,
+                "durability_warning": self._active_durability_warning,
+            }
+            if self._active_durability_warning and not _has_identity(self._active_identity)
+            else None
+        )
         try:
             raw = _read_session_state(self._state_path)
             if raw is None:
+                self._history = []
+                self._next_id = 1
+                self._clear_active()
+                self._restore_identityless_active(identityless_active)
+                self._last_serialized = ""
+                self._persistence_warning = ""
+                self._dirty_local_state = False
                 return
             payload = json.loads(raw)
             if not isinstance(payload, dict) or payload.get("contract") != GUI_SESSION_CONTRACT:
                 raise ValueError("GUI session state has an unsupported contract")
-            if self._workspace_identity and payload.get("workspace_identity") != self._workspace_identity:
+            if (
+                self._workspace_identity
+                and payload.get("workspace_identity") != self._workspace_identity
+            ):
                 raise ValueError("GUI session workspace identity does not match this service")
             records = payload.get("records")
             if not isinstance(records, list):
@@ -1669,6 +1994,7 @@ class GuiSession:
             self._persistence_warning = f"GUI session state was not loaded: {exc}"
             return
         self._history = []
+        self._clear_active()
         normalized_records: list[dict[str, Any]] = []
         for record in records[:MAX_GUI_HISTORY]:
             if not isinstance(record, dict):
@@ -1705,18 +2031,38 @@ class GuiSession:
                     self._active_lineage = loaded_lineage or [active_identity]
                     self._active_objective = str(record.get("objective") or "")
                     self._active_metadata = _safe_metadata(record.get("metadata"))
-                    self._continuation_pending = bool(
-                        payload.get("continuation_pending")
-                    )
+                    self._continuation_pending = bool(payload.get("continuation_pending"))
                     break
+        if not _has_identity(self._active_identity):
+            self._restore_identityless_active(identityless_active)
         self._next_id = len(self._history) + 1
-        self._last_serialized = json.dumps(
-            self._state_payload(), sort_keys=True, separators=(",", ":")
-        )
+        self._last_serialized = _redacted_json(self._state_payload())
+        self._persistence_warning = ""
+        self._dirty_local_state = False
 
-    def _save_locked(self) -> None:
-        if self._state_path is None:
+    def _restore_identityless_active(self, active: dict[str, Any] | None) -> None:
+        """Restore only this process's unbound accepted-start labels."""
+
+        if active is None:
             return
+        self._active_objective = str(active.get("objective") or "")
+        self._active_metadata = _safe_metadata(active.get("metadata"))
+        lineage = active.get("lineage")
+        self._active_lineage = (
+            [
+                identity
+                for value in lineage
+                if _has_identity(identity := _identity_from_value(value))
+            ]
+            if isinstance(lineage, list)
+            else []
+        )
+        self._continuation_pending = bool(active.get("continuation_pending"))
+        self._active_durability_warning = str(active.get("durability_warning") or "")
+
+    def _save_locked(self) -> bool:
+        if self._state_path is None:
+            return False
         payload = self._state_payload()
         serialized = _redacted_json(payload)
         while (
@@ -1729,16 +2075,21 @@ class GuiSession:
                 "GUI session persistence is degraded: the active snapshot exceeds the "
                 "session size limit."
             )
-            return
+            self._dirty_local_state = True
+            return False
         if serialized == self._last_serialized:
-            return
+            self._dirty_local_state = False
+            return True
         try:
             _write_session_state(self._state_path, serialized)
         except OSError as exc:
             self._persistence_warning = f"GUI session persistence is degraded: {exc}"
-            return
+            self._dirty_local_state = True
+            return False
         self._persistence_warning = ""
         self._last_serialized = serialized
+        self._dirty_local_state = False
+        return True
 
 
 def _managed_workspace_identity(
@@ -1760,6 +2111,111 @@ def _managed_workspace_identity(
     return identity
 
 
+def _identity_digest(key_material: str) -> str:
+    """Return the one short opaque digest this module keys state with."""
+
+    return hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
+
+
+def _workspace_fingerprint(identity: dict[str, str] | None) -> str:
+    """Digest the stable identity material that keys the managed session file.
+
+    This recipe intentionally remains stable so existing session files keep
+    their names when the public store fingerprint gains more identity material.
+    """
+
+    if not identity:
+        return ""
+    return _identity_digest(json.dumps(identity, sort_keys=True, separators=(",", ":")))
+
+
+def _workspace_store_fingerprint(
+    identity: dict[str, str] | None,
+    state_path: str | Path | None,
+) -> str:
+    """Digest the private identity and the exact resolved saved-task store."""
+
+    if not identity or state_path is None:
+        return ""
+    store_path = str(Path(os.path.abspath(Path(state_path).expanduser())))
+    return _identity_digest(
+        json.dumps(
+            {"workspace_identity": identity, "store_path": store_path},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
+def workspace_identity_payload(
+    identity: dict[str, str] | None,
+    *,
+    state_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Say which work area a managed page runs in and where it saves tasks.
+
+    Two managed services can share one execution work area while keeping
+    separate saved-task stores, because the store is keyed by project dir. That
+    split is otherwise invisible: both pages label themselves with the work
+    area. This makes it a stated fact with a comparable fingerprint.
+
+    ``os_user`` and the backend executable path stay fingerprint material only.
+    They describe the operator and the machine layout, not the work area, so
+    they are never published here. A persistence-disabled page has no store to
+    compare and therefore publishes an empty fingerprint.
+    """
+
+    if not identity:
+        return {}
+    fingerprint = _workspace_store_fingerprint(identity, state_path)
+    work_area = str(identity.get("doc_root") or "")
+    # No recorded project dir means no separate store exists to diverge from.
+    state_scope = str(identity.get("project_dir") or work_area)
+    split = bool(work_area) and bool(state_scope) and state_scope != work_area
+    return {
+        "contract": WORKSPACE_IDENTITY_CONTRACT,
+        "label": Path(work_area).name or work_area,
+        "work_area": work_area,
+        "state_scope": state_scope,
+        "fingerprint": fingerprint,
+        "split": split,
+        "summary": (
+            "Saved task history on this page is associated with a different project "
+            "folder from the work area shown above, so another page can show different work "
+            "for the same work area."
+            if split
+            else "Saved task history on this page uses the same project scope as the work area shown above."
+        ),
+        "operator_action": (
+            "Compare this fingerprint on every page that shows this work area. "
+            "To give them one shared saved-task history, run each service under "
+            "the same account and managed backend with the same --project-dir "
+            "and --doc-root, and point both at the same GUI session path or "
+            "XDG state home."
+            if split
+            else ""
+        ),
+    }
+
+
+def _with_workspace_scope(task: dict[str, Any], fingerprint: str) -> dict[str, Any]:
+    """Attribute one public task projection to the saved-task store it came from.
+
+    Status, readiness, and allowed actions are untouched; this only records
+    which store answered, so two pages claiming one work area can be compared.
+    """
+
+    if not fingerprint or not isinstance(task, dict) or not task:
+        return task
+    scoped = dict(task)
+    metadata = scoped.get("metadata")
+    scoped["metadata"] = {
+        **(metadata if isinstance(metadata, dict) else {}),
+        "workspace_scope": fingerprint,
+    }
+    return scoped
+
+
 def _managed_session_path(
     project_dir: str | Path | None,
     *,
@@ -1774,21 +2230,122 @@ def _managed_session_path(
     if project_dir is None:
         return None
     state_home = os.environ.get("XDG_STATE_HOME", "").strip()
-    state_root = (
-        Path(state_home).expanduser()
-        if state_home
-        else Path.home() / ".local" / "state"
+    state_root = Path(state_home).expanduser() if state_home else Path.home() / ".local" / "state"
+    project_key = (
+        _workspace_fingerprint(workspace_identity)
+        if workspace_identity
+        else _identity_digest(str(Path(project_dir).expanduser().resolve()))
     )
-    if workspace_identity:
-        key_material = json.dumps(
-            workspace_identity,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-    else:
-        key_material = str(Path(project_dir).expanduser().resolve())
-    project_key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
     return state_root / "agentic-harness" / "gui-sessions" / f"{project_key}.json"
+
+
+@contextmanager
+def _locked_session_state(path: Path) -> Iterator[None]:
+    """Serialize one session file's read-modify-write cycle across processes."""
+
+    parent = path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    parent_before = os.lstat(parent)
+    if _path_is_link_like(parent, parent_before) or not stat.S_ISDIR(parent_before.st_mode):
+        raise OSError("GUI session state parent is not a regular directory")
+
+    lock_path = parent / f".{path.name}.lock"
+    try:
+        lock_before = os.lstat(lock_path)
+    except FileNotFoundError:
+        lock_before = None
+    if lock_before is not None and (
+        _path_is_link_like(lock_path, lock_before) or not stat.S_ISREG(lock_before.st_mode)
+    ):
+        raise OSError("GUI session lock is not a regular file")
+
+    descriptor = -1
+    handle: BinaryIO | None = None
+    acquired = False
+    try:
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(lock_path, flags, 0o600)
+        opened = os.fstat(descriptor)
+        linked = os.lstat(lock_path)
+        parent_after_open = os.lstat(parent)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or int(getattr(opened, "st_nlink", 1)) != 1
+            or (opened.st_dev, opened.st_ino) != (linked.st_dev, linked.st_ino)
+        ):
+            raise OSError("GUI session lock changed while it was being opened")
+        if (parent_before.st_dev, parent_before.st_ino) != (
+            parent_after_open.st_dev,
+            parent_after_open.st_ino,
+        ) or _path_is_link_like(parent, parent_after_open):
+            raise OSError("GUI session state directory changed while locking")
+        if os.name == "posix":
+            os.fchmod(descriptor, 0o600)
+        handle = cast(BinaryIO, os.fdopen(descriptor, "r+b", buffering=0))
+        descriptor = -1
+        _lock_session_handle(handle)
+        acquired = True
+        yield
+    finally:
+        if acquired and handle is not None:
+            _unlock_session_handle(handle)
+        if handle is not None:
+            handle.close()
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _lock_session_handle(handle: BinaryIO) -> None:
+    if fcntl is not None:
+        _acquire_session_lock_with_timeout(
+            lambda: fcntl.flock(
+                handle.fileno(),
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+            )
+        )
+        return
+    if msvcrt is not None:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        _acquire_session_lock_with_timeout(
+            lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        )
+        return
+    raise OSError("GUI session locking is unsupported on this platform")
+
+
+def _acquire_session_lock_with_timeout(acquire: Callable[[], None]) -> None:
+    """Bound contention so a wedged sibling cannot stall every GUI endpoint."""
+
+    deadline = time.monotonic() + GUI_SESSION_LOCK_TIMEOUT_SECONDS
+    busy_errors = {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}
+    while True:
+        try:
+            acquire()
+            return
+        except OSError as exc:
+            if exc.errno == errno.EINTR:
+                continue
+            if exc.errno not in busy_errors:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise OSError("timed out waiting for the GUI session lock") from exc
+            time.sleep(min(GUI_SESSION_LOCK_RETRY_SECONDS, remaining))
+
+
+def _unlock_session_handle(handle: BinaryIO) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is not None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    raise OSError("GUI session unlocking is unsupported on this platform")
 
 
 def _read_session_state(path: Path) -> str | None:
@@ -2131,9 +2688,7 @@ def _continuation_parent_identity(identity: dict[str, str]) -> tuple[str, dict[s
             return "unlinked", _empty_identity()
         descriptor = os.open(
             ticket,
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0),
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
         )
         observed = os.fstat(descriptor)
         if (ticket_stat.st_dev, ticket_stat.st_ino) != (observed.st_dev, observed.st_ino):
@@ -2190,7 +2745,9 @@ def _is_internal_qualification_task(task: dict[str, Any]) -> bool:
         "reports/gui-conversation-lineage-canary",
         "reports/gui-supervised-opencode-message-canary",
     )
-    return all(any(area.startswith(prefix) for prefix in qualification_scopes) for area in normalized)
+    return all(
+        any(area.startswith(prefix) for prefix in qualification_scopes) for area in normalized
+    )
 
 
 def _task_identity(task: dict[str, Any]) -> dict[str, str]:
@@ -2205,15 +2762,9 @@ def _task_identity(task: dict[str, Any]) -> dict[str, str]:
         if not run_dir:
             run_dir = str(source.get("run_dir") or "").strip().rstrip("/")
         if not queue_id:
-            queue_id = str(
-                source.get("queue_id") or source.get("queued_id") or ""
-            ).strip()
+            queue_id = str(source.get("queue_id") or source.get("queued_id") or "").strip()
         if not run_id:
-            run_id = str(
-                source.get("run_id")
-                or source.get("id")
-                or ""
-            ).strip()
+            run_id = str(source.get("run_id") or source.get("id") or "").strip()
 
     task_id = str(task.get("id") or "").strip()
     if task_id and not task_id.startswith("task-"):
@@ -2347,6 +2898,30 @@ def _print_non_loopback_warning() -> None:
         "machines that can reach this host. Set AGENTIC_HARNESS_GUI_TOKEN before "
         "launch when binding beyond 127.0.0.1, and keep a firewall or private "
         "network as the primary access boundary."
+    )
+
+
+def _print_split_workspace_warning(
+    *,
+    doc_root: str | Path,
+    project_dir: str | Path,
+) -> None:
+    """Name a managed saved-task store that does not match its work area.
+
+    Two managed services can share one work area and still keep separate saved
+    tasks, which makes them disagree about the same work. Say so at launch
+    instead of leaving the operator to infer it from two conflicting pages.
+    """
+
+    work_area = Path(doc_root).expanduser().resolve()
+    state_scope = Path(project_dir).expanduser().resolve()
+    if work_area == state_scope:
+        return
+    print(
+        "NOTE: this managed service runs in --doc-root but saves its GUI task "
+        "history under a different --project-dir, so another service sharing "
+        "the same work area can show different current work. Pass the same "
+        "path to both flags to keep one shared history."
     )
 
 

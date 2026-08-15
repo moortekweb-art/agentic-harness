@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
+import time
 import urllib.request
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
@@ -24,7 +26,10 @@ from agentic_harness.gui.server import (
     GuiSession,
     _managed_session_path,
     _managed_workspace_identity,
+    _workspace_fingerprint,
+    _workspace_store_fingerprint,
     make_handler,
+    workspace_identity_payload,
 )
 
 
@@ -838,10 +843,7 @@ class TicketBoundRaceBridge(LocalGoalBridge):
         (run / "ticket.json").write_text(
             json.dumps(
                 {
-                    "title": (
-                        "Agentic Harness GUI request "
-                        f"{request_binding['request_id'][:24]}"
-                    ),
+                    "title": (f"Agentic Harness GUI request {request_binding['request_id'][:24]}"),
                     "done_criteria": ["Managed task request"],
                     "source_goal": (
                         "Managed task request\n\n"
@@ -1150,8 +1152,7 @@ def test_standard_effort_defaults_to_mode1_instead_of_silently_selecting_mode2()
     assert bridge.starts[0].get("mode_key") != "mode2"
     managed_objective = str(bridge.starts[0]["objective"])
     assert managed_objective.startswith(
-        "Use the normal managed route with a balanced effort budget\n\n"
-        "Managed task request"
+        "Use the normal managed route with a balanced effort budget\n\nManaged task request"
     )
     assert "Execution effort: standard" in managed_objective
 
@@ -1458,11 +1459,14 @@ def test_managed_conversation_follows_explicit_continuation_lineage_across_resta
 
     assert continued["objective"] == "Complete the supervised task"
     assert continued["metadata"]["conversation"][0]["text"] == "Use the GUI value."
-    assert session.append_user_message(
-        continued,
-        "Add the evidence path.",
-        action="continue",
-    ) == 2
+    assert (
+        session.append_user_message(
+            continued,
+            "Add the evidence path.",
+            action="continue",
+        )
+        == 2
+    )
 
     restarted = GuiSession(state_path)
     refreshed = restarted.record(continued_task)
@@ -1578,6 +1582,7 @@ def test_managed_conversation_waits_for_continuation_ticket_startup_race(
 
     assert linked["objective"] == "Owned task"
     assert linked["metadata"]["conversation"][0]["text"] == "Keep this guidance."
+
 
 def test_managed_conversation_survives_ready_gap_before_continuation(
     tmp_path: Path,
@@ -1713,11 +1718,7 @@ def test_managed_conversation_follows_parallel_sibling_continuation_after_restar
             "id": run.name,
             "status": "working",
             "metadata": {},
-            "advanced_details": {
-                "payload": {
-                    "active_goal": {"id": run.name, "run_dir": str(run)}
-                }
-            },
+            "advanced_details": {"payload": {"active_goal": {"id": run.name, "run_dir": str(run)}}},
         }
 
     for run in (first_continuation, sibling_continuation):
@@ -1885,9 +1886,9 @@ def test_managed_session_identity_separates_projects_on_one_controller(
 
     assert identity_a["project_dir"] == str(project_a.resolve())
     assert identity_b["project_dir"] == str(project_b.resolve())
-    assert _managed_session_path(
-        project_a, workspace_identity=identity_a
-    ) != _managed_session_path(project_b, workspace_identity=identity_b)
+    assert _managed_session_path(project_a, workspace_identity=identity_a) != _managed_session_path(
+        project_b, workspace_identity=identity_b
+    )
 
 
 def test_managed_session_rejects_persisted_workspace_identity_mismatch(
@@ -1923,6 +1924,266 @@ def test_managed_session_rejects_persisted_workspace_identity_mismatch(
     assert second.history() == []
     assert second.persistence_status()["status"] == "degraded"
     assert "workspace identity" in second.persistence_status()["warning"]
+
+
+# A value that cannot collide with any key or sentence in the payload, so a
+# leak assertion fails only on a real leak.
+IDENTITY_OS_USER = "os-user-4f1c9d"
+
+
+def _identity(doc_root: Path, executable: Path, project_dir: Path) -> dict[str, str]:
+    return {
+        "doc_root": str(doc_root.resolve()),
+        "local_goal": str(executable.resolve()),
+        "os_user": IDENTITY_OS_USER,
+        "project_dir": str(project_dir.resolve()),
+    }
+
+
+def test_workspace_fingerprint_is_the_session_file_key(tmp_path: Path) -> None:
+    """The stable filename recipe keeps existing saved sessions discoverable."""
+
+    docs = tmp_path / "docs"
+    project = tmp_path / "project"
+    docs.mkdir()
+    project.mkdir()
+    identity = _identity(docs, tmp_path / "local-goal", project)
+
+    fingerprint = _workspace_fingerprint(identity)
+    state_path = _managed_session_path(project, workspace_identity=identity)
+
+    assert state_path is not None
+    assert state_path.stem == fingerprint
+    assert len(fingerprint) == 24
+    assert workspace_identity_payload(
+        identity,
+        state_path=state_path,
+    )["fingerprint"] == _workspace_store_fingerprint(identity, state_path)
+
+
+def test_public_workspace_fingerprint_includes_the_resolved_session_path(
+    tmp_path: Path,
+) -> None:
+    docs = tmp_path / "docs"
+    project = tmp_path / "project"
+    docs.mkdir()
+    project.mkdir()
+    identity = _identity(docs, tmp_path / "local-goal", project)
+    first_path = tmp_path / "state-a" / "session.json"
+    second_path = tmp_path / "state-b" / "session.json"
+
+    first = workspace_identity_payload(identity, state_path=first_path)
+    second = workspace_identity_payload(identity, state_path=second_path)
+    unpersisted = workspace_identity_payload(identity, state_path=None)
+
+    assert first["fingerprint"] != second["fingerprint"]
+    assert unpersisted["fingerprint"] == ""
+    assert first["fingerprint"] == _workspace_store_fingerprint(identity, first_path)
+    assert second["fingerprint"] == _workspace_store_fingerprint(identity, second_path)
+
+
+def test_workspace_identity_reports_a_split_saved_task_store(tmp_path: Path) -> None:
+    """Same work area, different saved-task scope: two stores, stated as two."""
+
+    docs = tmp_path / "docs"
+    canary = tmp_path / "canary"
+    docs.mkdir()
+    canary.mkdir()
+    executable = tmp_path / "local-goal"
+
+    split = workspace_identity_payload(
+        _identity(docs, executable, canary),
+        state_path=canary / "session.json",
+    )
+    aligned = workspace_identity_payload(
+        _identity(docs, executable, docs),
+        state_path=docs / "session.json",
+    )
+
+    assert split["split"] is True
+    assert split["work_area"] == str(docs.resolve())
+    assert split["state_scope"] == str(canary.resolve())
+    assert split["operator_action"]
+
+    assert aligned["split"] is False
+    assert aligned["state_scope"] == aligned["work_area"]
+    assert aligned["operator_action"] == ""
+
+    # The work area is identical, so only the fingerprint distinguishes them.
+    assert split["work_area"] == aligned["work_area"]
+    assert split["fingerprint"] != aligned["fingerprint"]
+
+
+def test_workspace_identity_omits_operator_and_backend_identity(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    executable = tmp_path / "secret-backend-name"
+    docs.mkdir()
+    identity = _identity(docs, executable, docs)
+
+    payload = workspace_identity_payload(
+        identity,
+        state_path=tmp_path / "session.json",
+    )
+
+    assert "os_user" not in payload
+    assert "local_goal" not in payload
+    serialized = json.dumps(payload)
+    assert IDENTITY_OS_USER not in serialized
+    assert str(executable.resolve()) not in serialized
+    # Both stay fingerprint material, so a changed operator changes the digest.
+    assert _workspace_fingerprint(identity) != _workspace_fingerprint(
+        {**identity, "os_user": "someone-else"}
+    )
+
+
+def test_workspace_identity_without_a_project_dir_claims_no_split(
+    tmp_path: Path,
+) -> None:
+    """No configured project dir means no separate store exists to diverge from."""
+
+    executable = tmp_path / "local-goal"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    bridge = LocalGoalBridge(doc_root=docs, local_goal=executable)
+
+    payload = workspace_identity_payload(_managed_workspace_identity(bridge))
+
+    assert payload["split"] is False
+    assert payload["state_scope"] == payload["work_area"] == str(docs.resolve())
+    assert payload["fingerprint"] == ""
+    assert workspace_identity_payload(None) == {}
+
+
+def test_managed_session_stamps_every_projection_with_its_own_store(
+    tmp_path: Path,
+) -> None:
+    """Recorded, replayed, and pinned tasks all name the store that answered."""
+
+    docs = tmp_path / "docs"
+    canary = tmp_path / "canary"
+    docs.mkdir()
+    canary.mkdir()
+    identity = _identity(docs, tmp_path / "local-goal", canary)
+    state_path = tmp_path / "gui-session.json"
+    session = GuiSession(state_path, workspace_identity=identity)
+    fingerprint = _workspace_store_fingerprint(identity, state_path)
+
+    recorded = session.record(
+        {
+            "id": "run-a",
+            "status": "needs_review",
+            "objective": "A managed result",
+            "metadata": {"start_accepted": True},
+        }
+    )
+
+    assert recorded["metadata"]["workspace_scope"] == fingerprint
+    assert session.history()[0]["metadata"]["workspace_scope"] == fingerprint
+    assert session.task("run-a")["metadata"]["workspace_scope"] == fingerprint
+    assert session.latest_foreground_task()["metadata"]["workspace_scope"] == fingerprint
+    # Pre-existing metadata survives the stamp.
+    assert recorded["metadata"]["start_accepted"] is True
+
+    # The stamp must survive the persistence allowlist, so a restarted service
+    # still attributes its replayed history to the store it came from.
+    restarted = GuiSession(state_path, workspace_identity=identity)
+    assert restarted.history()[0]["metadata"]["workspace_scope"] == fingerprint
+
+
+def test_shared_session_store_reloads_before_writing_without_losing_labels(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    identity = {
+        "doc_root": str(tmp_path),
+        "local_goal": str(tmp_path / "local-goal"),
+        "os_user": IDENTITY_OS_USER,
+        "project_dir": str(tmp_path),
+    }
+    first = GuiSession(state_path, workspace_identity=identity)
+    second = GuiSession(state_path, workspace_identity=identity)
+
+    first.record(
+        {
+            "id": "run-a",
+            "status": "done",
+            "objective": "First task",
+            "metadata": {},
+        }
+    )
+    assert [task["id"] for task in second.history()] == ["run-a"]
+
+    started = second.enrich(
+        {
+            "id": "run-b",
+            "status": "starting",
+            "summary": "starting",
+            "metadata": {},
+        },
+        {
+            "objective": "Second task",
+            "route": "mode1",
+            "effort": "thorough",
+        },
+    )
+    recorded = second.record(started)
+
+    assert recorded["objective"] == "Second task"
+    assert recorded["metadata"]["route_key"] == "mode1"
+    assert recorded["metadata"]["effort"] == "thorough"
+    assert [task["id"] for task in first.history()] == ["run-b", "run-a"]
+    assert [
+        task["id"] for task in GuiSession(state_path, workspace_identity=identity).history()
+    ] == ["run-b", "run-a"]
+
+
+def test_shared_session_store_serializes_simultaneous_writers(tmp_path: Path) -> None:
+    state_path = tmp_path / "gui-session.json"
+    first = GuiSession(state_path)
+    second = GuiSession(state_path)
+    barrier = threading.Barrier(3)
+    errors: list[BaseException] = []
+
+    def write(session: GuiSession, run_id: str) -> None:
+        try:
+            barrier.wait(timeout=5)
+            session.record(
+                {
+                    "id": run_id,
+                    "status": "done",
+                    "objective": run_id,
+                    "metadata": {},
+                }
+            )
+        except BaseException as exc:  # pragma: no cover - assertion reports the thread error
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=write, args=(first, "run-a")),
+        threading.Thread(target=write, args=(second, "run-b")),
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not errors
+    assert all(not thread.is_alive() for thread in threads)
+    assert {task["id"] for task in GuiSession(state_path).history()} == {"run-a", "run-b"}
+
+
+def test_unscoped_session_leaves_tasks_untouched() -> None:
+    """A session with no workspace identity keeps its existing projection shape."""
+
+    session = GuiSession()
+
+    recorded = session.record({"id": "run-a", "status": "ready", "metadata": {}})
+
+    assert "workspace_scope" not in recorded["metadata"]
+    assert "workspace_scope" not in session.history()[0]["metadata"]
 
 
 def test_model_profile_attachment_without_run_identity_fails_closed() -> None:
@@ -2008,6 +2269,125 @@ def test_identityless_start_is_not_rebound_after_restart(tmp_path: Path) -> None
     )
 
     assert unrelated["objective"] == "External task"
+    assert "route_key" not in unrelated["metadata"]
+
+
+def test_identityless_start_keeps_labels_until_matching_durable_objective(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "gui-session.json"
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {"status": "starting", "summary": "starting", "metadata": {}},
+        {
+            "objective": "Identityless task",
+            "route": "mode1",
+            "effort": "standard",
+        },
+    )
+    session.record(started)
+
+    identityless_poll = session.record({"status": "working", "summary": "working", "metadata": {}})
+    matching_durable_poll = session.record(
+        {
+            "id": "late-run",
+            "status": "working",
+            "objective": "Identityless task",
+            "summary": "working",
+            "metadata": {},
+        }
+    )
+
+    assert identityless_poll["objective"] == "Identityless task"
+    assert identityless_poll["metadata"]["route_key"] == "mode1"
+    assert matching_durable_poll["objective"] == "Identityless task"
+    assert matching_durable_poll["metadata"]["route_key"] == "mode1"
+    assert session.persistence_status()["status"] == "ready"
+
+
+def test_identityless_start_does_not_bind_a_different_durable_objective(
+    tmp_path: Path,
+) -> None:
+    session = GuiSession(tmp_path / "gui-session.json")
+    started = session.enrich(
+        {"status": "starting", "summary": "starting", "metadata": {}},
+        {"objective": "Original task", "route": "mode1"},
+    )
+    session.record(started)
+
+    unrelated = session.record(
+        {
+            "id": "unrelated-run",
+            "status": "working",
+            "objective": "Different task",
+            "summary": "working",
+            "metadata": {},
+        }
+    )
+
+    assert unrelated["objective"] == "Different task"
+    assert "route_key" not in unrelated["metadata"]
+
+
+def test_identityless_start_can_bind_an_abbreviated_worker_title(tmp_path: Path) -> None:
+    session = GuiSession(tmp_path / "gui-session.json")
+    started = session.enrich(
+        {"status": "starting", "summary": "starting", "metadata": {}},
+        {
+            "objective": "Repair the shared GUI state without losing existing history",
+            "route": "mode1",
+        },
+    )
+    session.record(started)
+
+    abbreviated = session.record(
+        {
+            "id": "late-run",
+            "status": "working",
+            "objective": "Repair the shared GUI state",
+            "summary": "working",
+            "metadata": {},
+        }
+    )
+
+    assert abbreviated["objective"] == (
+        "Repair the shared GUI state without losing existing history"
+    )
+    assert abbreviated["metadata"]["route_key"] == "mode1"
+
+
+def test_pending_start_handoff_uses_one_exact_object_and_is_consumed(
+    tmp_path: Path,
+) -> None:
+    if os.name != "posix":
+        return
+    state_path = tmp_path / "gui-session.json"
+    target = tmp_path / "lock-target"
+    target.write_text("sentinel", encoding="utf-8")
+    (tmp_path / ".gui-session.json.lock").symlink_to(target)
+    session = GuiSession(state_path)
+    started = session.enrich(
+        {"status": "starting", "summary": "starting", "metadata": {}},
+        {"objective": "Original task", "route": "mode1"},
+    )
+
+    assert session._pending_start is not None
+    assert session._pending_start["task_object"] is started
+
+    session.record(started)
+
+    assert session._pending_start is None
+    session.record({"status": "ready", "summary": "ready", "metadata": {}})
+    unrelated = session.record(
+        {
+            "id": "unrelated-run",
+            "status": "working",
+            "objective": "Different task",
+            "summary": "working",
+            "metadata": {},
+        }
+    )
+    assert unrelated["objective"] == "Different task"
     assert "route_key" not in unrelated["metadata"]
 
 
@@ -2169,6 +2549,8 @@ def test_oversized_single_snapshot_fails_closed_instead_of_writing_unloadable_st
     assert not state_path.exists()
     assert session.persistence_status()["status"] == "degraded"
     assert "size limit" in session.persistence_status()["warning"]
+    assert session.history()[0]["id"] == "large-run"
+    assert session.persistence_status()["status"] == "degraded"
 
 
 def test_same_summary_distinct_runs_remain_in_durable_history(tmp_path: Path) -> None:
@@ -2253,6 +2635,96 @@ def test_session_symlink_and_write_failures_are_nonfatal(tmp_path: Path) -> None
 
     assert returned["status"] == "starting"
     assert unwritable.persistence_status()["status"] == "degraded"
+
+
+def test_session_lock_rejects_linked_files_without_touching_the_target(
+    tmp_path: Path,
+) -> None:
+    if os.name != "posix":
+        return
+    state_path = tmp_path / "gui-session.json"
+    lock_path = tmp_path / ".gui-session.json.lock"
+    target = tmp_path / "lock-target"
+    target.write_text("sentinel", encoding="utf-8")
+    original_mode = target.stat().st_mode
+    lock_path.symlink_to(target)
+
+    session = GuiSession(state_path)
+    returned = session.record({"id": "run-a", "status": "working", "metadata": {}})
+
+    assert returned["status"] == "working"
+    assert target.read_text(encoding="utf-8") == "sentinel"
+    assert target.stat().st_mode == original_mode
+    assert not state_path.exists()
+    assert session.persistence_status()["status"] == "degraded"
+
+
+def test_session_lock_rejects_hard_links_without_changing_permissions(
+    tmp_path: Path,
+) -> None:
+    if os.name != "posix":
+        return
+    state_path = tmp_path / "gui-session.json"
+    lock_path = tmp_path / ".gui-session.json.lock"
+    target = tmp_path / "lock-target"
+    target.write_text("sentinel", encoding="utf-8")
+    os.chmod(target, 0o640)
+    os.link(target, lock_path)
+
+    session = GuiSession(state_path)
+    session.record({"id": "run-a", "status": "working", "metadata": {}})
+
+    assert target.read_text(encoding="utf-8") == "sentinel"
+    assert target.stat().st_mode & 0o777 == 0o640
+    assert not state_path.exists()
+    assert session.persistence_status()["status"] == "degraded"
+
+
+def test_session_lock_contention_times_out_without_stalling(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    if gui_server.fcntl is None:
+        pytest.skip("fcntl is required for the cross-process lock contention test")
+    state_path = tmp_path / "gui-session.json"
+    lock_path = tmp_path / ".gui-session.json.lock"
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl, sys, time\n"
+                "handle = open(sys.argv[1], 'a+b')\n"
+                "fcntl.flock(handle.fileno(), fcntl.LOCK_EX)\n"
+                "print('locked', flush=True)\n"
+                "time.sleep(60)\n"
+            ),
+            str(lock_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "locked"
+        monkeypatch.setattr(gui_server, "GUI_SESSION_LOCK_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr(gui_server, "GUI_SESSION_LOCK_RETRY_SECONDS", 0.005)
+
+        started_at = time.monotonic()
+        session = GuiSession(state_path)
+        elapsed = time.monotonic() - started_at
+
+        assert elapsed < 1.0
+        assert session.persistence_status()["status"] == "degraded"
+        assert "timed out waiting" in session.persistence_status()["warning"]
+    finally:
+        holder.terminate()
+        try:
+            holder.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            holder.kill()
+            holder.wait(timeout=5)
 
 
 def test_nonregular_session_state_is_rejected_without_blocking_startup(tmp_path: Path) -> None:
