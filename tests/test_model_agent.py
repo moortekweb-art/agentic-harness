@@ -389,7 +389,7 @@ def test_run_check_uses_linux_bwrap_instead_of_sandbox_exec_shim(tmp_path, monke
     proc = _run_check_process(
         tmp_path,
         [sys.executable, "-c", "print('ok')"],
-        {},
+        {"PATH": "/usr/bin:/bin"},
         10,
     )
 
@@ -399,6 +399,9 @@ def test_run_check_uses_linux_bwrap_instead_of_sandbox_exec_shim(tmp_path, monke
     assert argv[0] == "/usr/bin/bwrap"
     assert "--unshare-net" in argv
     assert "--unshare-all" in argv
+    assert "--setenv" in argv
+    path_index = argv.index("PATH")
+    assert argv[path_index + 1] == "/usr/bin:/bin"
     assert "/usr/local/bin/sandbox-exec" not in argv
     assert str(tmp_path.resolve()) not in argv
 
