@@ -113,7 +113,12 @@ def _linux_run_check_sandbox_args(
     argv: list[str],
     env: dict[str, str],
 ) -> list[str]:
-    executable = Path(argv[0])
+    sandbox_argv = list(argv)
+    if sandbox_argv and not Path(sandbox_argv[0]).is_absolute():
+        resolved = shutil.which(sandbox_argv[0], path=env.get("PATH"))
+        if resolved:
+            sandbox_argv[0] = resolved
+    sandbox_executable = Path(sandbox_argv[0])
     read_roots = [
         Path("/bin"),
         Path("/lib"),
@@ -124,9 +129,9 @@ def _linux_run_check_sandbox_args(
         Path("/etc/ssl"),
         Path("/etc/ca-certificates"),
     ]
-    if executable.is_absolute():
-        resolved_executable = executable.resolve()
-        read_roots.extend([executable.parent, resolved_executable.parent])
+    if sandbox_executable.is_absolute():
+        resolved_executable = sandbox_executable.resolve()
+        read_roots.extend([sandbox_executable.parent, resolved_executable.parent])
         if len(resolved_executable.parents) > 2:
             read_roots.append(resolved_executable.parents[2])
     virtual_env = env.get("VIRTUAL_ENV")
@@ -169,7 +174,7 @@ def _linux_run_check_sandbox_args(
     if env.get("PATH"):
         args.extend(["--setenv", "PATH", env["PATH"]])
     args.extend(_existing_ro_bind_args(read_roots))
-    args.extend(["--", *argv])
+    args.extend(["--", *sandbox_argv])
     return args
 
 

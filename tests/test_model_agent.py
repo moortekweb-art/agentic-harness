@@ -369,11 +369,13 @@ def test_run_check_fails_closed_without_macos_sandbox(tmp_path, monkeypatch) -> 
 def test_run_check_uses_linux_bwrap_instead_of_sandbox_exec_shim(tmp_path, monkeypatch) -> None:
     calls: list[list[str]] = []
 
-    def fake_which(name: str) -> str | None:
+    def fake_which(name: str, path: str | None = None) -> str | None:
         if name == "bwrap":
             return "/usr/bin/bwrap"
         if name == "sandbox-exec":
             return "/usr/local/bin/sandbox-exec"
+        if name == "python3":
+            return "/usr/bin/python3"
         return None
 
     def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -388,7 +390,7 @@ def test_run_check_uses_linux_bwrap_instead_of_sandbox_exec_shim(tmp_path, monke
 
     proc = _run_check_process(
         tmp_path,
-        [sys.executable, "-c", "print('ok')"],
+        ["python3", "-c", "print('ok')"],
         {"PATH": "/usr/bin:/bin"},
         10,
     )
@@ -404,6 +406,7 @@ def test_run_check_uses_linux_bwrap_instead_of_sandbox_exec_shim(tmp_path, monke
     assert argv[path_index + 1] == "/usr/bin:/bin"
     assert "/usr/local/bin/sandbox-exec" not in argv
     assert str(tmp_path.resolve()) not in argv
+    assert argv[-3:] == ["/usr/bin/python3", "-c", "print('ok')"]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="sandbox-exec is macOS-specific")
