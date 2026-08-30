@@ -97,7 +97,7 @@ def _copy_workspace_for_check(source: Path, destination: Path) -> Path:
 
 def _existing_ro_bind_args(paths: Iterable[Path]) -> list[str]:
     args: list[str] = []
-    for path in dict.fromkeys(path.resolve() for path in paths):
+    for path in dict.fromkeys(paths):
         if path.exists():
             args.extend(["--ro-bind", str(path), str(path)])
     return args
