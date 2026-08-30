@@ -132,7 +132,7 @@ def _linux_run_check_sandbox_args(
     if sandbox_executable.is_absolute():
         resolved_executable = sandbox_executable.resolve()
         read_roots.extend([sandbox_executable.parent, resolved_executable.parent])
-        if len(resolved_executable.parents) > 2:
+        if len(resolved_executable.parents) > 2 and resolved_executable.parents[2] != Path("/"):
             read_roots.append(resolved_executable.parents[2])
     virtual_env = env.get("VIRTUAL_ENV")
     if virtual_env:

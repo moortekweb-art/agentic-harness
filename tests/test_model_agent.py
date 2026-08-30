@@ -408,6 +408,10 @@ def test_run_check_uses_linux_bwrap_instead_of_sandbox_exec_shim(tmp_path, monke
     assert argv[path_index + 1] == "/usr/bin:/bin"
     assert "/usr/local/bin/sandbox-exec" not in argv
     assert str(tmp_path.resolve()) not in argv
+    assert not any(
+        argv[index : index + 3] == ["--ro-bind", "/", "/"]
+        for index in range(len(argv) - 2)
+    )
     assert argv[-3:] == ["/usr/bin/python3", "-c", "print('ok')"]
 
 
