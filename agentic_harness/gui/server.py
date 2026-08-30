@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
+import binascii
 import errno
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1245,9 +1246,23 @@ def make_handler(
                     {"ok": False, "error": "missing websocket key"}, status=HTTPStatus.BAD_REQUEST
                 )
                 return
+            try:
+                decoded_key = base64.b64decode(key, validate=True)
+            except (ValueError, TypeError, binascii.Error):
+                self._json(
+                    {"ok": False, "error": "malformed websocket key"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            if len(decoded_key) != 16:
+                self._json(
+                    {"ok": False, "error": "malformed websocket key"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
             accept = base64.b64encode(
                 hashlib.sha1(
-                    (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
+                    decoded_key + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
                 ).digest()
             ).decode("ascii")
             self.send_response(HTTPStatus.SWITCHING_PROTOCOLS)

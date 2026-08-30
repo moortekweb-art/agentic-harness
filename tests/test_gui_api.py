@@ -2968,6 +2968,51 @@ def test_gui_server_websocket_status_upgrade_sends_json_frame() -> None:
     assert b'"status": "working"' in response
 
 
+def test_gui_server_websocket_status_rejects_malformed_key() -> None:
+    with gui_server(FakeBridge()) as base_url:
+        host, port = base_url.removeprefix("http://").split(":")
+        with socket.create_connection((host, int(port)), timeout=3) as client:
+            client.sendall(
+                (
+                    "GET /api/tasks/stream HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    "Sec-WebSocket-Key: not-base64-*&\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            response = client.recv(4096)
+            response += client.recv(4096)
+
+    assert b"400 Bad Request" in response
+    assert b"malformed websocket key" in response
+
+
+def test_gui_server_websocket_status_rejects_wrong_key_length() -> None:
+    key = base64.b64encode(b"short-key").decode("ascii")
+    with gui_server(FakeBridge()) as base_url:
+        host, port = base_url.removeprefix("http://").split(":")
+        with socket.create_connection((host, int(port)), timeout=3) as client:
+            client.sendall(
+                (
+                    "GET /api/tasks/stream HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    f"Sec-WebSocket-Key: {key}\r\n"
+                    "Sec-WebSocket-Version: 13\r\n"
+                    "\r\n"
+                ).encode("ascii")
+            )
+            response = client.recv(4096)
+            response += client.recv(4096)
+
+    assert b"400 Bad Request" in response
+    assert b"malformed websocket key" in response
+
+
 def test_managed_status_and_stream_keep_the_users_started_task_in_foreground() -> None:
     class StreamOwnershipBridge(FakeBridge):
         def start_human_goal(self, **kwargs: object) -> CommandResult:
