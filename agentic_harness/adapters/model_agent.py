@@ -166,6 +166,8 @@ def _linux_run_check_sandbox_args(
         "PYTHONNOUSERSITE",
         "1",
     ]
+    if env.get("PATH"):
+        args.extend(["--setenv", "PATH", env["PATH"]])
     args.extend(_existing_ro_bind_args(read_roots))
     args.extend(["--", *argv])
     return args
