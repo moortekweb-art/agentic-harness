@@ -153,6 +153,35 @@ def test_health_probe_does_not_follow_redirects() -> None:
     assert redirected_hits == 0
 
 
+def test_health_probe_marks_oversized_payloads_unavailable() -> None:
+    oversized_size = integration._MAX_HEALTH_BYTES + 32
+
+    class OversizedSource(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            payload = b"{\"ready\":true}" + (b"x" * oversized_size)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    source = ThreadingHTTPServer(("127.0.0.1", 0), OversizedSource)
+    source_thread = threading.Thread(target=source.serve_forever, daemon=True)
+    source_thread.start()
+    try:
+        state, reason = integration._probe(f"http://127.0.0.1:{source.server_port}/health")
+    finally:
+        source.shutdown()
+        source.server_close()
+        source_thread.join(timeout=2)
+
+    assert state == "unavailable"
+    assert reason == "health endpoint response too large"
+
+
 def test_integration_health_is_degraded_without_configured_routes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

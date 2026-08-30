@@ -17,6 +17,7 @@ from agentic_harness.adapters.model_agent import (
     OpenAICompatibleProvider,
     ProviderResponse,
     _atomic_write,
+    _run_check_process,
 )
 from agentic_harness.core.config import HarnessConfig, load_config
 from agentic_harness.core.autonomy import AutonomousRunner
@@ -348,6 +349,85 @@ def test_configured_check_does_not_inherit_provider_secret_environment(
     assert result.outcome["verification"][0]["passed"] is True
     assert "must-not-reach-check" not in str(provider.requests)
     assert "also-must-not-reach-check" not in str(provider.requests)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="sandbox-exec is required on macOS")
+def test_run_check_fails_closed_without_macos_sandbox(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("agentic_harness.adapters.model_agent.shutil.which", lambda _name: None)
+
+    proc = _run_check_process(
+        tmp_path,
+        [sys.executable, "-c", "raise SystemExit(0)"],
+        {},
+        10,
+    )
+
+    assert proc.returncode == 126
+    assert "sandbox-exec is required" in proc.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="sandbox-exec is macOS-specific")
+def test_run_check_sandbox_blocks_host_filesystem_writes(tmp_path) -> None:
+    if subprocess.run(
+        ["which", "sandbox-exec"],
+        text=True,
+        capture_output=True,
+        check=False,
+    ).returncode != 0:
+        pytest.skip("sandbox-exec is not available")
+    marker = tmp_path.parent / f"run-check-host-write-{os.getpid()}"
+    marker.unlink(missing_ok=True)
+
+    try:
+        proc = _run_check_process(
+            tmp_path,
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from pathlib import Path; "
+                    f"Path({str(marker)!r}).write_text('escaped', encoding='utf-8')"
+                ),
+            ],
+            {},
+            10,
+        )
+
+        assert proc.returncode != 0
+        assert not marker.exists()
+    finally:
+        marker.unlink(missing_ok=True)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="sandbox-exec is macOS-specific")
+def test_run_check_sandbox_blocks_original_workspace_reads(tmp_path) -> None:
+    if subprocess.run(
+        ["which", "sandbox-exec"],
+        text=True,
+        capture_output=True,
+        check=False,
+    ).returncode != 0:
+        pytest.skip("sandbox-exec is not available")
+    secret = tmp_path / "host-secret.txt"
+    secret.write_text("must-not-reach-check", encoding="utf-8")
+
+    proc = _run_check_process(
+        tmp_path,
+        [
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; "
+                f"Path({str(secret)!r}).read_text(encoding='utf-8')"
+            ),
+        ],
+        {},
+        10,
+    )
+
+    assert proc.returncode != 0
+    assert "must-not-reach-check" not in proc.stdout
+    assert "must-not-reach-check" not in proc.stderr
 
 
 def test_independent_review_check_does_not_inherit_process_secrets(

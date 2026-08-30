@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+import shutil
+import tempfile
 import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from tempfile import NamedTemporaryFile
 import time
 from typing import Any, Callable, Protocol
@@ -60,6 +63,149 @@ PROTECTED_NAMES = {
     "oauth_token.json",
     "auth_token.json",
 }
+
+_CHECK_COPY_EXCLUDES = {
+    ".git",
+    ".venv",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    ".eggs",
+    ".tox",
+    "dist",
+    "build",
+    "node_modules",
+    "coverage",
+}
+
+
+def _sandbox_path(value: Path) -> str:
+    return json.dumps(str(value.resolve()))
+
+
+def _copy_workspace_for_check(source: Path, destination: Path) -> Path:
+    ignore = shutil.ignore_patterns(*_CHECK_COPY_EXCLUDES)
+    shutil.copytree(
+        source,
+        destination,
+        ignore=ignore,
+        copy_function=shutil.copy2,
+    )
+    return destination
+
+
+def _run_check_process(
+    project_dir: Path,
+    argv: list[str],
+    env: dict[str, str],
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
+    sandbox = shutil.which("sandbox-exec")
+    temp_parent = Path("/private/tmp") if sandbox and Path("/private/tmp").is_dir() else None
+    with tempfile.TemporaryDirectory(
+        prefix="agentic-harness-run-check-",
+        dir=str(temp_parent) if temp_parent else None,
+    ) as tmp_root:
+        sandbox_root = Path(tmp_root).resolve()
+        workspace_root = sandbox_root / "workspace"
+        _copy_workspace_for_check(project_dir, workspace_root)
+
+        run_env = dict(env)
+        sandbox_home = sandbox_root / "home"
+        sandbox_tmp = sandbox_root / "tmp"
+        sandbox_home.mkdir(parents=True, exist_ok=True)
+        sandbox_tmp.mkdir(parents=True, exist_ok=True)
+        run_env["HOME"] = str(sandbox_home)
+        run_env["TMPDIR"] = str(sandbox_tmp)
+        run_env["TEMP"] = str(sandbox_tmp)
+        run_env["TMP"] = str(sandbox_tmp)
+        run_env["PYTHONNOUSERSITE"] = "1"
+
+        if not sandbox:
+            if sys.platform != "darwin":
+                return subprocess.run(
+                    argv,
+                    cwd=workspace_root,
+                    env=run_env,
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout,
+                    check=False,
+                )
+            return subprocess.CompletedProcess(
+                argv,
+                126,
+                "",
+                "sandbox-exec is required for run_check isolation on this platform",
+            )
+
+        denied_read_roots = [project_dir.resolve()]
+        user_home = Path.home().resolve()
+        if user_home != Path("/"):
+            denied_read_roots.append(user_home)
+        allowed_read_roots = [sandbox_root.resolve()]
+        virtual_env = run_env.get("VIRTUAL_ENV")
+        if virtual_env:
+            allowed_read_roots.append(Path(virtual_env).resolve())
+        executable = Path(argv[0])
+        if executable.is_absolute():
+            resolved_executable = executable.resolve()
+            allowed_read_roots.extend(
+                [
+                    executable.parent.resolve(),
+                    executable.parent.parent.resolve(),
+                    resolved_executable.parent,
+                    resolved_executable.parent.parent,
+                ]
+            )
+            if len(resolved_executable.parents) > 2:
+                allowed_read_roots.append(resolved_executable.parents[2])
+        deny_read_rules = "\n".join(
+            f"(deny file-read* (subpath {_sandbox_path(root)}))"
+            for root in dict.fromkeys(denied_read_roots)
+        )
+        allowed_read_filters = " ".join(
+            f"(subpath {_sandbox_path(root)})" for root in dict.fromkeys(allowed_read_roots)
+        )
+        allow_read_rules = f"(allow file-read* {allowed_read_filters})"
+
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".sandbox",
+            dir=sandbox_root,
+            delete=False,
+        ) as profile:
+            profile.write(
+                f"""
+(version 1)
+(allow default)
+(deny network*)
+(deny file-write*)
+(allow file-write* (subpath {_sandbox_path(sandbox_root)}))
+{deny_read_rules}
+{allow_read_rules}
+"""
+            )
+            profile_path = profile.name
+
+        try:
+            return subprocess.run(
+                [sandbox, "-f", profile_path, *argv],
+                cwd=workspace_root,
+                env=run_env,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+        finally:
+            try:
+                os.remove(profile_path)
+            except OSError:
+                pass
+
 @dataclass(frozen=True)
 class ProviderResponse:
     content: dict[str, Any] | str
@@ -604,14 +750,11 @@ class EmbeddedModelAgent:
             argv = check.get("argv")
             if not isinstance(argv, list) or not argv or not all(isinstance(item, str) for item in argv):
                 raise ValueError(f"configured check is invalid: {check_id}")
-            proc = subprocess.run(
+            proc = _run_check_process(
+                self.project_dir,
                 argv,
-                cwd=self.project_dir,
-                env=subprocess_environment(_safety(goal)["secret_env_names"]),
-                text=True,
-                capture_output=True,
-                timeout=self.check_timeout,
-                check=False,
+                subprocess_environment(_safety(goal)["secret_env_names"]),
+                self.check_timeout,
             )
             detail = redact_secrets(proc.stderr.strip() or proc.stdout.strip())
             message = (

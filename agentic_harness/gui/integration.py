@@ -58,9 +58,11 @@ def _probe(url: str, *, timeout: float = 1.5) -> tuple[str, str]:
     try:
         connection.request("GET", target, headers={"Accept": "application/json"})
         response = connection.getresponse()
-        raw = response.read(_MAX_HEALTH_BYTES)
+        raw = response.read(_MAX_HEALTH_BYTES + 1)
         if response.status < 200 or response.status >= 300:
             return "unavailable", f"health endpoint returned HTTP {response.status}"
+        if len(raw) > _MAX_HEALTH_BYTES:
+            return "unavailable", "health endpoint response too large"
     except (OSError, HTTPException, TimeoutError, ValueError) as exc:
         return "unavailable", type(exc).__name__
     finally:
