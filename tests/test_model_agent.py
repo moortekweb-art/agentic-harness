@@ -366,6 +366,43 @@ def test_run_check_fails_closed_without_macos_sandbox(tmp_path, monkeypatch) -> 
     assert "sandbox-exec is required" in proc.stderr
 
 
+def test_run_check_uses_linux_bwrap_instead_of_sandbox_exec_shim(tmp_path, monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_which(name: str) -> str | None:
+        if name == "bwrap":
+            return "/usr/bin/bwrap"
+        if name == "sandbox-exec":
+            return "/usr/local/bin/sandbox-exec"
+        return None
+
+    def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        argv = args[0]
+        assert isinstance(argv, list)
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "ok", "")
+
+    monkeypatch.setattr("agentic_harness.adapters.model_agent.sys.platform", "linux")
+    monkeypatch.setattr("agentic_harness.adapters.model_agent.shutil.which", fake_which)
+    monkeypatch.setattr("agentic_harness.adapters.model_agent.subprocess.run", fake_run)
+
+    proc = _run_check_process(
+        tmp_path,
+        [sys.executable, "-c", "print('ok')"],
+        {},
+        10,
+    )
+
+    assert proc.returncode == 0
+    assert calls
+    argv = calls[0]
+    assert argv[0] == "/usr/bin/bwrap"
+    assert "--unshare-net" in argv
+    assert "--unshare-all" in argv
+    assert "/usr/local/bin/sandbox-exec" not in argv
+    assert str(tmp_path.resolve()) not in argv
+
+
 @pytest.mark.skipif(os.name != "posix", reason="sandbox-exec is macOS-specific")
 def test_run_check_sandbox_blocks_host_filesystem_writes(tmp_path) -> None:
     if subprocess.run(

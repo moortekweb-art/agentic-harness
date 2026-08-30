@@ -95,14 +95,91 @@ def _copy_workspace_for_check(source: Path, destination: Path) -> Path:
     return destination
 
 
+def _existing_ro_bind_args(paths: Iterable[Path]) -> list[str]:
+    args: list[str] = []
+    for path in dict.fromkeys(path.resolve() for path in paths):
+        if path.exists():
+            args.extend(["--ro-bind", str(path), str(path)])
+    return args
+
+
+def _linux_run_check_sandbox_args(
+    *,
+    bwrap: str,
+    sandbox_root: Path,
+    workspace_root: Path,
+    sandbox_home: Path,
+    sandbox_tmp: Path,
+    argv: list[str],
+    env: dict[str, str],
+) -> list[str]:
+    executable = Path(argv[0])
+    read_roots = [
+        Path("/bin"),
+        Path("/lib"),
+        Path("/lib64"),
+        Path("/usr"),
+        Path("/etc/alternatives"),
+        Path("/etc/ld.so.cache"),
+        Path("/etc/ssl"),
+        Path("/etc/ca-certificates"),
+    ]
+    if executable.is_absolute():
+        resolved_executable = executable.resolve()
+        read_roots.extend([executable.parent, resolved_executable.parent])
+        if len(resolved_executable.parents) > 2:
+            read_roots.append(resolved_executable.parents[2])
+    virtual_env = env.get("VIRTUAL_ENV")
+    if virtual_env:
+        read_roots.append(Path(virtual_env))
+
+    args = [
+        bwrap,
+        "--die-with-parent",
+        "--unshare-all",
+        "--unshare-net",
+        "--new-session",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--bind",
+        str(sandbox_root),
+        str(sandbox_root),
+        "--chdir",
+        str(workspace_root),
+        "--setenv",
+        "HOME",
+        str(sandbox_home),
+        "--setenv",
+        "TMPDIR",
+        str(sandbox_tmp),
+        "--setenv",
+        "TEMP",
+        str(sandbox_tmp),
+        "--setenv",
+        "TMP",
+        str(sandbox_tmp),
+        "--setenv",
+        "PYTHONNOUSERSITE",
+        "1",
+    ]
+    args.extend(_existing_ro_bind_args(read_roots))
+    args.extend(["--", *argv])
+    return args
+
+
 def _run_check_process(
     project_dir: Path,
     argv: list[str],
     env: dict[str, str],
     timeout: int,
 ) -> subprocess.CompletedProcess[str]:
-    sandbox = shutil.which("sandbox-exec")
-    temp_parent = Path("/private/tmp") if sandbox and Path("/private/tmp").is_dir() else None
+    macos_sandbox = shutil.which("sandbox-exec") if sys.platform == "darwin" else None
+    linux_sandbox = shutil.which("bwrap") if sys.platform.startswith("linux") else None
+    temp_parent = Path("/private/tmp") if macos_sandbox and Path("/private/tmp").is_dir() else None
     with tempfile.TemporaryDirectory(
         prefix="agentic-harness-run-check-",
         dir=str(temp_parent) if temp_parent else None,
@@ -122,7 +199,26 @@ def _run_check_process(
         run_env["TMP"] = str(sandbox_tmp)
         run_env["PYTHONNOUSERSITE"] = "1"
 
-        if not sandbox:
+        if linux_sandbox:
+            return subprocess.run(
+                _linux_run_check_sandbox_args(
+                    bwrap=linux_sandbox,
+                    sandbox_root=sandbox_root,
+                    workspace_root=workspace_root,
+                    sandbox_home=sandbox_home,
+                    sandbox_tmp=sandbox_tmp,
+                    argv=argv,
+                    env=run_env,
+                ),
+                cwd=workspace_root,
+                env=run_env,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+
+        if not macos_sandbox:
             if sys.platform != "darwin":
                 return subprocess.run(
                     argv,
@@ -192,7 +288,7 @@ def _run_check_process(
 
         try:
             return subprocess.run(
-                [sandbox, "-f", profile_path, *argv],
+                [macos_sandbox, "-f", profile_path, *argv],
                 cwd=workspace_root,
                 env=run_env,
                 text=True,
